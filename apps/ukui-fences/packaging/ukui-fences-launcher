@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+APP_DIR=${UKUI_FENCES_DIR:-$SCRIPT_DIR}
+BIN="$APP_DIR/ukui-fences"
+
+if [ ! -x "$BIN" ]; then
+    BIN=$(command -v ukui-fences 2>/dev/null || true)
+fi
+
+call_running() {
+    method=${1:-showAndActivate}
+    if command -v gdbus >/dev/null 2>&1; then
+        gdbus call --session \
+            --dest org.ukui.fences \
+            --object-path /ukuiFences \
+            --method "org.ukui.fences.${method}" >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+method=showAndActivate
+case "${1:-}" in
+    --quit) method=quitApp ;;
+    --hide) method=hideFences ;;
+    --edit) method=toggleEditMode ;;
+    --system-monitor) method=showSystemMonitorWidget ;;
+    --smart-space) method=showSmartSpaceWidget ;;
+    --autostart) method=activateOnSessionStartup ;;
+esac
+
+if call_running "$method"; then
+    exit 0
+fi
+
+if [ -z "${BIN:-}" ] || [ ! -x "$BIN" ]; then
+    echo "ukui-fences binary not found" >&2
+    exit 127
+fi
+
+exec "$BIN" "$@"

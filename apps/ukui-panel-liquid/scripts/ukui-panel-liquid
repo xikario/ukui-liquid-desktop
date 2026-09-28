@@ -1,0 +1,12 @@
+#!/bin/sh
+# Scope the theme to this process; keep the system panel and plugins intact.
+panel_plugin_dir="$HOME/.local/lib/ukui-panel-liquid/plugins"
+if [ "$1" = "--original" ]; then
+    shift
+    exec /usr/bin/ukui-panel "$@"
+fi
+if [ -f "$panel_plugin_dir/styles/libukuiliquidpanel.so" ]; then
+    export QT_PLUGIN_PATH="$panel_plugin_dir${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+    exec /usr/bin/ukui-panel -style ukuiliquidpanel "$@"
+fi
+exec /usr/bin/ukui-panel "$@"

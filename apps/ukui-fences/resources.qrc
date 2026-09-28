@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/smart-space">
+        <file alias="menu-refresh.png">assets/smart-space-menu-icons/refresh.png</file>
+        <file alias="menu-fast-full.png">assets/smart-space-menu-icons/fast-full.png</file>
+        <file alias="menu-ocr.png">assets/smart-space-menu-icons/ocr.png</file>
+        <file alias="menu-save-space.png">assets/smart-space-menu-icons/save-space.png</file>
+        <file alias="menu-edit-space.png">assets/smart-space-menu-icons/edit-space.png</file>
+        <file alias="menu-delete-space.png">assets/smart-space-menu-icons/delete-space.png</file>
+        <file alias="menu-settings.png">assets/smart-space-menu-icons/settings.png</file>
+        <file alias="menu-close.png">assets/smart-space-menu-icons/close.png</file>
+    </qresource>
+</RCC>

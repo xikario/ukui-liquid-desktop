@@ -1,0 +1,78 @@
+#pragma once
+#include <QApplication>
+#include <QImage>
+#include <QMenu>
+#include <QPainterPath>
+#include <QPointer>
+#include <QTimer>
+#include <QVariantAnimation>
+#include <QStyle>
+#include <functional>
+
+namespace LiquidPopup {
+enum class Placement { Auto, Above, Below, Left, Right };
+// All distances are logical pixels; supplied images retain their DPR.
+struct Theme {
+    qreal radius = 16;
+    qreal tint = .42;
+    qreal refraction = 3.5;
+    qreal highlight = .35;
+    int openMs = 210;
+    int closeMs = 140;
+    bool reducedMotion = false;
+};
+Theme &theme();
+using BackdropProvider = std::function<QImage(const QRect &, qreal)>;
+void setBackdropProvider(BackdropProvider provider);
+QImage renderMaterial(const QImage &backdrop, QSize logicalSize, qreal dpr,
+                      bool light = false, QRectF body = QRectF());
+// Cached alpha silhouette and rim; does not rely on aliased painter clips.
+QImage renderMenuMaterial(const QImage &backdrop, QSize logicalSize, qreal dpr,
+                          bool light = false);
+QRect place(QSize size, const QRect &anchor, const QRect &available);
+QPainterPath bubblePath(QRectF body, qreal radius, qreal connectorX = -1,
+                        bool connectorAtTop = false);
+QPainterPath bubblePath(QRectF body, qreal radius, qreal connector,
+                        Placement side);
+
+// Install once per application: native QMenu behaviour remains owned by Qt.
+// Context menus receive material + fade, tooltips receive the bubble shell.
+void install(QApplication &app);
+// Per-process runtime switch. Restores native menu styling when disabled.
+void setEnabled(bool enabled);
+bool isEnabled();
+// Used by host styles for crisp menu symbols at fractional display scales.
+bool drawMenuGlyph(QStyle::PrimitiveElement element, const QStyleOption *option,
+                   QPainter *painter);
+// Center button menus on the trigger and flip upward when space is short.
+QAction *execAt(QMenu &menu, const QRect &globalAnchor);
+QAction *execAt(QMenu &menu, QWidget *anchor);
+void showText(const QPoint &globalPos, const QString &text, QWidget *owner = nullptr,
+              const QRect &ownerRect = QRect(), int duration = -1);
+void hideText();
+
+class Shell : public QWidget {
+public:
+    explicit Shell(QWidget *parent = nullptr, bool tooltip = false);
+    void setContent(QWidget *content);
+    void openAt(const QRect &globalAnchor, Placement placement = Placement::Auto);
+    void dismiss();
+    qreal progress() const { return m_progress; }
+    bool isClosing() const { return m_closing; }
+protected:
+    void paintEvent(QPaintEvent *) override;
+    void hideEvent(QHideEvent *) override;
+    void keyPressEvent(QKeyEvent *) override;
+private:
+    QWidget *m_content = nullptr;
+    QVariantAnimation m_motion;
+    QImage m_material;
+    qreal m_progress = 0;
+    qreal m_connectorX = -1;
+    qreal m_connectorY = -1;
+    bool m_top = false;
+    Placement m_placement = Placement::Auto;
+    bool m_tooltip = false;
+    bool m_closing = false;
+};
+}

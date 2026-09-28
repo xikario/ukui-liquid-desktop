@@ -1,0 +1,4 @@
+<RCC><qresource prefix="/liquid-optics">
+<file alias="glass.glsl">vendor/nextkde-glass/glass.glsl</file>
+<file alias="snells-glass.glsl">vendor/nextkde-glass/snells-glass.glsl</file>
+</qresource></RCC>

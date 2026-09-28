@@ -1,0 +1,69 @@
+#!/bin/sh
+set -eu
+
+# V2 default start-menu launcher. It owns org.ukui.menu while running.
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+APP_DIR=${UKUI_KAISHICAIDAN_V2_DIR:-$SCRIPT_DIR/..}
+BIN=${UKUI_KAISHICAIDAN_V2_BIN:-$SCRIPT_DIR/ukui-kaishicaidan-v2}
+
+if [ ! -x "$BIN" ]; then
+    for candidate in \
+        "$APP_DIR/build-v2/ukui-kaishicaidan-v2" \
+        "$(command -v ukui-kaishicaidan-v2 2>/dev/null || true)"
+    do
+        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+            BIN="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "${BIN:-}" ] || [ ! -x "$BIN" ]; then
+    echo "ukui-kaishicaidan binary not found" >&2
+    exit 127
+fi
+
+call_our_running() {
+    method=${1:-toggle}
+    if command -v gdbus >/dev/null 2>&1; then
+        gdbus call --session --timeout 2 \
+            --dest org.ukui.kaishicaidan.v2 \
+            --object-path /ukuiKaishicaidanV2 \
+            --method "org.ukui.kaishicaidan.v2.${method}" >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+# ── 参数处理 ──────────────────────────────────────────────
+case "${1:-}" in
+    --quit)
+        call_our_running quitApp && exit 0
+        exit 0
+        ;;
+    --hide)
+        call_our_running hideMenu && exit 0
+        exit 0
+        ;;
+    --show)
+        call_our_running showMenu && exit 0
+        exit 0
+        ;;
+    --autostart)
+        # 如果已经在运行，退出；不影响原系统菜单进程。
+        if call_our_running hideMenu 2>/dev/null; then
+            exit 0
+        fi
+
+        # 启动（默认隐藏，等待触发）
+        exec "$BIN"
+        ;;
+esac
+
+# 默认：toggle
+if call_our_running toggle; then
+    exit 0
+fi
+
+# 没在运行，启动并 toggle
+exec "$BIN"

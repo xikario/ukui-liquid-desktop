@@ -1,0 +1,6 @@
+/build/
+/build-deb/
+/build-v2/
+/.local-deps
+/*.zip
+/*.docx

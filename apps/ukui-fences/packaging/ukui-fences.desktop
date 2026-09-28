@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=ukui-fences
+Name[zh_CN]=ukui-fences 桌面分区
+GenericName=Desktop Fences
+GenericName[zh_CN]=桌面分区
+Comment=Organize the UKUI desktop and search local documents with Smart Space
+Comment[zh_CN]=用 Fences 分区和智能空间管理、检索 UKUI 桌面文件
+Exec=ukui-fences-launcher
+Icon=ukui-fences
+Terminal=false
+StartupNotify=false
+Categories=Settings;DesktopSettings;
+Keywords=fences;search;OCR;documents;full-text;
+Keywords[zh_CN]=桌面分区;文件索引;智能空间;OCR;全文检索;

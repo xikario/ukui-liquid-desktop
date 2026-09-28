@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ukui-fences
+Name[zh_CN]=ukui-fences 桌面分区
+Comment=Start ukui-fences desktop areas
+Comment[zh_CN]=启动 ukui-fences 桌面分区
+Exec=ukui-fences-launcher --autostart
+Icon=ukui-fences
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=2

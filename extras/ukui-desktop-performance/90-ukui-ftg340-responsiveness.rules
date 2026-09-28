@@ -1,0 +1,4 @@
+# Apply immediately on AC unplug/plug, without a polling daemon.
+ACTION=="change", SUBSYSTEM=="power_supply", ATTR{type}=="Mains", RUN+="/usr/local/libexec/ukui-ftg340-responsiveness apply"
+# Also cover a device that becomes available after multi-user.target.
+ACTION=="add", SUBSYSTEM=="devfreq", KERNEL=="PHYT0048:00", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ukui-ftg340-responsiveness.service"

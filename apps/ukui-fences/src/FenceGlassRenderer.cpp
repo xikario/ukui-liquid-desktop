@@ -1,0 +1,346 @@
+#include "FenceGlassRenderer.h"
+#include <QDebug>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QOffscreenSurface>
+#include <QOpenGLContext>
+#include <QOpenGLFramebufferObject>
+#include <QOpenGLFunctions>
+#include <QOpenGLShaderProgram>
+#include <QOpenGLTexture>
+#include <QPainter>
+#include <QPainterPath>
+#include <QVector2D>
+#include <cmath>
+
+namespace {
+// Body diffusion (~7 logical pixels). Keep colour and large features intact.
+// The optical rim gets a separate, nearly clear texture below.
+QImage diffuse(const QImage &source, QSize logical, int radius=2, int divisor=3)
+{
+    QImage a = source.scaled(qMax(1, logical.width()/divisor), qMax(1, logical.height()/divisor),
+                            Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                        .convertToFormat(QImage::Format_RGB32);
+    QImage b(a.size(), a.format());
+    for (int pass = 0; pass < 6; ++pass) {
+        const bool horizontal = pass % 2 == 0;
+        for (int y = 0; y < a.height(); ++y) {
+            QRgb *out = reinterpret_cast<QRgb *>(b.scanLine(y));
+            for (int x = 0; x < a.width(); ++x) {
+                int r=0, g=0, blue=0;
+                for (int k=-radius; k<=radius; ++k) {
+                    const int sx = horizontal ? qBound(0,x+k,a.width()-1) : x;
+                    const int sy = horizontal ? y : qBound(0,y+k,a.height()-1);
+                    const QRgb c = reinterpret_cast<const QRgb *>(a.constScanLine(sy))[sx];
+                    r += qRed(c); g += qGreen(c); blue += qBlue(c);
+                }
+                out[x] = qRgb(r/(radius*2+1),g/(radius*2+1),blue/(radius*2+1));
+            }
+        }
+        a.swap(b);
+    }
+    return a.scaled(source.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+}
+
+QByteArray resource(const char *path)
+{
+    QFile file(QString::fromLatin1(path));
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    return file.readAll();
+}
+
+// Arbitrary magnetic contours: signed distance in logical pixels, encoded in
+// RG16 (1/64 px), plus independently antialiased coverage in B. Calculated only
+// when shape/geometry changes, never on pointer frames. Original GLSL is kept
+// untouched; the adapter uses this field in its distance/normal functions.
+QImage shapeField(const QPainterPath &path, QSize pixels, qreal dpr)
+{
+    if (path.isEmpty()) return {};
+    QImage mask(pixels, QImage::Format_ARGB32_Premultiplied);
+    mask.fill(Qt::transparent);
+    { QPainter p(&mask); p.setRenderHint(QPainter::Antialiasing); p.scale(dpr,dpr); p.fillPath(path,Qt::white); }
+    const QPolygonF polygon = path.toFillPolygon();
+    struct Segment { qreal x,y,dx,dy,inverseLength; };
+    QVector<Segment> segments;
+    segments.reserve(polygon.size());
+    for (int i=0; i+1<polygon.size(); ++i) {
+        const QPointF delta=polygon[i+1]-polygon[i];
+        const qreal length=QPointF::dotProduct(delta,delta);
+        segments.append({polygon[i].x(),polygon[i].y(),delta.x(),delta.y(),length>0 ? 1.0/length : 0});
+    }
+    QImage field(pixels, QImage::Format_RGB32);
+    for (int y=0; y<pixels.height(); ++y) {
+        auto *out = reinterpret_cast<QRgb *>(field.scanLine(y));
+        const auto *coverage = reinterpret_cast<const QRgb *>(mask.constScanLine(y));
+        for (int x=0; x<pixels.width(); ++x) {
+            const qreal px=(x+0.5)/dpr, py=(y+0.5)/dpr;
+            // Optical influence ends well before this distance.
+            qreal distanceSquared = 128*128;
+            for (const auto &edge : segments) {
+                const qreal ox=px-edge.x, oy=py-edge.y;
+                const qreal t=qBound(0.0,(ox*edge.dx+oy*edge.dy)*edge.inverseLength,1.0);
+                const qreal nx=ox-t*edge.dx, ny=oy-t*edge.dy;
+                distanceSquared=qMin(distanceSquared,nx*nx+ny*ny);
+            }
+            const int alpha=qAlpha(coverage[x]);
+            const qreal distance=std::sqrt(distanceSquared)*(alpha>=128 ? -1 : 1);
+            const int encoded=qBound(0,qRound(32768+distance*64),65535);
+            out[x]=qRgb(encoded/256,encoded%256,alpha);
+        }
+    }
+    return field;
+}
+
+} // namespace
+
+// GUI-thread-only resources. No live rendering loop and no retained screen
+// input textures: only context, linked program and reusable output FBO.
+class FenceGlassRenderer::Backend {
+public:
+    ~Backend() {
+        const bool current=context.isValid() && context.makeCurrent(&surface);
+        framebuffer.reset();
+        programStorage.reset();
+        if (current) context.doneCurrent();
+    }
+
+    QImage render(const QImage &body, const QImage &clear, QSize logical, float radius, const QImage &shape) {
+        if (!attempted) { attempted=true; ready=initialize(); }
+        if (!ready || !context.makeCurrent(&surface)) return {};
+        const QImage result=draw(body,clear,logical,radius,shape);
+        context.doneCurrent(); // textures were released by draw() before this
+        return result;
+    }
+
+private:
+    bool initialize() {
+        QSurfaceFormat format;
+        format.setRenderableType(QSurfaceFormat::OpenGL);
+        format.setVersion(2,1);
+        context.setFormat(format);
+        if (!context.create()) return false;
+        surface.setFormat(context.format());
+        surface.create();
+        if (!surface.isValid() || !context.makeCurrent(&surface)) return false;
+        context.functions()->initializeOpenGLFunctions();
+        programStorage=std::make_unique<QOpenGLShaderProgram>();
+        auto &program=*programStorage;
+    const QByteArray vertex =
+        "#version 120\nattribute vec2 aPosition; varying vec2 uv;\n"
+        "void main(){uv=(aPosition+1.0)*0.5; gl_Position=vec4(aPosition,0.0,1.0);}";
+    QByteArray upstream=resource(":/fences-glass/glass.glsl");
+    const QByteArray snells=resource(":/fences-glass/snells-glass.glsl");
+    if (upstream.isEmpty() || snells.isEmpty()) {
+        context.doneCurrent();
+        return false;
+    }
+    upstream.replace("#include \"snells-glass.glsl\"", snells);
+    upstream.replace("float roundedRectangleDist(", "float roundedBoxDist(");
+    upstream.replace("vec2 gradSdRoundedBox(", "vec2 boxGradient(");
+    const QByteArray fragment = QByteArray(
+        "#version 120\n#define texture texture2D\n"
+        "uniform sampler2D texUnit; uniform sampler2D bodyUnit; varying vec2 uv;\n"
+        "uniform vec2 halfpixel; uniform float viewportScale;\n"
+        "uniform vec2 panelSize; uniform float panelRadius; uniform int controlMode;\n"
+        "uniform sampler2D shapeUnit; uniform int shaped;\n"
+        "float roundedRectangleDist(vec2 p,vec2 b,vec4 r);\n"
+        "vec2 gradSdRoundedBox(vec2 p,vec2 b,float r);\n") + upstream + R"GLSL(
+float contourDistance(vec2 position) {
+    vec2 encoded=texture2D(shapeUnit,clamp(position/panelSize+0.5,0.0,1.0)).rg;
+    return (dot(encoded,vec2(65280.0,255.0))-32768.0)/64.0;
+}
+float roundedRectangleDist(vec2 p,vec2 b,vec4 r) {
+    return shaped>0 ? contourDistance(p) : roundedBoxDist(p,b,r);
+}
+vec2 gradSdRoundedBox(vec2 p,vec2 b,float r) {
+    if(shaped==0) return boxGradient(p,b,r);
+    return vec2(contourDistance(p+vec2(1.0,0.0))-contourDistance(p-vec2(1.0,0.0)),
+                contourDistance(p+vec2(0.0,1.0))-contourDistance(p-vec2(0.0,1.0)))*0.5;
+}
+void main() {
+    vec2 halfSize=panelSize*0.5;
+    vec2 position=uv*panelSize-halfSize;
+    vec4 radii=vec4(panelRadius);
+    float d=roundedRectangleDist(position,halfSize,radii);
+    float aa=max(fwidth(d),0.75);
+    // Preserve upstream Snell optics but separate them from diffuse content.
+    float inside=max(-d,0.0);
+    float edgeFactor=1.0-clamp(inside/edgeSizePixels,0.0,1.0);
+    float concave=1.0-sqrt(max(0.0,1.0-pow(smoothstep(0.0,1.0,edgeFactor),refractionNormalPow)));
+    vec4 normalRadii=clamp(radii*2.0,min(64.0,min(halfSize.x,halfSize.y)),min(128.0,min(halfSize.x,halfSize.y)));
+    if(controlMode>0)
+        normalRadii=vec4(min(panelRadius*1.5,min(halfSize.x,halfSize.y)*0.9));
+    vec3 optical=snellsRefraction(position,halfSize,normalRadii,
+        min(halfSize.x,halfSize.y),d,concave).color.rgb;
+    float clearRim=1.0-smoothstep(8.0,40.0,inside);
+    vec3 rgb=mix(texture2D(bodyUnit,uv).rgb,optical,clearRim);
+    float lum=dot(rgb,vec3(0.299,0.587,0.114));
+    // Neutral adaptive scrim: no blue pigment or near-opaque graphite fill.
+    // White reaches ~145/255 in the body, clear edges keep 88% transmission.
+    float scrim=mix(0.16+0.27*smoothstep(0.25,0.95,lum),0.12,clearRim);
+    rgb=mix(vec3(lum),rgb,1.12)*(1.0-scrim);
+    // Nested glass samples the already-rendered panel, never icons/text.
+    // Do not apply the panel's dark scrim or saturation a second time.
+    if(controlMode>0) {
+        rgb=mix(texture2D(bodyUnit,uv).rgb,optical,1.0-smoothstep(2.0,12.0,inside));
+        rgb=mix(rgb,vec3(1.0),controlMode==2 ? 0.035 : 0.075);
+        if(controlMode==2) rgb*=0.91;
+    }
+    rgb=applySoftMaterial(rgb,position,halfSize,radii,d,edgeFactor);
+    rgb=applyLiquidGlints(rgb,position,halfSize,radii,d,aa);
+    // Inner caustic: directional, curved, fades inward rather than a flat frame.
+    vec2 normal=gradSdRoundedBox(position,halfSize,panelRadius);
+    float facing=pow(max(dot(normalize(normal+vec2(0.0001)),
+        normalize(vec2(-0.65,0.76))),0.0),3.0);
+    float caustic=exp(-pow((inside-4.0)/2.4,2.0));
+    rgb+=vec3(0.105,0.12,0.14)*caustic*facing;
+    float coverage=1.0-smoothstep(-aa*0.5,aa*0.5,d);
+    if(shaped>0) coverage=texture2D(shapeUnit,uv).b;
+    // QOpenGLFramebufferObject::toImage returns premultiplied ARGB.
+    // Straight RGB at alpha=0 caused coloured square-corner leaks in QPainter.
+    gl_FragColor=vec4(clamp(rgb,0.0,1.0)*coverage,coverage);
+})GLSL";
+    if (!program.addShaderFromSourceCode(QOpenGLShader::Vertex,vertex)
+        || !program.addShaderFromSourceCode(QOpenGLShader::Fragment,fragment)
+        || !program.link()) {
+        qWarning() << "[NextKdeGlass] shader fallback:" << program.log();
+        context.doneCurrent();
+        return false;
+    }
+    context.doneCurrent();
+    return true;
+    }
+
+    QImage draw(const QImage &body,const QImage &clear,QSize logical,float radius,const QImage &shape) {
+    const int control=0;
+    auto *gl=context.functions();
+    auto &program=*programStorage;
+    if (!framebuffer || framebuffer->size()!=body.size())
+        framebuffer=std::make_unique<QOpenGLFramebufferObject>(body.size());
+    auto &fbo=*framebuffer;
+    if (!fbo.isValid() || !fbo.bind()) return {};
+    QOpenGLTexture texture(clear.mirrored(), QOpenGLTexture::DontGenerateMipMaps);
+    QOpenGLTexture bodyTexture(body.mirrored(), QOpenGLTexture::DontGenerateMipMaps);
+    QImage shapeInput=shape;
+    if (shapeInput.isNull()) { shapeInput=QImage(1,1,QImage::Format_RGB32); shapeInput.fill(Qt::black); }
+    QOpenGLTexture shapeTexture(shapeInput.mirrored(), QOpenGLTexture::DontGenerateMipMaps);
+    if (!texture.isCreated() || !bodyTexture.isCreated() || !shapeTexture.isCreated()) { fbo.release(); return {}; }
+    texture.setMinMagFilters(QOpenGLTexture::Linear,QOpenGLTexture::Linear);
+    texture.setWrapMode(QOpenGLTexture::ClampToEdge);
+    bodyTexture.setMinMagFilters(QOpenGLTexture::Linear,QOpenGLTexture::Linear);
+    bodyTexture.setWrapMode(QOpenGLTexture::ClampToEdge);
+    shapeTexture.setMinMagFilters(QOpenGLTexture::Linear,QOpenGLTexture::Linear);
+    shapeTexture.setWrapMode(QOpenGLTexture::ClampToEdge);
+    shapeTexture.bind(2);
+    bodyTexture.bind(1);
+    texture.bind(0);
+    gl->glViewport(0,0,body.width(),body.height());
+    gl->glDisable(GL_BLEND);
+    gl->glDisable(GL_DEPTH_TEST);
+    program.bind();
+    program.setUniformValue("texUnit",0);
+    program.setUniformValue("bodyUnit",1);
+    program.setUniformValue("shapeUnit",2);
+    program.setUniformValue("shaped",shape.isNull() ? 0 : 1);
+    program.setUniformValue("panelSize",QVector2D(logical.width(),logical.height()));
+    program.setUniformValue("halfpixel",QVector2D(1.f/logical.width(),1.f/logical.height()));
+    program.setUniformValue("viewportScale",1.f);
+    program.setUniformValue("panelRadius",radius);
+    program.setUniformValue("controlMode",control);
+    program.setUniformValue("edgeSizePixels",control ? 5.5f : 22.f);
+    program.setUniformValue("refractionStrength",1.f);
+    program.setUniformValue("refractionNormalPow",2.f);
+    program.setUniformValue("refractionRGBFringing",control ? 0.35f : 0.65f);
+    program.setUniformValue("refractionOffsetStrength",control ? 0.55f : 3.5f);
+    program.setUniformValue("materialSoftness",0.f);
+    program.setUniformValue("materialReflectionStrength",control ? 0.28f : 0.14f);
+    program.setUniformValue("cornerExponent",2.f);
+    const GLfloat triangle[]={-1,-1,3,-1,-1,3};
+    const int loc=program.attributeLocation("aPosition");
+    program.enableAttributeArray(loc);
+    program.setAttributeArray(loc,GL_FLOAT,triangle,2);
+    gl->glDrawArrays(GL_TRIANGLES,0,3);
+    program.disableAttributeArray(loc);
+    const QImage result=fbo.toImage();
+    program.release();
+    fbo.release();
+    return result;
+    }
+
+    QOffscreenSurface surface;
+    QOpenGLContext context;
+    std::unique_ptr<QOpenGLShaderProgram> programStorage;
+    std::unique_ptr<QOpenGLFramebufferObject> framebuffer;
+    bool attempted=false;
+    bool ready=false;
+};
+
+FenceGlassRenderer::FenceGlassRenderer() = default;
+FenceGlassRenderer::~FenceGlassRenderer() = default;
+
+void FenceGlassRenderer::setWallpaper(const QImage &source)
+{
+    if (source.cacheKey() == m_source.cacheKey()
+        && source.devicePixelRatio() == m_source.devicePixelRatio()) return;
+    m_source = source;
+    m_body = {};
+    m_clear = {};
+}
+
+QImage FenceGlassRenderer::renderPanel(const QRect &logicalRect, qreal radius, const QPainterPath &shape)
+{
+    m_usedGpu = false;
+    if (m_source.isNull() || logicalRect.isEmpty()) return {};
+    const qreal dpr = m_source.devicePixelRatio();
+    if (m_body.isNull()) {
+        const QSize logical(qMax(1, qRound(m_source.width()/dpr)),
+                            qMax(1, qRound(m_source.height()/dpr)));
+        m_body = diffuse(m_source, logical);
+        m_clear = diffuse(m_source, logical, 1, 2);
+        m_body.setDevicePixelRatio(1);
+        m_clear.setDevicePixelRatio(1);
+        ++m_preparationCount;
+    }
+    const QRect pixels(qRound(logicalRect.x()*dpr), qRound(logicalRect.y()*dpr),
+                       qMax(1, qRound(logicalRect.width()*dpr)),
+                       qMax(1, qRound(logicalRect.height()*dpr)));
+    QImage body = m_body.copy(pixels);
+    QImage clear = m_clear.copy(pixels);
+    // Radius must fit collapsed title-only fences too.
+    radius = qMin(radius, qMin(logicalRect.width(), logicalRect.height())/2.0);
+    QImage result;
+    if (!qEnvironmentVariableIsSet("UKUI_FENCES_GLASS_NO_GL")) {
+        if (!m_backend) m_backend = std::make_unique<Backend>();
+        if (!shape.isEmpty() && (m_shapeField.isNull() || m_cachedShape != shape ||
+            m_shapeSize != pixels.size() || !qFuzzyCompare(m_shapeDpr, dpr))) {
+            m_shapeField = shapeField(shape, pixels.size(), dpr);
+            m_cachedShape = shape;
+            m_shapeSize = pixels.size();
+            m_shapeDpr = dpr;
+        }
+        result = m_backend->render(body, clear, logicalRect.size(), radius,
+                                  shape.isEmpty() ? QImage() : m_shapeField);
+    }
+    m_usedGpu = !result.isNull();
+    if (!m_usedGpu) {
+        // Readable, antialiased fallback, explicitly without Snell refraction.
+        result = QImage(pixels.size(), QImage::Format_ARGB32_Premultiplied);
+        result.fill(Qt::transparent);
+        QPainter p(&result);
+        p.setRenderHint(QPainter::Antialiasing);
+        QPainterPath path;
+        if (shape.isEmpty())
+            path.addRoundedRect(QRectF(QPointF(), QSizeF(result.size())), radius*dpr, radius*dpr);
+        else
+            path=QTransform::fromScale(dpr,dpr).map(shape);
+        p.drawImage(0, 0, body);
+        p.fillRect(result.rect(), QColor(0, 0, 0, 105));
+        QImage mask(result.size(), QImage::Format_ARGB32_Premultiplied);
+        mask.fill(Qt::transparent);
+        { QPainter mp(&mask); mp.setRenderHint(QPainter::Antialiasing); mp.fillPath(path, Qt::white); }
+        p.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+        p.drawImage(0, 0, mask);
+    }
+    result.setDevicePixelRatio(dpr);
+    return result;
+}

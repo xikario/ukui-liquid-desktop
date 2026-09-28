@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>ukui-fences.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>ukui-fences</name>
+  <summary>Fence-style desktop organizer with Smart Space search for UKUI</summary>
+  <summary xml:lang="zh-CN">带智能空间文件索引的 UKUI 桌面分区工具</summary>
+  <description>
+    <p>Organize the UKUI desktop with fence-style areas, document full-text search, low-priority OCR and saved Smart Spaces.</p>
+  </description>
+  <launchable type="desktop-id">ukui-fences.desktop</launchable>
+  <content_rating type="oars-1.1" />
+</component>

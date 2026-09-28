@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=ukui-kaishicaidan
+Name[zh_CN]=开始菜单
+GenericName=Start Menu
+GenericName[zh_CN]=开始菜单
+Comment=UKUI start menu overlay
+Comment[zh_CN]=UKUI 开始菜单透明覆盖层
+Exec=ukui-kaishicaidan-launcher
+Icon=ukui-kaishicaidan
+Terminal=false
+StartupNotify=false
+Categories=Settings;DesktopSettings;

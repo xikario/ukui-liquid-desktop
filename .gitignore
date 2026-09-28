@@ -1,0 +1,34 @@
+# Generated builds, SDKs and test evidence
+build*/
+.local-deps/
+.local/
+.deps/
+releases/
+artifacts/
+test-results/
+Testing/
+CMakeFiles/
+__pycache__/
+*.py[cod]
+*.o
+*.a
+*.so
+*.deb
+*.zip
+*.tar.gz
+*.log
+*.tmp*
+*.bak
+*~
+integration-backup/
+# User data and credentials (source JSON resources remain tracked)
+.env
+.env.*
+*.pem
+*.key
+*.sqlite*
+*.db
+layout.json
+index.json
+index.json.*
+smart-space-providers.json

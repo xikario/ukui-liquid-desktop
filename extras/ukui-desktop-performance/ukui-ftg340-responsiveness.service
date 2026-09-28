@@ -1,0 +1,16 @@
+[Unit]
+Description=FTG340 desktop animation responsiveness on AC power
+After=systemd-udev-trigger.service
+ConditionPathExists=/sys/class/devfreq/PHYT0048:00/min_freq
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/ukui-ftg340-responsiveness start
+ExecReload=/usr/local/libexec/ukui-ftg340-responsiveness apply
+ExecStop=/usr/local/libexec/ukui-ftg340-responsiveness stop
+TimeoutStartSec=10
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

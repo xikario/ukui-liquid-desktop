@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ukui-kaishicaidan
+Name[zh_CN]=开始菜单
+Comment=Start ukui-kaishicaidan start menu
+Comment[zh_CN]=启动开始菜单
+Exec=ukui-kaishicaidan-launcher --autostart
+Icon=ukui-kaishicaidan
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5

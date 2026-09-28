@@ -1,0 +1,90 @@
+> 当前源码说明及历史修复记录。文中 artifacts/releases 路径为本机历史证据，不随源码发布；本次验证见 [VALIDATION.md](../../docs/VALIDATION.md)。
+
+# ukui-panel 公共液态主题
+
+当前 v2 直接作用于本机 OEM `/usr/bin/ukui-panel`，通过 Qt5 QStylePlugin 加载，委托 `ukui-default` 处理原有控件样式。没有替换系统面板可执行文件，也没有使用旧版面板源码替代 OEM 功能。
+
+## 已实现
+
+- `UKUIPanel` 背景接入公共 `shared/liquid-glass`：与开始菜单、Fences 同源的 NextKde Snell GPU 折射、色散、曲面边缘反光和背景扩散，按尺寸/DPI/设置缓存。
+- 进程内 QMenu/标准工具提示复用 `shared/liquid-popup`。保留菜单项、快捷键、禁用态和子菜单行为。
+- 面板空白处右键 → **外观与特效** → **液态主题（已开启/已关闭）**、**刷新背景材质**、**液态外观设置…**。
+- 设置支持自适应壁纸（默认开启）、立即刷新背景材质、背景压暗、圆角、高光、折射强度、背景色彩、减弱菜单动画；即时保存到 `~/.config/ukui/liquid-panel.ini`。
+- 关闭主题后恢复原面板 paintEvent 和原生菜单材质。
+
+长条面板基于缓存壁纸绘制，不实时抓取其他窗口。按 Fences 壁纸配置或系统壁纸、屏幕位置和缩放裁剪，再执行 GPU 折射；壁纸配置变化时刷新，也可手动刷新。鼠标移动只更新局部边缘反光。GPU 不可用时降级为模糊底板；壁纸不可读时使用 `LiquidSurface`。菜单仍复用 `shared/liquid-popup` 的独立绘制流程，不能把底板的 GPU Snell 能力等同于所有弹窗均已接入。
+
+## 范围
+
+设置只影响当前 panel 进程。音量、网络、通知等独立进程弹窗，以及 QML 窗口预览/日历没有自动改造。公共代码可复用，但跨应用实时同步设置尚未实现。纯色背景缺少可折射纹理，液态形变会弱于有纹理的背景；当前没有实时窗口透视或连接形变。
+
+已核对系统包：`3.26.0.0-0k3.21oemccd3000m0.26.u`，Qt 5.12。旧研究源码 3.0.6.4 与 OEM 插件接口不同，因此采用 Qt 公共插件接口适配，避免使用不匹配的私有 ABI。
+
+## 构建与验证
+
+使用系统 Qt 对应开发 SDK 配置 CMAKE_PREFIX_PATH：
+
+```sh
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/qt5/cmake
+cmake --build build -j2
+(cd build && ctest --output-on-failure)
+xvfb-run -a -s '-screen 0 2880x1800x24' dbus-run-session -- python3 tests/oem_smoke.py
+```
+
+测试包含主题挂载、子控件保留、关闭恢复原绘制、重新开启、设置滑块落盘、公共气泡回归和 DPR 表面检查。OEM 检查用 bubblewrap 隔离用户配置/缓存/日志及独立 X server/session bus，运行原二进制并确认任务、开始和托盘插件仍加载。截图位于 artifacts。
+
+## 安装与恢复
+
+`python3 scripts/install.py` 安装用户级 Qt 插件、启动包装器、`~/.config/autostart/ukui-panel.desktop` 和独立的 `ukui-panel-liquid-session.desktop` 登录检查入口；原文件及 panel 配置备份到 `releases/<时间>/`。此命令不自行停止面板。
+
+启动：`~/.local/bin/ukui-panel-liquid`（应先结束旧面板，单实例锁会阻止双开）。
+
+恢复：`~/.local/bin/ukui-panel-liquid-restore --restart`，撤销本项目的自启动覆盖并启动原面板。平时可以直接在面板菜单关闭液态主题。
+
+### 2026-09-28 重启后特效丢失修复
+
+首次真实重启发现 OEM `ukui-session` 仍通过系统目录启动必需面板 `/usr/bin/ukui-panel`，忽略同名用户自启动覆盖。因此此前“当前桌面已应用”属实，但同名入口不足以保证登录后加载。
+
+现额外安装不同名、Application 阶段的一次性登录检查脚本 `~/.local/bin/ukui-panel-liquid-session`：插件已加载则直接退出；原版面板在运行时，调用会话管理器 `stopModule ukui-panel.desktop` 正常停止，再通过包装器加载插件。脚本有互斥锁、等待上限、失败回退和当前用户/显示器检查，不常驻轮询，不修改系统桌面文件或可执行文件。恢复脚本会一并删除两个受管理的自启动项。
+
+实际验证了本次重启后的原版进程被正常切换，日志确认 Snell GPU；再次通过桌面文件启动检查，PID 不变且没有重复面板。`python3 tests/session_start_test.py` 验证已加载不操作、先停后启、插件缺失不动原版、停止失败不启动副本。修复后尚未再次重启整机；下一次登录结果记录在 `~/.local/state/ukui-panel-liquid/session-start.log`。备份位于 `releases/20260928-090347/`。
+
+插件不设置全局 QT_STYLE_OVERRIDE，其他应用不会被强制换肤。系统包升级后仍使用新 `/usr/bin/ukui-panel`；若上游改变主窗口类型，需重新验证主题适配。
+
+## 历史验证记录（2026-09-27）
+
+已切换当前桌面，运行 `/usr/bin/ukui-panel -style ukuiliquidpanel`。已在真实桌面打开右键菜单的“外观与特效”和设置窗口。系统二进制 SHA-256 与安装前一致。用户级自启动项已写入，未实际注销重登测试。
+
+当前默认背景压暗 58%、圆角 16、高光 55%、折射强度 3.5（界面显示 35）、背景色彩 48%；更改后会保存。开始菜单、智能空间、Fences 和系统监视小组件的已部署二进制没有因本次适配重新替换。
+
+## v2 光学材质验证
+
+在真实桌面日志确认 `[LiquidPanelOptics] Snell GPU`，实际打开右键菜单和设置窗口确认新控件。`QT_SCALE_FACTOR=1.5 ctest --output-on-failure` 为 3/3 通过；`DISPLAY=:0 QT_SCALE_FACTOR=1.5 ./build/liquid-optics-test --require-gpu` 验证 1×、1.5×、2× 的 GPU 后端、透明圆角、折射/色彩参数和背景缓存。CPU 降级及设置即时保存测试通过。隔离 OEM 面板启动测试亦已通过。
+
+本次最终截图：`artifacts/live-optics-final.png`、`artifacts/live-optics-settings.png`；安装前备份：`releases/20260927-223903/`。最新运行记录见 `releases/20260927-optics/final-installed.json`。公共渲染器保留 NextKde 着色器和 GPL v3 许可证；背景色彩参数默认值兼容已有三参数调用，面板单独采用较低值，减轻暖色壁纸对图标区的染色。
+
+## v1.1 材质与性能核查
+
+去除宽幅金属高光，改为窄幅玻璃边缘。菜单背景采样缩至实际菜单区域；常驻底板依旧只在需要时使用缓存绘制，不持续抓屏。
+
+Xorg 与 ToDesk 占用在切回原版后仍曾保持高位，随后一起下降；修正版空闲 Xorg 约 1%、面板约 0.2%，尚不能把瞬时高位归因于主题。完整数据和测量限制见 [性能记录](artifacts/performance/REPORT.md)。运行时诊断仅在 `UKUI_LIQUID_PANEL_PROFILE=1` 时计数，30 秒后自动停止。
+
+## 2026-09-28 壁纸适应与圆角修复
+
+“刷新背景材质”是一次手动重新读取。“自适应壁纸”控制自动跟随：开启后壁纸文件、Fences 配置或 dconf 变化触发延迟合并检查，只有背景确实变化才重建；关闭后保留当前会话中的缓存，仍可手动刷新，重启后读取启动时壁纸。此开关不改动用户的折射、色彩或圆角设置，也不等同于自动选择亮/暗主题。目录监听确保配置或图片被原子替换后仍能继续监听。
+
+矩形边缘修复包括两层：取消液态模式下多余的整窗 KWin 模糊请求，并让原生窗口轮廓裁剪所有子控件绘制。原来的圆角半径保持不变，裁剪预留抗锯齿余量，关闭液态主题恢复原窗口 mask 和模糊属性。亮色壁纸实机截图见 `artifacts/rounded-panel.png`。
+
+验证：150% 缩放 CTest 3/3；另用 Xvfb 运行 `liquid-panel-test`，验证 X11 模糊属性移除/恢复、原子替换壁纸自动更新、跟随开关保存及关闭/开启行为、尺寸变化后圆角不丢失；隔离 OEM 启动检查通过。安装前备份 `releases/20260928-003916/`。资源采样及范围见 [本次记录](artifacts/performance/OPTICS-20260928.md)。
+
+### 右键菜单抗锯齿修复
+
+共享菜单原先沿圆角使用整数 QRegion 和 QPainter clip 二次裁剪，150% 缩放下会切掉边缘覆盖像素。现用按 DPR 缓存的透明度蒙版生成平滑材质轮廓，高光单独抗锯齿绘制，原生窗口裁剪外扩至高光之外；圆角半径保持不变。背景仍只在打开时采样一次。
+
+验证：CTest 3/3；Xvfb 下 150% 菜单回归通过；1×/1.5×/2× 四角半透明覆盖、透明外角、菜单勾选、子菜单及键盘交互通过；真实 OEM 右键菜单截图见 `artifacts/menu-aa-live.png`。已部署面板插件，安装前备份 `releases/20260928-091423/`。共享源码已更新，其他应用此次没有重编或重启。
+
+### 菜单对号、箭头和状态完整检查
+
+面板 `PanelStyle` 接入公共 `drawMenuGlyph`，替换液态菜单对号、子菜单左右箭头及上下滚动箭头的小位图绘制。圆头路径使用当前缩放抗锯齿，正常、选中、禁用颜色来自菜单调色板。仅作用于已适配菜单；关闭液态效果恢复基础样式。补齐 14px 勾选列、文字及箭头留白、圆角选中背景和细分隔线，字体、快捷键、勾选及单选动作仍由 Qt 管理。
+
+检查中发现布局变宽可能使按钮菜单偏移，已把样式准备前移到尺寸测量前。最终 150% CTest 4/4，通过 Xvfb 菜单交互、锚点定位测试；新增 `menu-style` 覆盖 1×/1.5×/2× 的五种符号边缘覆盖、正常/选中/禁用颜色和选中行可见性，另生成 RTL 与单选状态预览。真实截图 `artifacts/menu-symbols-live.png`。本轮修改前备份为 `releases/20260928-093032/`；最终安装记录在 `releases/20260928-093512/`。此次只部署面板插件，保留登录检查入口。
