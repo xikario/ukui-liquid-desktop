@@ -321,8 +321,10 @@ fi
 sleep 0.4
 
 # Local knowledge, Skill and file-format settings remain visible and inherit
-# the monitor palette.
-xdotool mousemove 88 579 click 1 key End Up Return
+# the monitor palette. Open the dialog through the public integration surface
+# so the test does not depend on a particular responsive rail coordinate.
+gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.showSmartSpaceSettings >/dev/null
 sleep 0.4
 import -window root "$RESULT_DIR/smart-space-index-settings.png"
 xdotool mousemove 680 118 click 1
@@ -378,8 +380,29 @@ gdbus call --session --dest org.ukui.fences \
 sleep 0.6
 import -window root "$RESULT_DIR/smart-space-minimum-rail.png"
 
-# Folder context actions are intentionally different: hide keeps searchable
-# entries, while exclude removes the whole subtree from current/future index.
+# Publish a deterministic fast-full snapshot before checking folder policy.
+# The final assertions verify both the snapshot mode and its contents.
+gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.startSmartSpaceFullIndex >/dev/null
+attempt=0
+while [ "$attempt" -lt 1200 ]; do
+    busy=$(gdbus call --session --dest org.ukui.fences \
+        --object-path /ukuiFences \
+        --method org.ukui.fences.smartSpaceIndexBusy 2>/dev/null || true)
+    if grep -q '"fullRebuild":true' "$INDEX_PATH" 2>/dev/null && \
+       echo "$busy" | grep -q false; then
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.05
+done
+if [ "$attempt" -ge 1200 ]; then
+    echo "Smart Space fast-full index did not finish" >&2
+    exit 1
+fi
+
+# Folder policies are exercised with exact paths. Context-menu rendering is
+# covered above; path mutation itself must not depend on folder ordering.
 gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
     --method org.ukui.fences.resizeSmartSpace 920 520 >/dev/null
 gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
@@ -387,15 +410,13 @@ gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
 sleep 0.6
 xdotool mousemove 350 289 click 1 key ctrl+a BackSpace Return
 sleep 0.5
-xdotool mousemove 200 388 click 3
-sleep 0.2
-xdotool key Down Down Return
+gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.hideSmartSpaceFolder "$ROOT_DIR/Project A" >/dev/null
 sleep 0.5
 grep -q 'hiddenFolders=.*Project A' "$CONFIG_DIR/kylin/ukui-fences.ini"
 import -window root "$RESULT_DIR/smart-space-folder-hidden.png"
-xdotool mousemove 200 388 click 3
-sleep 0.2
-xdotool key Down Down Down Return
+gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.excludeSmartSpaceFolder "$ROOT_DIR/Project B" >/dev/null
 sleep 0.6
 grep -q 'excludedFolders=.*Project B' "$CONFIG_DIR/kylin/ukui-fences.ini"
 import -window root "$RESULT_DIR/smart-space-folder-excluded.png"
@@ -410,7 +431,9 @@ python3 - "$INDEX_PATH" "$ROOT_DIR" "$RUNTIME_DIR/sidecar-before.json" \
     "$RESULT_DIR/smart-space-local-search.png" \
     "$RESULT_DIR/smart-space-skill-settings.png" \
     "$RESULT_DIR/smart-space-compact-responsive.png" \
-    "$RESULT_DIR/smart-space-default-hidden.png" <<'PY'
+    "$RESULT_DIR/smart-space-default-hidden.png" \
+    "$RESULT_DIR/smart-space-folder-hidden.png" \
+    "$RESULT_DIR/smart-space-folder-excluded.png" <<'PY'
 import json
 import sys
 from pathlib import Path

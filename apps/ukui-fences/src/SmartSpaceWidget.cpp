@@ -2854,6 +2854,26 @@ void SmartSpaceWidget::startIndexing()
     launchIndexer(false);
 }
 
+void SmartSpaceWidget::showSettings()
+{
+    showSettingsDialog();
+}
+
+void SmartSpaceWidget::startFastFullIndex()
+{
+    startIdleFullIndex();
+}
+
+void SmartSpaceWidget::hideFolder(const QString &path)
+{
+    hideFolderFromNavigation(path);
+}
+
+void SmartSpaceWidget::excludeFolder(const QString &path)
+{
+    excludeFolderFromIndex(path);
+}
+
 void SmartSpaceWidget::startIdleFullIndex()
 {
     if (m_idleFullIndex && m_indexer &&

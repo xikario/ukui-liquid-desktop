@@ -22,7 +22,7 @@ mkdir -p "$ROOT_DIR" "$CONFIG_DIR/kylin" "$CACHE_DIR" "$RESULT_DIR"
 printf '%s\n' 'This file must not be indexed merely by opening the widget.' \
     > "$ROOT_DIR/manual-only.txt"
 printf '%s\n' '[systemMonitor]' 'skin=1' 'opacity=100' \
-    '[smartSpace]' 'autoStart=true' \
+    '[smartSpace]' 'autoStart=true' 'themeMode=2' 'defaultHidden=false' \
     > "$CONFIG_DIR/kylin/ukui-fences.ini"
 
 export XDG_CONFIG_HOME="$CONFIG_DIR"
@@ -69,6 +69,14 @@ if pgrep -P "$APP_PID" -f smart_space_indexer.py >/dev/null 2>&1; then
     echo "indexer process is running in manual mode" >&2
     exit 1
 fi
+SMART_X=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.smartSpaceX | tr -cd '0-9-')
+SMART_Y=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.smartSpaceY | tr -cd '0-9-')
+SMART_W=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.smartSpaceWidth | tr -cd '0-9')
+SMART_H=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.smartSpaceHeight | tr -cd '0-9')
 import -window root "$RESULT_DIR/smart-space-manual-no-index.png"
 # The real desktop context menu exposes System Monitor and Smart Space as
 # sibling checkable widgets, plus a widget autostart submenu.
@@ -78,14 +86,10 @@ import -window root "$RESULT_DIR/smart-space-desktop-context-menu.png"
 xdotool key Escape
 sleep 0.3
 SETTINGS_BEFORE=$(xdotool search --name '智能空间设置' 2>/dev/null || true)
-SMART_X=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
-    --method org.ukui.fences.smartSpaceX | tr -cd '0-9-')
-SMART_Y=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
-    --method org.ukui.fences.smartSpaceY | tr -cd '0-9-')
-# The compact overflow button remains near the bottom of the 48 px left rail.
-MORE_X=$((SMART_X + 38))
-MORE_Y=$((SMART_Y + 345))
-xdotool mousemove "$MORE_X" "$MORE_Y" click 1 key End Up Return
+# Use the public desktop integration surface. Fixed rail coordinates are not
+# stable across responsive-layout and display-scale changes.
+gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.showSmartSpaceSettings >/dev/null
 attempt=0
 SETTINGS_WINDOW=
 while [ "$attempt" -lt 20 ]; do
@@ -110,23 +114,25 @@ sleep 0.05
 import -window root "$RESULT_DIR/smart-space-light-settings.png"
 xdotool key Escape
 python3 - "$RESULT_DIR/smart-space-manual-no-index.png" \
+    "$SMART_X" "$SMART_Y" "$SMART_W" "$SMART_H" \
     "$RESULT_DIR/smart-space-desktop-context-menu.png" \
     "$RESULT_DIR/smart-space-light-settings.png" <<'PY'
 import sys
 from PIL import Image, ImageChops, ImageStat
 image = Image.open(sys.argv[1]).convert("RGB")
-panel_box = ((50, 260, 985, 800) if image.width <= 1600
-             else (70, 860, 1425, 1660))
+x, y, width, height = map(int, sys.argv[2:6])
+panel_box = (max(0, x), max(0, y), min(image.width, x + width),
+             min(image.height, y + height))
 panel = image.crop(panel_box)
 if sum(ImageStat.Stat(panel).mean) / 3 < 150:
-    raise SystemExit("Smart Space did not follow the resource monitor light skin")
-menu = Image.open(sys.argv[2]).convert("RGB")
+    raise SystemExit("Smart Space did not apply its explicit light theme")
+menu = Image.open(sys.argv[6]).convert("RGB")
 if not ImageChops.difference(image, menu).getbbox():
     raise SystemExit("desktop context menu did not become visible")
 menu_region = menu.crop((1080, 380, 1435, 890))
 if sum(ImageStat.Stat(menu_region).var) < 40:
     raise SystemExit("desktop widget context menu appears blank")
-settings = Image.open(sys.argv[3]).convert("RGB")
+settings = Image.open(sys.argv[7]).convert("RGB")
 if settings.size != image.size or not ImageChops.difference(image, settings).getbbox():
     raise SystemExit("Smart Space settings dialog did not become visible")
 dialog_box = ((340, 100, 1100, 750) if settings.width <= 1600

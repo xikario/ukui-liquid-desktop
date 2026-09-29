@@ -215,6 +215,7 @@ ukui-fences-v0.4.0/
 - **无几何回环**：`moveEvent`/`resizeEvent` 在 `lockToDesktopGeometry()` 期间受 `m_lockingDesktopGeometry` 标志保护，防止在 150% 缩放时进入自激几何循环
 - **从 /proc 读取系统数据**：CPU、内存、磁盘信息直接读取 `/proc` 和 sysfs，无需外部守护进程
 - **DeepSeek 诊断**：默认使用 `https://api.deepseek.com/chat/completions`，可通过 `DEEPSEEK_API_KEY` 和 `DEEPSEEK_API_URL` 环境变量配置
+- **密钥存储**：设置界面输入的 API 密钥通过系统 Secret Service 密钥环保存，依赖 `libsecret-1.so.0` 和已解锁的密钥环。旧 INI 密钥在密钥环写入成功后自动移除；写入失败时保留旧值，新输入仅在本次运行有效，并在诊断区提示。环境变量密钥不会因保存布局而写入配置。历史备份需要在确认迁移成功后单独清理。
 
 ---
 

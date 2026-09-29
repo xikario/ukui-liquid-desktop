@@ -37,6 +37,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QScreen>
 #include <QSpinBox>
 #include <QSlider>
@@ -1403,6 +1404,14 @@ void SystemMonitor::restoreSettings()
         QStringLiteral("apiUrl"),
         QStringLiteral("https://api.deepseek.com/chat/completions")).toString();
     m_apiKey = settings.value(QStringLiteral("apiKey")).toString();
+    const bool storedInKeyring = settings.value(QStringLiteral("credentialStore")).toString()
+        == QStringLiteral("secret-service");
+    // A legacy value is retained on disk until the keyring confirms the write.
+    // Empty test profiles never connect to the user's keyring.
+    if (!m_apiKey.isEmpty())
+        saveCredential(m_apiKey);
+    else if (storedInKeyring)
+        runCredentialJob(QStringLiteral("read"));
     m_widgetTitle = settings.value(
         QStringLiteral("title"),
         QStringLiteral("飞腾桌面资源监控")).toString().trimmed();
@@ -1437,6 +1446,82 @@ void SystemMonitor::restoreSettings()
     }
 }
 
+void SystemMonitor::saveCredential(const QString &key)
+{
+    ++m_credentialRevision;
+    m_pendingCredential = key;
+    m_credentialWritePending = true;
+    if (!m_credentialJob) {
+        m_credentialWritePending = false;
+        runCredentialJob(key.isEmpty() ? QStringLiteral("clear") : QStringLiteral("write"), key);
+    }
+}
+
+void SystemMonitor::runCredentialJob(const QString &operation, const QString &key)
+{
+    const int revision = m_credentialRevision;
+    auto *job = new QProcess(this);
+    m_credentialJob = job;
+    const QString configFile = QFileInfo(QSettings().fileName()).absoluteFilePath();
+    const QString legacyKey = QSettings().value(QStringLiteral("systemMonitor/apiKey")).toString();
+    auto finish = [this, job, operation, legacyKey, revision, configFile](bool success) {
+        if (m_credentialJob != job)
+            return;
+        m_credentialJob = nullptr;
+        if (success && operation == QLatin1String("read")) {
+            const QJsonDocument data = QJsonDocument::fromJson(job->readAllStandardOutput());
+            success = data.isObject() && !data.object().value("key").toString().isEmpty();
+            if (success && revision == m_credentialRevision &&
+                qgetenv("DEEPSEEK_API_KEY").trimmed().isEmpty())
+                m_apiKey = data.object().value("key").toString();
+        } else if (success) {
+            QSettings settings(configFile, QSettings::IniFormat);
+            settings.beginGroup(QStringLiteral("systemMonitor"));
+            if (operation == QLatin1String("clear")) {
+                settings.remove(QStringLiteral("credentialStore"));
+                settings.remove(QStringLiteral("apiKey"));
+            } else {
+                settings.setValue(QStringLiteral("credentialStore"), QStringLiteral("secret-service"));
+                if (settings.value(QStringLiteral("apiKey")).toString() == legacyKey)
+                    settings.remove(QStringLiteral("apiKey"));
+            }
+            settings.sync();
+            success = settings.status() == QSettings::NoError;
+        }
+        m_credentialFailed = !success;
+        if (!success && !m_credentialWritePending)
+            m_aiError = QStringLiteral("系统密钥环操作失败：旧凭据保持不变；新输入的密钥仅在本次运行有效，请解锁密钥环后重试。");
+        job->deleteLater();
+        update();
+        if (m_credentialWritePending) {
+            const QString pending = m_pendingCredential;
+            m_credentialWritePending = false;
+            runCredentialJob(pending.isEmpty() ? QStringLiteral("clear") : QStringLiteral("write"), pending);
+        }
+    };
+    connect(job, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+            [finish](int code, QProcess::ExitStatus status) {
+        finish(code == 0 && status == QProcess::NormalExit);
+    });
+    connect(job, &QProcess::errorOccurred, this, [finish](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart)
+            finish(false);
+    });
+    auto *timeout = new QTimer(job);
+    timeout->setSingleShot(true);
+    connect(timeout, &QTimer::timeout, job, [job] { job->kill(); });
+    timeout->start(30000);
+    QString script = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/../libexec/ukui-fences/credential_store.py");
+    if (!QFileInfo::exists(script))
+        script = QStringLiteral(UKUI_FENCES_CREDENTIAL_STORE_PATH);
+    job->start(QStandardPaths::findExecutable(QStringLiteral("python3")),
+               {script, operation, configFile});
+    if (operation == QLatin1String("write"))
+        job->write(QJsonDocument(QJsonObject{{"key", key}}).toJson(QJsonDocument::Compact));
+    job->closeWriteChannel();
+}
+
 bool SystemMonitor::autoStartEnabled()
 {
     QSettings settings;
@@ -1466,7 +1551,8 @@ void SystemMonitor::saveSettings() const
     settings.setValue(QStringLiteral("autoStart"), m_autoStart);
     settings.setValue(QStringLiteral("premiumAesthetics"), m_premiumAesthetics);
     settings.setValue(QStringLiteral("apiUrl"), m_apiUrl);
-    settings.setValue(QStringLiteral("apiKey"), m_apiKey);
+    // Credentials are persisted only by the asynchronous keyring job. General
+    // layout saves must never copy an environment-provided key into this INI.
     settings.setValue(QStringLiteral("title"), m_widgetTitle);
     settings.setValue(QStringLiteral("fontFamily"), m_widgetFontFamily);
     settings.setValue(QStringLiteral("fontSize"), m_widgetFontSize);
@@ -1944,7 +2030,11 @@ void SystemMonitor::showSettingsDialog()
         m_statIntervalSec = intervalSpin->value();
         m_autoStart = autoStartCheck->isChecked();
         m_premiumAesthetics = premiumCheck->isChecked();
-        m_apiKey = keyEdit->text().trimmed();
+        const QString editedKey = keyEdit->text().trimmed();
+        if (editedKey != m_apiKey || m_credentialFailed) {
+            m_apiKey = editedKey;
+            saveCredential(m_apiKey);
+        }
         m_apiUrl = urlEdit->text().trimmed();
         m_aiError.clear();
         // 应用新的采样周期

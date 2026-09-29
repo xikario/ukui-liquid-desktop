@@ -72,7 +72,7 @@ while [ "$attempt" -lt 600 ]; do
     attempt=$((attempt + 1))
     current=$(awk '/VmRSS:/ {print $2}' "/proc/$APP_PID/status")
     [ "$current" -le "$MAIN_PEAK" ] || MAIN_PEAK=$current
-    child=$(pgrep -P "$APP_PID" -n 2>/dev/null || true)
+    child=$(pgrep -P "$APP_PID" -n -f "[s]mart_space_indexer.py" 2>/dev/null || true)
     if [ -n "$child" ] && [ -r "/proc/$child/status" ]; then
         # The short-lived indexer can exit between the readability check and
         # opening /proc.  Treat that sampling race as an empty measurement.
@@ -83,9 +83,19 @@ while [ "$attempt" -lt 600 ]; do
         child_nice=$(ps -o ni= -p "$child" | tr -d ' ' || true)
         [ -z "$child_nice" ] || INDEXER_NICE=$child_nice
     fi
-    if [ -s "$INDEX_PATH" ] && [ -z "$child" ]; then break; fi
+    busy=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+        --method org.ukui.fences.smartSpaceIndexBusy)
+    if [ -s "$INDEX_PATH" ] && [ -z "$child" ] && echo "$busy" | grep -q false; then break; fi
     sleep 0.05
 done
+if [ "$attempt" -ge 600 ]; then
+    echo "initial resource index did not finish" >&2
+    exit 1
+fi
+gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.revealSmartSpaceFromEdge >/dev/null
+gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.moveSmartSpace 50 246 >/dev/null
 # Let JSON loading, tag aggregation and first paint settle before measuring
 # steady-state CPU.  Keep observing RSS so this stabilization is still part
 # of the peak-memory assertion.
@@ -124,10 +134,11 @@ TYPING_CPU=$(awk -v d="$((typing_ticks_after - typing_ticks_before))" \
 xdotool key ctrl+a BackSpace
 sleep 0.5
 
-# Run the explicit fast-full rebuild against the same 25,000-file tree.
-# The compact JSON keeps the previous fullRebuild=false value until the new
-# snapshot is atomically installed, so it is also a reliable completion marker.
-xdotool mousemove 88 394 click 1
+# Run the explicit fast-full rebuild against the same 25,000-file tree through
+# the public integration API. A fixed button coordinate is invalid as soon as
+# the responsive rail changes size or position.
+gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+    --method org.ukui.fences.startSmartSpaceFullIndex >/dev/null
 IDLE_INDEXER_PEAK=0
 IDLE_INDEXER_NICE=0
 attempt=0
@@ -135,7 +146,7 @@ while [ "$attempt" -lt 1200 ]; do
     attempt=$((attempt + 1))
     current=$(awk '/VmRSS:/ {print $2}' "/proc/$APP_PID/status")
     [ "$current" -le "$MAIN_PEAK" ] || MAIN_PEAK=$current
-    child=$(pgrep -P "$APP_PID" -n 2>/dev/null || true)
+    child=$(pgrep -P "$APP_PID" -n -f "[s]mart_space_indexer.py" 2>/dev/null || true)
     if [ -n "$child" ] && [ -r "/proc/$child/status" ]; then
         child_rss=$(awk '/VmRSS:/ {print $2}' "/proc/$child/status" 2>/dev/null || true)
         if [ -n "$child_rss" ]; then
@@ -144,7 +155,11 @@ while [ "$attempt" -lt 1200 ]; do
         child_nice=$(ps -o ni= -p "$child" | tr -d ' ' || true)
         [ -z "$child_nice" ] || IDLE_INDEXER_NICE=$child_nice
     fi
-    if grep -q '"fullRebuild":true' "$INDEX_PATH" 2>/dev/null && [ -z "$child" ]; then
+    busy=$(gdbus call --session --dest org.ukui.fences \
+        --object-path /ukuiFences \
+        --method org.ukui.fences.smartSpaceIndexBusy 2>/dev/null || true)
+    if grep -q '"fullRebuild":true' "$INDEX_PATH" 2>/dev/null && \
+       [ -z "$child" ] && echo "$busy" | grep -q false; then
         break
     fi
     sleep 0.05

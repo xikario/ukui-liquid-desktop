@@ -60,6 +60,7 @@ add_executable(ukui-fences
 )
 
 target_compile_definitions(ukui-fences PRIVATE
+    UKUI_FENCES_CREDENTIAL_STORE_PATH="${CMAKE_SOURCE_DIR}/scripts/credential_store.py"
     UKUI_FENCES_CALENDAR_READER_PATH="${CMAKE_SOURCE_DIR}/scripts/calendar_snapshot.py"
     UKUI_FENCES_SMART_INDEXER_PATH="${CMAKE_SOURCE_DIR}/scripts/smart_space_indexer.py"
     UKUI_FENCES_KNOWLEDGE_WORKER_PATH="${CMAKE_SOURCE_DIR}/scripts/smart_space_knowledge.py")
@@ -193,12 +194,28 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             TIMEOUT 180
             LABELS "integration;resource")
+        add_test(NAME smart_space_dbus_dialogs
+            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
+                    ${DBUS_RUN_SESSION_EXECUTABLE} --
+                    ${CMAKE_SOURCE_DIR}/tests/run_smart_space_dbus_dialog_smoke.sh
+                    $<TARGET_FILE:ukui-fences>)
+        set_tests_properties(smart_space_dbus_dialogs PROPERTIES TIMEOUT 30 LABELS "integration;dbus")
+        find_program(GNOME_KEYRING_EXECUTABLE gnome-keyring-daemon)
+        if(GNOME_KEYRING_EXECUTABLE AND Python3_Interpreter_FOUND)
+            add_test(NAME credential_store
+                COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
+                        ${DBUS_RUN_SESSION_EXECUTABLE} -- ${Python3_EXECUTABLE}
+                        ${CMAKE_SOURCE_DIR}/tests/test_credential_store.py
+                        $<TARGET_FILE:ukui-fences>)
+            set_tests_properties(credential_store PROPERTIES TIMEOUT 45 LABELS "integration;credentials")
+        endif()
     endif()
 endif()
 
 install(TARGETS ukui-fences RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS packaging/ukui-fences-launcher DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS scripts/smart_space_indexer.py
+                 scripts/credential_store.py
                  scripts/smart_space_knowledge.py
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/ukui-fences)
 install(FILES packaging/ukui-fences.desktop

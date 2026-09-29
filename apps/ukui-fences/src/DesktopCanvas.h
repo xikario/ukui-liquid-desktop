@@ -102,6 +102,11 @@ public slots:
     Q_SCRIPTABLE void moveSmartSpace(int x, int y);
     Q_SCRIPTABLE void resizeSmartSpace(int width, int height);
     Q_SCRIPTABLE void setSmartSpaceDensity(int density);
+    Q_SCRIPTABLE void showSmartSpaceSettings();
+    Q_SCRIPTABLE void startSmartSpaceFullIndex();
+    Q_SCRIPTABLE bool smartSpaceIndexBusy() const;
+    Q_SCRIPTABLE void hideSmartSpaceFolder(const QString &path);
+    Q_SCRIPTABLE void excludeSmartSpaceFolder(const QString &path);
     Q_SCRIPTABLE bool smartSpaceOverlapsDesktopIcons() const;
     Q_SCRIPTABLE bool systemMonitorVisible() const { return m_monitor != nullptr; }
     Q_SCRIPTABLE bool smartSpaceVisible() const { return m_smartSpace != nullptr; }

@@ -72,6 +72,11 @@ public:
     void setAlwaysOnTop(bool enabled);
     bool alwaysOnTop() const { return m_alwaysOnTop; }
     void setResultDensity(int density);
+    void showSettings();
+    void startFastFullIndex();
+    bool indexBusy() const { return m_indexBusy; }
+    void hideFolder(const QString &path);
+    void excludeFolder(const QString &path);
     void recreateNativeSurface(bool translucent);
     // Refresh the wallpaper material behind the liquid-glass skin. Call this
     // before mapping a newly-created widget so the first frame is clean.

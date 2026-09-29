@@ -16,8 +16,11 @@ cmake --install "$BUILD_DIR" --prefix "$USER_PREFIX"
 # Keep it independent of the source/build tree so upgrades cannot leave a
 # session entry pointing at an obsolete build-v10 executable.
 install -d "$HOME/.config/autostart" "$HOME/.local/share/applications"
-install -m 0644 "$PROJECT_DIR/packaging/ukui-fences-autostart.desktop" \
-    "$HOME/.config/autostart/ukui-fences.desktop"
+autostart_file="$HOME/.config/autostart/ukui-fences.desktop"
+install -m 0644 "$PROJECT_DIR/packaging/ukui-fences-autostart.desktop" "$autostart_file"
+# Desktop sessions do not consistently include ~/.local/bin in PATH. Resolve
+# the launcher at install time so a reboot always starts this user installation.
+sed -i "s|^Exec=.*|Exec=$USER_PREFIX/bin/ukui-fences-launcher --autostart|" "$autostart_file"
 install -m 0644 "$PROJECT_DIR/packaging/ukui-fences.desktop" \
     "$HOME/.local/share/applications/ukui-fences.desktop"
 

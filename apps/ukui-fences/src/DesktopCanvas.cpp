@@ -2657,6 +2657,47 @@ void DesktopCanvas::setSmartSpaceDensity(int density)
         m_smartSpace->setResultDensity(density);
 }
 
+void DesktopCanvas::showSmartSpaceSettings()
+{
+    setSmartSpaceVisible(true);
+    if (m_smartSpace) {
+        SmartSpaceWidget *widget = m_smartSpace;
+        // A modal dialog must be entered after the D-Bus method has returned;
+        // otherwise synchronous callers block until the dialog is closed.
+        QTimer::singleShot(0, widget, [widget] { widget->showSettings(); });
+    }
+}
+
+void DesktopCanvas::startSmartSpaceFullIndex()
+{
+    setSmartSpaceVisible(true);
+    if (m_smartSpace) {
+        SmartSpaceWidget *widget = m_smartSpace;
+        QTimer::singleShot(0, widget, [widget] { widget->startFastFullIndex(); });
+    }
+}
+
+bool DesktopCanvas::smartSpaceIndexBusy() const
+{
+    return m_smartSpace && m_smartSpace->indexBusy();
+}
+
+void DesktopCanvas::hideSmartSpaceFolder(const QString &path)
+{
+    setSmartSpaceVisible(true);
+    if (m_smartSpace)
+        m_smartSpace->hideFolder(path);
+}
+
+void DesktopCanvas::excludeSmartSpaceFolder(const QString &path)
+{
+    setSmartSpaceVisible(true);
+    if (m_smartSpace) {
+        SmartSpaceWidget *widget = m_smartSpace;
+        QTimer::singleShot(0, widget, [widget, path] { widget->excludeFolder(path); });
+    }
+}
+
 bool DesktopCanvas::smartSpaceOverlapsDesktopIcons() const
 {
     const QRect reserved = smartSpaceReservedGeometry();

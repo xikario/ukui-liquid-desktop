@@ -149,6 +149,8 @@ private:
     void setCompact(bool compact);
     void restoreSettings();
     void saveSettings() const;
+    void saveCredential(const QString &key);
+    void runCredentialJob(const QString &operation, const QString &key = QString());
     QPoint boundedPosition(const QPoint &position) const;
 
     Palette paletteForSkin() const;
@@ -221,6 +223,11 @@ private:
     QByteArray m_curlOutput;
     QByteArray m_curlError;
     QString m_apiKey;
+    QProcess *m_credentialJob = nullptr;
+    QString m_pendingCredential;
+    bool m_credentialWritePending = false;
+    bool m_credentialFailed = false;
+    int m_credentialRevision = 0;
     QString m_apiUrl = QStringLiteral("https://api.deepseek.com/chat/completions");
     QString m_widgetTitle = QStringLiteral("飞腾桌面资源监控");
     QString m_widgetFontFamily;
