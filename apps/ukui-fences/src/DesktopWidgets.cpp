@@ -251,21 +251,45 @@ void ClockDesklet::arrangeControls(){
     m_start->setGeometry(16,height()-37,half,26);m_cancel->setGeometry(24+half,height()-37,half,26);
 }
 void ClockDesklet::paintGlassFace(QPainter &p,const QPointF &center,qreal radius) {
-    // Sample only the cached card material, never the numbers or hands. Keep
-    // the expensive lens render outside the one-second clock paint cycle.
-    const QImage backdrop=material();
     const QRect face(qRound(center.x()-radius),qRound(center.y()-radius),
                      qRound(radius*2),qRound(radius*2));
-    if(backdrop.isNull() || face.isEmpty())return;
-    if(m_faceMaterial.isNull() || m_faceSourceKey!=backdrop.cacheKey() || m_faceRect!=face) {
+    if(face.isEmpty())return;
+    // Use the original desktop wallpaper under the face. Sampling the already
+    // darkened outer card makes a second glass pass look like a flat blue disk.
+    const qint64 sourceKey=material().cacheKey();
+    if(m_faceMaterial.isNull() || m_faceSourceKey!=sourceKey || m_faceRect!=face) {
+        const QRect globalFace(mapToGlobal(face.topLeft()),face.size());
+        const QImage backdrop=m_canvas->wallpaperBackdrop(globalFace,devicePixelRatioF());
+        if(backdrop.isNull())return;
         if(!m_faceOptics)m_faceOptics=std::make_unique<LiquidOpticsRenderer>();
         const auto &theme=LiquidPopup::theme();
+        // Match desklet optics while keeping the face's own wallpaper crop.
         m_faceOptics->setOptics(theme.refraction,theme.tint,theme.highlight,1.0);
         m_faceOptics->setWallpaper(backdrop);
-        // The shared control mode adds clear refraction/highlights without
-        // applying the card's dark tint a second time.
-        m_faceMaterial=m_faceOptics->renderControl(face,face.width()/2.);
-        m_faceSourceKey=backdrop.cacheKey();m_faceRect=face;++m_faceBuilds;
+        m_faceMaterial=m_faceOptics->renderControl(QRect(QPoint(),face.size()),face.width()/2.);
+        // A sparse wallpaper cannot produce a visible refracted contour on its
+        // own. Cache a directional rim and a faint curved reflection so the
+        // face reads as clear glass even over sky, without another opaque fill.
+        {
+            QPainter lens(&m_faceMaterial);lens.setRenderHint(QPainter::Antialiasing);
+            const QRectF bounds(1,1,face.width()-2,face.height()-2);
+            QPainterPath circle;circle.addEllipse(bounds);lens.setClipPath(circle);
+            QRadialGradient reflection(QPointF(face.width()*.24,face.height()*.08),face.width()*.72);
+            reflection.setColorAt(0,QColor(235,251,255,30));
+            reflection.setColorAt(.50,QColor(225,248,255,8));
+            reflection.setColorAt(1,Qt::transparent);
+            lens.fillPath(circle,reflection);
+            QLinearGradient rim(bounds.topLeft(),bounds.bottomRight());
+            rim.setColorAt(0,QColor(235,253,255,210));
+            rim.setColorAt(.28,QColor(217,246,255,85));
+            rim.setColorAt(.5,QColor(217,246,255,8));
+            rim.setColorAt(.76,QColor(217,246,255,30));
+            rim.setColorAt(1,QColor(231,253,255,150));
+            lens.setBrush(Qt::NoBrush);lens.setPen(QPen(rim,1.5));lens.drawEllipse(bounds);
+            lens.setPen(QPen(QColor(225,250,255,38),1.));
+            lens.drawArc(bounds.adjusted(3,3,-3,-3),30*16,105*16);
+        }
+        m_faceSourceKey=sourceKey;m_faceRect=face;++m_faceBuilds;
         setProperty("clockFaceOpticalGpu",m_faceOptics->usedGpu());
     }
     p.drawImage(QRectF(face),m_faceMaterial,QRectF(m_faceMaterial.rect()));

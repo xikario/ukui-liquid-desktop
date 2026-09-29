@@ -58,6 +58,9 @@ static int runDeskletTest(const QString &root)
               && face.pixelColor(face.width()/2,face.height()/2).alpha()==255,
               "clock lens has transparent corners and an opaque readable body");
         check(face.devicePixelRatio()==clock->devicePixelRatioF(),"clock lens preserves display DPR");
+        check(face.pixelColor(face.width()/2,face.height()/2)
+                  != clock->material().pixelColor(clock->material().width()/2,clock->material().height()/2),
+              "clock lens samples the wallpaper instead of the already-darkened card");
         const int faceBuilds=clock->faceMaterialBuilds();
         const int builds=clock->materialBuilds();for(int i=0;i<10;++i){clock->tick();clock->grab();}settle(150);
         check(clock->materialBuilds()==builds,"clock tick reuses cached optics");
