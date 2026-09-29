@@ -4,6 +4,7 @@
 #include <QPainter>
 #include <QDir>
 #include <QDebug>
+#include <QTemporaryDir>
 #include <cstdlib>
 static void check(bool ok,const char *message){if(!ok){qCritical()<<message;std::exit(1);}qInfo()<<"PASS:"<<message;}
 int main(int argc,char **argv){
@@ -39,6 +40,21 @@ int main(int argc,char **argv){
   const int count=optics.preparationCount();optics.renderPanel(QRect(QPoint(),logical),18);
   check(optics.preparationCount()==count,"background diffusion cached");
   refracted.save(output+QString("/optics-%1.png").arg(d));
+ }
+ {
+  QTemporaryDir temp;
+  const QString path=temp.path()+QString::fromUtf8("/壁纸.png");
+  QImage picture(160,90,QImage::Format_RGB32);picture.fill(QColor(210,80,35));
+  check(picture.save(path,"JPEG"),"JPEG wallpaper fixture with PNG suffix saved");
+  const bool hadOverride=qEnvironmentVariableIsSet("UKUI_LIQUID_WALLPAPER");
+  const QByteArray oldOverride=qgetenv("UKUI_LIQUID_WALLPAPER");
+  qputenv("UKUI_LIQUID_WALLPAPER",path.toUtf8());
+  WallpaperBackdrop mismatched;check(mismatched.reload(),"mismatched wallpaper reloads");
+  const QImage sample=mismatched.sample(QRect(0,0,200,50),QRect(0,0,800,600),1.5);
+  check(!sample.isNull() && sample.size()==QSize(300,75),"content-based decoding supports Chinese path and mismatched extension");
+  check(qAbs(sample.pixelColor(150,37).red()-210)<5,"wallpaper crop contains decoded pixels instead of fallback");
+  check(!mismatched.reload(),"decoded wallpaper is cached until it changes");
+  if(hadOverride)qputenv("UKUI_LIQUID_WALLPAPER",oldOverride);else qunsetenv("UKUI_LIQUID_WALLPAPER");
  }
  WallpaperBackdrop wallpaper;check(wallpaper.reload(),"wallpaper provider initializes");
  auto crop=wallpaper.sample(QRect(0,0,200,50),QRect(0,0,800,600),1.5);

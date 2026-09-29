@@ -9,6 +9,8 @@
 #include <QUrl>
 #include <QDateTime>
 #include <QDir>
+#include <QImageReader>
+#include <QDebug>
 
 static QString setting(const QString &schema,const QString &key) {
     QProcess process;process.start("gsettings",{ "get",schema,key });
@@ -46,7 +48,15 @@ bool WallpaperBackdrop::reload() {
     QFileInfo info(path);
     const qint64 modified=info.exists()?info.lastModified().toMSecsSinceEpoch():0;
     if(path==m_path && modified==m_modified && mode==m_mode && !m_source.isNull())return false;
-    m_path=path;m_modified=modified;m_mode=mode;m_source=QImage(path);
+    m_path=path;m_modified=modified;m_mode=mode;
+    // Downloaded wallpaper may have a .png name but contain JPEG data. Match
+    // Fences' content-based decoding so the visible desktop and optics agree.
+    QImageReader reader(path);
+    reader.setDecideFormatFromContent(true);
+    reader.setAutoTransform(true);
+    m_source=reader.read();
+    if(m_source.isNull())
+        qWarning()<<"[LiquidPanelWallpaper] Cannot decode wallpaper"<<path<<reader.errorString();
     return true;
 }
 QImage WallpaperBackdrop::sample(const QRect &area,const QRect &screen,qreal dpr) const {
