@@ -1,3 +1,5 @@
+#include <QImageReader>
+#include "../../../shared/async-work/BackgroundTask.h"
 #include "LiquidPopup.h"
 #include "StartMenu.h"
 #include "StartButton.h"
@@ -69,10 +71,9 @@ namespace {
     }
 
 // helper: read current active window from root (_NET_ACTIVE_WINDOW)
-unsigned long activeWindowId()
+unsigned long activeWindowId(Display *dpy)
 {
     if (!isX11Platform()) return 0;
-    Display *dpy = XOpenDisplay(nullptr);
     if (!dpy) return 0;
     const Atom active = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", True);
     const Atom root = XDefaultRootWindow(dpy);
@@ -85,16 +86,14 @@ unsigned long activeWindowId()
         id = *reinterpret_cast<unsigned long *>(data);
         XFree(data);
     }
-    XCloseDisplay(dpy);
     return id;
 }
 
-QStringList x11WindowClassNames(unsigned long windowId)
+QStringList x11WindowClassNames(Display *dpy, unsigned long windowId)
 {
     QStringList names;
     if (!isX11Platform() || windowId == 0) return names;
 
-    Display *dpy = XOpenDisplay(nullptr);
     if (!dpy) return names;
 
     const Atom wmClassAtom = XInternAtom(dpy, "WM_CLASS", True);
@@ -114,15 +113,13 @@ QStringList x11WindowClassNames(unsigned long windowId)
         XFree(data);
     }
 
-    XCloseDisplay(dpy);
     return names;
 }
 
-unsigned long x11WindowPid(unsigned long windowId)
+unsigned long x11WindowPid(Display *dpy, unsigned long windowId)
 {
     if (!isX11Platform() || windowId == 0) return 0;
 
-    Display *dpy = XOpenDisplay(nullptr);
     if (!dpy) return 0;
 
     const Atom pidAtom = XInternAtom(dpy, "_NET_WM_PID", True);
@@ -139,7 +136,6 @@ unsigned long x11WindowPid(unsigned long windowId)
         XFree(data);
     }
 
-    XCloseDisplay(dpy);
     return pid;
 }
 
@@ -195,10 +191,10 @@ bool tokensMatch(const QString &left, const QString &right)
            (right.size() >= 4 && left.startsWith(right + QLatin1Char('-')));
 }
 
-QString desktopPathForWindow(const QList<AppEntry> &apps, unsigned long windowId)
+QString desktopPathForWindow(Display *dpy, const QList<AppEntry> &apps, unsigned long windowId)
 {
-    QStringList activeTokens = x11WindowClassNames(windowId);
-    const QString procToken = processExecutableName(x11WindowPid(windowId));
+    QStringList activeTokens = x11WindowClassNames(dpy, windowId);
+    const QString procToken = processExecutableName(x11WindowPid(dpy, windowId));
     if (!procToken.isEmpty() && !activeTokens.contains(procToken))
         activeTokens.append(procToken);
 
@@ -289,7 +285,7 @@ QPixmap loadUserAvatarPixmap()
     return {};
 }
 
-QPixmap loadSystemWallpaperPixmap()
+QImage loadSystemWallpaperImage()
 {
     struct SchemaKey { const char *schema; const char *key; };
     static const SchemaKey candidates[] = {
@@ -318,19 +314,20 @@ QPixmap loadSystemWallpaperPixmap()
         if (path.isEmpty() || !QFile::exists(path))
             continue;
 
-        QPixmap pix(path);
+        QImageReader reader(path); reader.setAutoTransform(true); reader.setScaledSize(QSize(128,128));
+        const QImage pix = reader.read();
         if (!pix.isNull())
             return pix;
     }
     return {};
 }
 
-QColor accentColorFromWallpaper(const QPixmap &wallpaper)
+QColor accentColorFromWallpaper(const QImage &wallpaper)
 {
     if (wallpaper.isNull())
         return {};
 
-    const QImage image = wallpaper.toImage()
+    const QImage image = wallpaper
         .scaled(56, 56, Qt::KeepAspectRatio, Qt::SmoothTransformation)
         .convertToFormat(QImage::Format_RGB32);
 
@@ -1493,12 +1490,15 @@ void StartMenu::applyConfig()
 
 void StartMenu::refreshPalette()
 {
-    QColor wallpaperAccent;
-    if (m_skin == Skin::Wallpaper) {
-        QPixmap wp = loadSystemWallpaperPixmap();
-        wallpaperAccent = accentColorFromWallpaper(wp);
+    if (m_skin == Skin::Wallpaper && !m_palettePending && !m_paletteApplying) {
+        m_palettePending = true;
+        BackgroundTask::run(this, [] { return accentColorFromWallpaper(loadSystemWallpaperImage()); },
+            [this](const QColor &accent) {
+                m_palettePending = false; m_wallpaperAccent = accent;
+                if (m_skin == Skin::Wallpaper) { m_paletteApplying=true; applySkin(m_skin); m_paletteApplying=false; update(); }
+            });
     }
-    m_palette = StartMenuTheme::paletteForSkin(m_skin, wallpaperAccent);
+    m_palette = StartMenuTheme::paletteForSkin(m_skin, m_wallpaperAccent);
     const int opacity = StartMenuConfig::instance().panelOpacity();
     applyAlpha(m_palette.panelBg, opacity);
     applyAlpha(m_palette.railBg, opacity);
@@ -1842,8 +1842,16 @@ void StartMenu::setupUi()
 
 void StartMenu::rebuildAppList()
 {
-    m_pinnedApps = AppRegistry::pinnedApps();
-    m_allApps = AppRegistry::installedApps();
+    if (m_appRebuildTimer) m_appRebuildTimer->stop();
+    if (m_appScanBusy) { m_appScanPending = true; return; }
+    m_appScanBusy = true; m_appScanPending = false;
+    BackgroundTask::run(this, [] {
+        return qMakePair(AppRegistry::pinnedApps(), AppRegistry::installedApps());
+    }, [this](const QPair<QList<AppEntry>, QList<AppEntry>> &lists) {
+        m_appScanBusy = false;
+        if (m_appScanPending) { rebuildAppList(); return; }
+    m_pinnedApps = lists.first;
+    m_allApps = lists.second;
 
     QStringList pinnedPaths;
     for (const AppEntry &app : m_pinnedApps)
@@ -1868,6 +1876,7 @@ void StartMenu::rebuildAppList()
              << "recent will be fetched in setupRecentFiles";
     setupRecentFiles();
     refreshAppWatcher();
+    });
 }
 
 void StartMenu::reloadRailApps()
@@ -1917,14 +1926,15 @@ void StartMenu::setupAppWatcher()
         return;
 
     m_appWatcher = new QFileSystemWatcher(this);
-    connect(m_appWatcher, &QFileSystemWatcher::directoryChanged, this, [this] {
-        QTimer::singleShot(150, this, [this] {
-            rebuildAppList();
-        });
-    });
-    connect(m_appWatcher, &QFileSystemWatcher::fileChanged, this, [this] {
-        QTimer::singleShot(150, this, [this] { rebuildAppList(); });
-    });
+    m_appRebuildTimer = new QTimer(this);
+    m_appRebuildTimer->setSingleShot(true); m_appRebuildTimer->setInterval(150);
+    connect(m_appRebuildTimer, &QTimer::timeout, this, &StartMenu::rebuildAppList);
+    auto schedule = [this] {
+        if (m_appScanBusy) m_appScanPending = true;
+        m_appRebuildTimer->start();
+    };
+    connect(m_appWatcher, &QFileSystemWatcher::directoryChanged, this, schedule);
+    connect(m_appWatcher, &QFileSystemWatcher::fileChanged, this, schedule);
     refreshAppWatcher();
 }
 
@@ -1995,7 +2005,7 @@ void StartMenu::recordActiveWindowApp()
     if (!isX11Platform())
         return;
 
-    const unsigned long windowId = activeWindowId();
+    const unsigned long windowId = activeWindowId(m_activeAppDisplay);
     if (windowId == 0 || windowId == static_cast<unsigned long>(winId()))
         return;
     if (windowId == m_lastActiveWindow)
@@ -2003,10 +2013,9 @@ void StartMenu::recordActiveWindowApp()
 
     m_lastActiveWindow = windowId;
 
-    if (m_allApps.isEmpty())
-        m_allApps = AppRegistry::installedApps();
+    if (m_allApps.isEmpty()) { rebuildAppList(); return; }
 
-    const QString desktopPath = desktopPathForWindow(m_allApps, windowId);
+    const QString desktopPath = desktopPathForWindow(m_activeAppDisplay, m_allApps, windowId);
     if (desktopPath.isEmpty() || desktopPath == m_lastRecordedActiveDesktop)
         return;
 
@@ -3349,7 +3358,7 @@ void StartMenu::showPowerMenu(const QPoint &globalPos)
         poweroffSystem();
 }
 
-StartMenu::AppRemovalTarget StartMenu::detectAppRemovalTarget(const AppEntry &app) const
+StartMenu::AppRemovalTarget StartMenu::detectAppRemovalTarget(const AppEntry &app)
 {
     AppRemovalTarget result;
     const QString desktopPath = QFileInfo(app.desktopPath).absoluteFilePath();
@@ -3493,29 +3502,24 @@ void StartMenu::removeApp(const AppEntry &app, const AppRemovalTarget &target)
     if (target.kind != AppRemovalTarget::Kind::DebPackage)
         return;
 
-    QStringList removedPackages;
-    QString simulationError;
-    if (!simulateDebRemoval(target.target, &removedPackages, &simulationError)) {
-        QMessageBox::warning(
-            this, QString::fromUtf8("无法检查卸载影响"),
-            QString::fromUtf8("为避免误删，本次没有执行卸载。\n\n%1")
-                .arg(conciseProcessError(simulationError)));
-        return;
-    }
+    if (m_removalPending) return;
+    m_removalPending = true;
+    BackgroundTask::run(this, [target] {
+        QStringList removedPackages; QString error;
+        if (!simulateDebRemoval(target.target, &removedPackages, &error))
+            return qMakePair(QStringList(), QString("无法检查卸载影响：")+conciseProcessError(error));
+        for (const auto &package:removedPackages)
+            if (isProtectedDebPackage(package)) return qMakePair(QStringList(),QString("卸载涉及系统关键组件，已阻止：")+package);
+        return qMakePair(removedPackages,QString());
+    }, [this, app, target](const QPair<QStringList,QString> &result) {
+        m_removalPending = false;
+        if (!result.second.isEmpty()) { QMessageBox::warning(this,"无法卸载",result.second); return; }
+        confirmDebRemoval(app,target,result.first);
+    });
+}
 
-    QStringList protectedDependencies;
-    for (const QString &package : removedPackages) {
-        if (isProtectedDebPackage(package))
-            protectedDependencies.append(package);
-    }
-    if (!protectedDependencies.isEmpty()) {
-        QMessageBox::warning(
-            this, QString::fromUtf8("已阻止卸载"),
-            QString::fromUtf8("卸载会同时移除系统关键组件：\n%1")
-                .arg(protectedDependencies.join(QLatin1Char('\n'))));
-        return;
-    }
-
+void StartMenu::confirmDebRemoval(const AppEntry &app, const AppRemovalTarget &target, const QStringList &removedPackages)
+{
     QString impactText;
     QStringList additionalPackages = removedPackages;
     additionalPackages.removeAll(target.target);
@@ -3598,17 +3602,21 @@ void StartMenu::showAppContextMenu(const AppEntry &app, const QPoint &globalPos)
     QAction *actModifyIcon = menu.addAction(themedIcon({"preferences-desktop-icons", "insert-image", "applications-graphics"}),
                                             QString::fromUtf8("修改图标"));
     menu.addSeparator();
-    const AppRemovalTarget removalTarget = detectAppRemovalTarget(app);
-    const bool folderRemoval = removalTarget.kind == AppRemovalTarget::Kind::FolderBundle;
-    const bool shortcutRemoval = removalTarget.kind == AppRemovalTarget::Kind::DesktopShortcut;
-    QAction *actUninstall = menu.addAction(
-        themedIcon({folderRemoval || shortcutRemoval ? "user-trash" : "edit-delete",
-                    folderRemoval ? "folder" : "application-exit", "edit-delete"}),
-        removalTarget.actionText);
-    actUninstall->setToolTip(removalTarget.detail);
-    actUninstall->setEnabled(removalTarget.kind == AppRemovalTarget::Kind::DebPackage
-                             || removalTarget.kind == AppRemovalTarget::Kind::FolderBundle
-                             || removalTarget.kind == AppRemovalTarget::Kind::DesktopShortcut);
+    auto removalTarget = std::make_shared<AppRemovalTarget>();
+    QAction *actUninstall = menu.addAction(themedIcon({"edit-delete"}), "正在检查安装来源…");
+    actUninstall->setEnabled(false);
+    // Keep the rest of the menu usable while dpkg is consulted.
+    const QPointer<QAction> actionGuard(actUninstall);
+    if (!m_removalPending) {
+        m_removalPending = true;
+        BackgroundTask::run(this, [app] { return detectAppRemovalTarget(app); },
+            [this, actionGuard, removalTarget](const AppRemovalTarget &target) {
+                m_removalPending = false; *removalTarget = target;
+                if (!actionGuard) return;
+                actionGuard->setText(target.actionText); actionGuard->setToolTip(target.detail);
+                actionGuard->setEnabled(target.kind==AppRemovalTarget::Kind::DebPackage || target.kind==AppRemovalTarget::Kind::FolderBundle || target.kind==AppRemovalTarget::Kind::DesktopShortcut);
+            });
+    } else actUninstall->setText("正在检查其他应用，请稍后重开菜单");
 
     QAction *chosen = menu.exec(globalPos);
     if (chosen == actPin) {
@@ -3646,7 +3654,7 @@ void StartMenu::showAppContextMenu(const AppEntry &app, const QPoint &globalPos)
             rebuildAppList();
         }
     } else if (chosen == actUninstall) {
-        removeApp(app, removalTarget);
+        removeApp(app, *removalTarget);
     }
 }
 

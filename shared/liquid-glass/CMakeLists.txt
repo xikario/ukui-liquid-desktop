@@ -7,3 +7,10 @@ set_target_properties(ukui-liquid-optics PROPERTIES POSITION_INDEPENDENT_CODE ON
 target_compile_features(ukui-liquid-optics PUBLIC cxx_std_17)
 target_include_directories(ukui-liquid-optics PUBLIC src PRIVATE ${UKUI_LIQUID_GL_INCLUDE_DIR})
 target_link_libraries(ukui-liquid-optics PUBLIC Qt5::Gui Qt5::Widgets)
+
+if(BUILD_TESTING)
+    add_executable(liquid-material-test tests/material_test.cpp)
+    target_include_directories(liquid-material-test PRIVATE src)
+    target_link_libraries(liquid-material-test PRIVATE Qt5::Core Qt5::Gui)
+    add_test(NAME liquid-material-parity COMMAND liquid-material-test)
+endif()

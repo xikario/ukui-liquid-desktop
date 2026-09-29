@@ -1,3 +1,4 @@
+#include "../../../shared/async-work/BackgroundTask.h"
 #include "LiquidPopup.h"
 #include "SystemMonitor.h"
 #include <QUrl>
@@ -162,7 +163,6 @@ SystemMonitor::SystemMonitor(QWidget *parent)
         QString::fromUtf8(qgetenv("DEEPSEEK_API_URL")).trimmed();
     if (!environmentUrl.isEmpty())
         m_apiUrl = environmentUrl;
-    readDiskStats();
     refreshStats();
 
     m_timer.setTimerType(Qt::VeryCoarseTimer);
@@ -182,6 +182,13 @@ SystemMonitor::SystemMonitor(QWidget *parent)
     });
 }
 
+SystemMonitor::~SystemMonitor()
+{
+    for (auto *process : findChildren<QProcess *>()) {
+        process->disconnect(this); process->kill();
+    }
+}
+
 void SystemMonitor::setEditMode(bool edit)
 {
     m_editMode = edit;
@@ -190,7 +197,7 @@ void SystemMonitor::setEditMode(bool edit)
     update();
 }
 
-SystemMonitor::CpuTotals SystemMonitor::readCpuTotals() const
+SystemMonitor::CpuTotals SystemMonitor::readCpuTotals()
 {
     CpuTotals totals;
     QFile file(QStringLiteral("/proc/stat"));
@@ -232,7 +239,7 @@ SystemMonitor::CpuTotals SystemMonitor::readCpuTotals() const
     return totals;
 }
 
-SystemMonitor::MemStats SystemMonitor::readMemStats() const
+SystemMonitor::MemStats SystemMonitor::readMemStats()
 {
     MemStats stats;
     QFile file(QStringLiteral("/proc/meminfo"));
@@ -266,7 +273,7 @@ SystemMonitor::MemStats SystemMonitor::readMemStats() const
     return stats;
 }
 
-QString SystemMonitor::readCpuModel() const
+QString SystemMonitor::readCpuModel()
 {
     QFile file(QStringLiteral("/proc/cpuinfo"));
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -292,28 +299,37 @@ QString SystemMonitor::readCpuModel() const
                               : compactModelName(hardware);
 }
 
-void SystemMonitor::readDiskStats()
+SystemMonitor::Sample SystemMonitor::collectSample(bool processes, int count,
+    quint64 previousTotal, QHash<int, quint64> previousTicks, int targetPid, bool disk)
 {
-    struct statvfs stats {};
-    const QByteArray path = QDir::homePath().toLocal8Bit();
-    if (statvfs(path.constData(), &stats) != 0)
-        return;
-
-    const double total =
-        static_cast<double>(stats.f_blocks) * stats.f_frsize;
-    const double available =
-        static_cast<double>(stats.f_bavail) * stats.f_frsize;
-    if (total <= 0.0)
-        return;
-
-    const double used = total - available;
-    m_diskTotalGb = total / 1073741824.0;
-    m_diskUsedGb = used / 1073741824.0;
-    m_diskPercent = clampPercent(used * 100.0 / total);
+    Sample sample;
+    sample.cpu = readCpuTotals(); sample.memory = readMemStats();
+    const int cores = qMax(1, sample.cpu.coreTotal.size());
+    for (int i = 0; i < qMin(8, cores); ++i) sample.frequencies << readCoreFrequencyGhz(i);
+    if (processes) {
+        const quint64 delta = previousTotal && sample.cpu.total > previousTotal ? sample.cpu.total - previousTotal : 0;
+        sample.processes = readProcessSnapshot(count, delta, previousTicks, cores);
+        sample.ticks = previousTicks;
+    }
+    if (targetPid > 0) sample.details = readProcessDetails(targetPid);
+    if (count == 0) { sample.io = readDiskIoTotals(); sample.loads = readLoadAverages(); }
+    if (disk) {
+        struct statvfs stats {};
+        if (statvfs(QDir::homePath().toLocal8Bit().constData(), &stats) == 0) {
+            const double total = static_cast<double>(stats.f_blocks) * stats.f_frsize;
+            const double available = static_cast<double>(stats.f_bavail) * stats.f_frsize;
+            if (total > 0) {
+                sample.diskTotal = total / 1073741824.0;
+                sample.diskUsed = (total - available) / 1073741824.0;
+                sample.diskPercent = clampPercent((total - available) * 100.0 / total);
+            }
+        }
+    }
+    return sample;
 }
 
 QVector<ProcessInfo> SystemMonitor::readProcessSnapshot(
-    int count, quint64 totalDelta, QHash<int, quint64> &previousTicks) const
+    int count, quint64 totalDelta, QHash<int, quint64> &previousTicks, int cores)
 {
     QVector<ProcessInfo> processes;
     QHash<int, quint64> currentTicks;
@@ -382,7 +398,7 @@ QVector<ProcessInfo> SystemMonitor::readProcessSnapshot(
             // /proc/stat 的总量包含全部核心，因此这里乘核心数得到常见的
             // “单进程可到 100%/核”的显示语义。
             info.cpuPercent = clampPercent(
-                (ticks - previous) * 100.0 * m_coreCount / totalDelta);
+                (ticks - previous) * 100.0 * cores / totalDelta);
         }
         processes.append(info);
     }
@@ -399,7 +415,7 @@ QVector<ProcessInfo> SystemMonitor::readProcessSnapshot(
     return processes;
 }
 
-SystemMonitor::ProcessDetails SystemMonitor::readProcessDetails(int pid) const
+SystemMonitor::ProcessDetails SystemMonitor::readProcessDetails(int pid)
 {
     ProcessDetails details;
     if (pid <= 0)
@@ -488,13 +504,7 @@ SystemMonitor::ProcessDetails SystemMonitor::readProcessDetails(int pid) const
     return details;
 }
 
-QVector<ProcessInfo> SystemMonitor::readTopProcesses(int count,
-                                                     quint64 totalDelta)
-{
-    return readProcessSnapshot(count, totalDelta, m_prevProcTicks);
-}
-
-SystemMonitor::DiskIoTotals SystemMonitor::readDiskIoTotals() const
+SystemMonitor::DiskIoTotals SystemMonitor::readDiskIoTotals()
 {
     DiskIoTotals totals;
     QFile file(QStringLiteral("/proc/diskstats"));
@@ -517,7 +527,7 @@ SystemMonitor::DiskIoTotals SystemMonitor::readDiskIoTotals() const
     return totals;
 }
 
-QVector<double> SystemMonitor::readLoadAverages() const
+QVector<double> SystemMonitor::readLoadAverages()
 {
     QFile file(QStringLiteral("/proc/loadavg"));
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -538,11 +548,23 @@ void SystemMonitor::appendHistory(QVector<double> &history, double value)
 
 void SystemMonitor::refreshStats()
 {
-    // 构造时允许完成一次首屏采样；之后不可见时完全跳过 I/O。
-    if (m_tick > 0 && !isVisible())
-        return;
+    if (m_statsPending || m_diagnosisPending || m_diagnosisSampling || (m_tick > 0 && !isVisible())) return;
+    m_statsPending = true;
+    const bool heavy = m_tick == 0 || m_tick % HEAVY_EVERY_TICKS == 0;
+    const bool processes = heavy && !m_compact;
+    const auto total = m_lastProcTotal;
+    const auto ticks = m_prevProcTicks;
+    BackgroundTask::run(this, [=] { return collectSample(processes, 5, total, ticks, 0, heavy); },
+        [this, heavy](const Sample &sample) {
+            m_statsPending = false;
+            if ((m_tick > 0 && !isVisible()) || m_diagnosisSampling) return;
+            applyStats(sample, heavy);
+        });
+}
 
-    const CpuTotals current = readCpuTotals();
+void SystemMonitor::applyStats(const Sample &sample, bool heavy)
+{
+    const CpuTotals current = sample.cpu;
     const quint64 totalDelta =
         current.total > m_prevCpu.total ? current.total - m_prevCpu.total : 0;
     const quint64 idleDelta =
@@ -575,9 +597,9 @@ void SystemMonitor::refreshStats()
         : current.coreTotal.size();
     m_coreFrequenciesGhz.resize(std::min(8, m_coreCount));
     for (int i = 0; i < m_coreFrequenciesGhz.size(); ++i)
-        m_coreFrequenciesGhz[i] = readCoreFrequencyGhz(i);
+        m_coreFrequenciesGhz[i] = sample.frequencies.value(i);
 
-    const MemStats memory = readMemStats();
+    const MemStats memory = sample.memory;
     if (memory.totalKiB > 0) {
         const quint64 usedKiB = memory.totalKiB - memory.availableKiB;
         m_memPercent =
@@ -587,18 +609,12 @@ void SystemMonitor::refreshStats()
         m_memCacheGb = memory.cacheKiB / 1048576.0;
     }
 
-    if (m_tick == 0 || (m_tick % HEAVY_EVERY_TICKS) == 0) {
-        if (!m_compact) {
-            const quint64 processDelta =
-                current.total > m_lastProcTotal
-                ? current.total - m_lastProcTotal : 0;
-            const QVector<ProcessInfo> top =
-                readTopProcesses(5, processDelta);
-            if (!top.isEmpty())
-                m_topProcs = top;
-        }
+    if (heavy) {
+        if (!m_compact) { m_topProcs = sample.processes; m_prevProcTicks = sample.ticks; }
         m_lastProcTotal = current.total;
-        readDiskStats();
+        if (sample.diskTotal > 0) {
+            m_diskTotalGb = sample.diskTotal; m_diskUsedGb = sample.diskUsed; m_diskPercent = sample.diskPercent;
+        }
     }
     ++m_tick;
 
@@ -608,7 +624,7 @@ void SystemMonitor::refreshStats()
     update();
 }
 
-double SystemMonitor::readCoreFrequencyGhz(int core) const
+double SystemMonitor::readCoreFrequencyGhz(int core)
 {
     const QString base = QStringLiteral("/sys/devices/system/cpu/cpu%1/cpufreq/")
                              .arg(core);
@@ -2073,20 +2089,6 @@ void SystemMonitor::beginDiagnosis(const ProcessInfo *targetProcess)
     m_diagnosisTarget = targetProcess ? *targetProcess : ProcessInfo{};
     m_diagnosisTargetDetails = ProcessDetails{};
     m_diagnosisTargetExited = false;
-    if (m_hasDiagnosisTarget) {
-        m_diagnosisTargetDetails = readProcessDetails(m_diagnosisTarget.pid);
-        if (!m_diagnosisTargetDetails.valid ||
-            m_diagnosisTargetDetails.startTicks !=
-                m_diagnosisTarget.startTicks) {
-            m_hasDiagnosisTarget = false;
-            m_aiError = QStringLiteral(
-                "目标进程已退出或 PID 已变化，请刷新列表后重试。");
-            updateAiLayoutHeight();
-            update();
-            return;
-        }
-    }
-
     m_aiBusy = true;
     m_diagnosisSampling = true;
     m_aiText.clear();
@@ -2118,12 +2120,11 @@ void SystemMonitor::beginDiagnosis(const ProcessInfo *targetProcess)
     m_diagnosisProcesses.clear();
     m_diagnosisPrevProcTicks.clear();
     m_diagnosisSamplesTaken = 0;
-    m_diagnosisPrevCpu = readCpuTotals();
-    m_diagnosisPrevDiskIo = readDiskIoTotals();
-    readProcessSnapshot(0, 0, m_diagnosisPrevProcTicks);
-    updateAiLayoutHeight();
-    update();
+    m_diagnosisPrevCpu = {}; m_diagnosisPrevDiskIo = {};
+    ++m_diagnosisRevision;
+    updateAiLayoutHeight(); update();
     m_diagnosisTimer.start();
+    collectDiagnosisSample();
 }
 
 void SystemMonitor::collectDiagnosisSample()
@@ -2133,7 +2134,35 @@ void SystemMonitor::collectDiagnosisSample()
         return;
     }
 
-    const CpuTotals current = readCpuTotals();
+    if (m_statsPending || m_diagnosisPending) return;
+    m_diagnosisPending = true;
+    const quint64 revision = m_diagnosisRevision;
+    const auto ticks = m_diagnosisPrevProcTicks;
+    const auto total = m_diagnosisPrevCpu.total;
+    const int pid = m_hasDiagnosisTarget ? m_diagnosisTarget.pid : 0;
+    BackgroundTask::run(this, [=] { return collectSample(true, 0, total, ticks, pid, false); },
+        [this, revision](const Sample &sample) {
+            m_diagnosisPending = false;
+            if (!m_aiBusy || !m_diagnosisSampling || revision != m_diagnosisRevision) return;
+            if (m_diagnosisPrevCpu.total == 0) {
+                if (m_hasDiagnosisTarget && (!sample.details.valid || sample.details.startTicks != m_diagnosisTarget.startTicks)) {
+                    m_aiBusy = false; m_diagnosisSampling = false; m_diagnosisTimer.stop();
+                    m_aiError = "目标进程已退出或 PID 已变化，请刷新后重试。";
+                    updateAiLayoutHeight(); update(); return;
+                }
+                m_diagnosisPrevCpu = sample.cpu; m_diagnosisPrevDiskIo = sample.io;
+                m_diagnosisPrevProcTicks = sample.ticks; m_diagnosisTargetDetails = sample.details;
+                m_diagnosisTargetPreviousReadBytes = sample.details.readBytes;
+                m_diagnosisTargetPreviousWriteBytes = sample.details.writeBytes;
+                return;
+            }
+            applyDiagnosisSample(sample);
+        });
+}
+
+void SystemMonitor::applyDiagnosisSample(const Sample &sample)
+{
+    const CpuTotals current = sample.cpu;
     const quint64 totalDelta = current.total > m_diagnosisPrevCpu.total
         ? current.total - m_diagnosisPrevCpu.total : 0;
     const quint64 idleDelta = current.idle > m_diagnosisPrevCpu.idle
@@ -2148,7 +2177,7 @@ void SystemMonitor::collectDiagnosisSample()
     }
     m_diagnosisPrevCpu = current;
 
-    const MemStats memory = readMemStats();
+    const MemStats memory = sample.memory;
     if (memory.totalKiB > 0) {
         const quint64 usedKiB = memory.totalKiB - memory.availableKiB;
         m_diagnosisMemorySamples << clampPercent(
@@ -2166,11 +2195,11 @@ void SystemMonitor::collectDiagnosisSample()
         m_diagnosisSwapSamples << 0.0;
     }
 
-    const QVector<double> loads = readLoadAverages();
+    const QVector<double> loads = sample.loads;
     if (!loads.isEmpty())
         m_diagnosisLoadSamples << loads.first();
 
-    const DiskIoTotals diskIo = readDiskIoTotals();
+    const DiskIoTotals diskIo = sample.io;
     constexpr double sectorToMb = 512.0 / 1048576.0;
     if (diskIo.readSectors >= m_diagnosisPrevDiskIo.readSectors) {
         m_diagnosisDiskReadSamples << (
@@ -2186,8 +2215,8 @@ void SystemMonitor::collectDiagnosisSample()
 
     QHash<QString, double> applicationCpu;
     QHash<QString, double> applicationRss;
-    const QVector<ProcessInfo> processes = readProcessSnapshot(
-        0, totalDelta, m_diagnosisPrevProcTicks);
+    const QVector<ProcessInfo> processes = sample.processes;
+    m_diagnosisPrevProcTicks = sample.ticks;
     const int applicationLimit = qMin(24, processes.size());
     for (int i = 0; i < applicationLimit; ++i) {
         const ProcessInfo &process = processes[i];
@@ -2215,7 +2244,7 @@ void SystemMonitor::collectDiagnosisSample()
                        process.startTicks == m_diagnosisTarget.startTicks;
             });
         const ProcessDetails details =
-            readProcessDetails(m_diagnosisTarget.pid);
+            sample.details;
         if (targetIt == processes.constEnd() || !details.valid ||
             details.startTicks != m_diagnosisTarget.startTicks) {
             m_diagnosisTargetExited = true;
@@ -2283,7 +2312,7 @@ void SystemMonitor::collectDiagnosisSample()
     if (m_diagnosisSamplesTaken >= DIAGNOSIS_SAMPLE_COUNT) {
         m_diagnosisTimer.stop();
         m_diagnosisSampling = false;
-        readDiskStats();
+        refreshStats();
         sendDiagnosisRequest();
     }
 }
@@ -2346,31 +2375,19 @@ void SystemMonitor::sendDiagnosisRequest()
                 this->finishDiagnosis(exitCode);
             });
 
-    m_curl->start(QStringLiteral("curl"), arguments);
-    if (!m_curl->waitForStarted()) {
-        m_aiError = QStringLiteral("无法启动 curl 进程，请确保系统已安装 curl。");
-        m_aiBusy = false;
-        m_aiProgressText.clear();
-        m_curl->deleteLater();
-        m_curl = nullptr;
-        delete m_aiAuthFile;
-        m_aiAuthFile = nullptr;
-        updateAiLayoutHeight();
-        update();
-        return;
-    }
-
-    QByteArray payload = buildDiagnosisPayload();
-    m_curl->write(payload);
-    m_curl->closeWriteChannel();
-
-    // 30秒超时控制
-    const QPointer<QProcess> request = m_curl;
-    QTimer::singleShot(30000, this, [request]() {
-        if (request && request->state() == QProcess::Running) {
-            request->kill();
-        }
+    QProcess *request = m_curl;
+    const QByteArray payload = buildDiagnosisPayload();
+    connect(request, &QProcess::started, this, [request, payload] {
+        request->write(payload); request->closeWriteChannel();
     });
+    connect(request, &QProcess::errorOccurred, this, [this, request](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart || m_curl != request) return;
+        m_aiError = QStringLiteral("无法启动 curl 进程，请确保系统已安装 curl。");
+        m_aiBusy = false; m_aiProgressText.clear(); request->deleteLater(); m_curl = nullptr;
+        delete m_aiAuthFile; m_aiAuthFile = nullptr;
+        updateAiLayoutHeight(); update();
+    });
+    request->start(QStringLiteral("curl"), arguments);
 }
 
 bool SystemMonitor::prepareAiAuthHeader()

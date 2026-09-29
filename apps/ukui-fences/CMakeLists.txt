@@ -327,3 +327,10 @@ endif()
 
 install(FILES scripts/chinese_calendar.py scripts/holiday_sync.py scripts/china_holidays_2026.json DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES vendor/holiday-cn/LICENSE vendor/holiday-cn/README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/ukui-fences/holiday-cn)
+
+if(TARGET fence-glass-test)
+    add_test(NAME desktop_review_async
+        COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
+            ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --review-async-only)
+    set_tests_properties(desktop_review_async PROPERTIES TIMEOUT 30)
+endif()

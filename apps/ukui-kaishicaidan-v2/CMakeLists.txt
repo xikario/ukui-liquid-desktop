@@ -104,3 +104,11 @@ install(PROGRAMS packaging/ukui-kaishicaidan-launcher DESTINATION ${CMAKE_INSTAL
 install(FILES packaging/ukui-kaishicaidan.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES vendor/nextkde-glass/LICENSE vendor/nextkde-glass/README.md
     DESTINATION ${CMAKE_INSTALL_DOCDIR}/nextkde-glass)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(launcher-metadata-test tests/metadata_test.cpp src/RecentFiles.cpp)
+    target_include_directories(launcher-metadata-test PRIVATE src ${X11_INCLUDE_DIR} ${KAISHICAIDAN_GL_INCLUDE_DIR})
+    target_link_libraries(launcher-metadata-test PRIVATE Qt5::Core Qt5::Gui ${X11_LIBRARY})
+    add_test(NAME launcher-metadata COMMAND launcher-metadata-test)
+endif()

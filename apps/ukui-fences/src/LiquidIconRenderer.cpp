@@ -63,8 +63,19 @@ void LiquidIconRenderer::drawPlate(QPainter &p, const QRectF &rect,
 void LiquidIconRenderer::drawIcon(QPainter &p, const QRectF &rect, const QIcon &icon, qreal dpr)
 {
     const QSize size(qCeil(rect.width()*dpr),qCeil(rect.height()*dpr));
-    const QPixmap pix=icon.pixmap(size,QIcon::Normal);
-    const QSizeF fitted=QSizeF(pix.size()).scaled(rect.size(),Qt::KeepAspectRatio);
-    const QRectF target(rect.center()-QPointF(fitted.width()/2,fitted.height()/2),fitted);
-    p.drawPixmap(target,pix,QRectF(pix.rect()));
+    const QString key=QString("liquid-icon-raster:%1:%2:%3:%4")
+        .arg(icon.cacheKey()).arg(size.width()).arg(size.height()).arg(dpr,0,'f',3);
+    QPixmap raster;
+    if (!QPixmapCache::find(key,&raster)) {
+        const QPixmap source=icon.pixmap(size,QIcon::Normal);
+        if (source.isNull()) return;
+        raster=source.scaled(size,Qt::KeepAspectRatio,Qt::SmoothTransformation);
+        raster.setDevicePixelRatio(dpr);
+        QPixmapCache::insert(key,raster);
+    }
+    // Rasterize scaling once, before the backing-store damage clip is applied.
+    // Qt's clipped smooth resampler can otherwise differ by one colour level
+    // at the edge of an overlapping icon between partial and full repaints.
+    const QPointF origin=rect.center()-QPointF(raster.width()/(2*dpr),raster.height()/(2*dpr));
+    p.drawPixmap(QPointF(qRound(origin.x()*dpr)/dpr,qRound(origin.y()*dpr)/dpr),raster);
 }

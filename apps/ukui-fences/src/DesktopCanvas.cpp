@@ -1,3 +1,4 @@
+#include "../../../shared/async-work/BackgroundTask.h"
 #include "WallpaperImage.h"
 #include <QTextBrowser>
 #include "DesktopWidgets.h"
@@ -166,12 +167,6 @@ QIcon colorSwatchMenuIcon(const QColor &color)
     return QIcon(pix);
 }
 
-bool transferDroppedPathToDesktop(const QString &srcPath,
-                                  const QString &targetPath,
-                                  bool move)
-{
-    return FileClipboard::transferPath(srcPath, targetPath, move);
-}
 
 QString layoutPath()
 {
@@ -274,12 +269,6 @@ QStringList desktopDirectoryCandidates()
     const QString xdgDesktop = QString::fromUtf8(qgetenv("XDG_DESKTOP_DIR"));
     addExistingDirectory(paths, expandedUserDirValue(xdgDesktop));
 
-    QProcess proc;
-    proc.start(QStringLiteral("xdg-user-dir"), QStringList() << QStringLiteral("DESKTOP"));
-    if (proc.waitForFinished(500))
-        addExistingDirectory(paths,
-            QString::fromUtf8(proc.readAllStandardOutput()).trimmed());
-
     addExistingDirectory(paths, QDir::homePath() + "/桌面");
     addExistingDirectory(paths, QDir::homePath() + "/Desktop");
 
@@ -351,7 +340,7 @@ void openWallpaperSettings()
             return;
 }
 
-QPixmap loadSystemWallpaperPixmap()
+QImage loadSystemWallpaperImage(const QSize &target)
 {
     struct SchemaKey { const char *schema; const char *key; };
     static const SchemaKey candidates[] = {
@@ -380,7 +369,7 @@ QPixmap loadSystemWallpaperPixmap()
         if (path.isEmpty() || !QFile::exists(path))
             continue;
 
-        QPixmap pix = readWallpaperPixmap(path);
+        QImage pix = readWallpaperImage(path, nullptr, target);
         if (!pix.isNull())
             return pix;
     }
@@ -959,6 +948,12 @@ void DesktopCanvas::activateOnSessionStartup()
 
 void DesktopCanvas::quitApp()
 {
+    if (FileClipboard::busy()) {
+        auto *notice=new QMessageBox(QMessageBox::Information,"文件操作尚未完成",
+            "请等待当前项目完成，或先取消后续项目，再退出桌面。",QMessageBox::Ok,this);
+        notice->setAttribute(Qt::WA_DeleteOnClose); notice->show();
+        return;
+    }
     m_userHidden = true;
     saveLayout();
     hide();
@@ -1061,26 +1056,6 @@ void DesktopCanvas::setupAsDesktop()
 {
     setWindowFlag(Qt::FramelessWindowHint, true);
 
-    const QString windowId =
-        QStringLiteral("0x%1").arg(static_cast<qulonglong>(winId()), 0, 16);
-    QProcess::execute(QStringLiteral("wmctrl"),
-        QStringList() << QStringLiteral("-i")
-                      << QStringLiteral("-r") << windowId
-                      << QStringLiteral("-b")
-                      << QStringLiteral("remove,below"));
-    const QStringList states = {
-        QStringLiteral("skip_taskbar"),
-        QStringLiteral("skip_pager"),
-        QStringLiteral("sticky")
-    };
-    for (const QString &state : states) {
-        QProcess::execute(QStringLiteral("wmctrl"),
-            QStringList() << QStringLiteral("-i")
-                          << QStringLiteral("-r") << windowId
-                          << QStringLiteral("-b")
-                          << QStringLiteral("add,") + state);
-    }
-
     applyX11DesktopHints();
     QTimer::singleShot(100, this, &DesktopCanvas::applyX11DesktopHints);
 }
@@ -1135,6 +1110,13 @@ void DesktopCanvas::applyX11DesktopHints()
 
     const Atom stateAtom = XInternAtom(display, "_NET_WM_STATE", False);
     if (stateAtom != None) {
+        XEvent request{};
+        request.xclient.type=ClientMessage; request.xclient.window=window;
+        request.xclient.message_type=stateAtom; request.xclient.format=32;
+        request.xclient.data.l[0]=0; // _NET_WM_STATE_REMOVE
+        request.xclient.data.l[1]=XInternAtom(display,"_NET_WM_STATE_BELOW",False);
+        request.xclient.data.l[3]=1;
+        XSendEvent(display,DefaultRootWindow(display),False,SubstructureRedirectMask|SubstructureNotifyMask,&request);
         QVector<Atom> states;
         const char *stateNames[] = {
             "_NET_WM_STATE_SKIP_TASKBAR",
@@ -1327,24 +1309,25 @@ void DesktopCanvas::lockToDesktopGeometry()
 
 void DesktopCanvas::loadWallpaper()
 {
-    if (m_wallpaperMode != WallpaperMode::System && !m_wallpaperPath.isEmpty()) {
-        QPixmap pix = readWallpaperPixmap(m_wallpaperPath,nullptr,
-            m_wallpaperMode==WallpaperMode::Tile || m_wallpaperMode==WallpaperMode::Center ? QSize() : wallpaperDecodeSize());
-        if (!pix.isNull()) {
-            m_wallpaper = pix;
-            m_wallpaperUsingCustom = true;
-            clearWallpaperCache();
-            rebuildWallpaperCache();
-            update();
-            return;
-        }
-    }
-
-    m_wallpaper = loadSystemWallpaperPixmap();
-    m_wallpaperUsingCustom = false;
-    clearWallpaperCache();
-    rebuildWallpaperCache();
-    update();
+    if (m_wallpaperLoading) { m_wallpaperReloadPending = true; return; }
+    m_wallpaperLoading = true; m_wallpaperReloadPending = false;
+    const QString path = m_wallpaperPath;
+    const auto mode = m_wallpaperMode;
+    const QSize target = mode == WallpaperMode::Tile || mode == WallpaperMode::Center ? QSize() : wallpaperDecodeSize();
+    BackgroundTask::run(this, [=] {
+        QImage image;
+        if (mode != WallpaperMode::System && !path.isEmpty()) image = readWallpaperImage(path, nullptr, target);
+        const bool custom = !image.isNull();
+        if (!custom) image = loadSystemWallpaperImage(target);
+        return qMakePair(image, custom);
+    }, [this, path, mode](const QPair<QImage, bool> &loaded) {
+        m_wallpaperLoading = false;
+        if (m_wallpaperReloadPending || path != m_wallpaperPath || mode != m_wallpaperMode) { loadWallpaper(); return; }
+        m_wallpaper = QPixmap::fromImage(loaded.first);
+        m_wallpaperUsingCustom = loaded.second;
+        clearWallpaperCache(); rebuildWallpaperCache(); update();
+        if (m_monitor) m_monitor->refreshWallpaperTheme();
+    });
 }
 
 void DesktopCanvas::clearWallpaperCache()
@@ -1515,8 +1498,21 @@ QImage DesktopCanvas::renderLiquidGlass(const QRect &area, qreal radius,
             g.setColorAt(1, QColor("#2c5f8a"));
             p.fillRect(rect(), g);
         }
-        m_fenceGlassRenderer->setWallpaper(source);
-        m_fenceGlassWallpaperKey = m_wallpaperCache.cacheKey();
+        if (!m_glassPreparing) {
+            m_glassPreparing = true;
+            const qint64 key = m_wallpaperCache.cacheKey();
+            BackgroundTask::run(this, [source] { return LiquidMaterial::prepare(source); },
+                [this, key](const LiquidMaterial::Prepared &material) {
+                    m_glassPreparing = false;
+                    if (key == m_wallpaperCache.cacheKey() && m_fenceGlassRenderer) {
+                        m_fenceGlassRenderer->setPreparedWallpaper(material);
+                        m_fenceGlassWallpaperKey = key;
+                    }
+                    for (auto *fence : m_fences) fence->invalidateGlassCache();
+                    update();
+                });
+        }
+        return {}; // readable widget fallback until the latest material is ready
     }
     return m_fenceGlassRenderer->renderPanel(area, radius, shape);
 }
@@ -1953,7 +1949,7 @@ void DesktopCanvas::showWallpaperDialog()
     root->addLayout(form);
 
     QString chosenPath = m_wallpaperPath;
-    const QPixmap systemWallpaper = loadSystemWallpaperPixmap();
+    QPixmap systemWallpaper = m_wallpaper;
 
     auto *preview = new QLabel(&dlg);
     preview->setFixedSize(260, 160);
@@ -2079,6 +2075,12 @@ void DesktopCanvas::showWallpaperDialog()
             pathLabel->setText("图片不存在，将回退系统壁纸：\n" + chosenPath);
         }
     };
+
+    const QSize systemPreviewSize = wallpaperDecodeSize();
+    BackgroundTask::run(&dlg, [systemPreviewSize] { return loadSystemWallpaperImage(systemPreviewSize); },
+        [&systemWallpaper, updatePreview](const QImage &image) {
+            systemWallpaper = QPixmap::fromImage(image); updatePreview();
+        });
 
     connect(modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             [&] { updatePreview(); });
@@ -3880,32 +3882,21 @@ void DesktopCanvas::recordPasteUndo(const FileClipboard::PasteResult &result,
     pushUndo(op);
 }
 
-bool DesktopCanvas::deletePathForUndo(const QString &path) const
+bool DesktopCanvas::deletePathForUndo(const QString &path)
 {
     const QFileInfo fi(path);
     if (!fi.exists())
         return true;
-    return fi.isDir() ? QDir(path).removeRecursively() : QFile::remove(path);
+    return fi.isDir() && !fi.isSymLink() ? QDir(path).removeRecursively() : QFile::remove(path);
 }
 
 bool DesktopCanvas::movePathForUndo(const QString &srcPath,
-                                    const QString &targetPath) const
+                                    const QString &targetPath)
 {
-    if (!QFileInfo::exists(srcPath))
-        return false;
-
-    QDir().mkpath(QFileInfo(targetPath).absolutePath());
-    if (QProcess::execute("gio",
-            QStringList() << "move" << "-T" << srcPath << targetPath) == 0)
-        return true;
-
-    const QFileInfo src(srcPath);
-    return src.isDir()
-        ? QDir().rename(srcPath, targetPath)
-        : QFile::rename(srcPath, targetPath);
+    return FileClipboard::transferPath(srcPath, targetPath, true);
 }
 
-QString DesktopCanvas::restoreTrashedPath(const QString &originalPath) const
+QString DesktopCanvas::restoreTrashedPath(const QString &originalPath)
 {
     const QString original = normalizedStoredPath(originalPath);
     const QString trashRoot =
@@ -3971,89 +3962,44 @@ void DesktopCanvas::undoLastOperation()
         return;
     }
 
+    if (FileClipboard::busy()) {
+        QMessageBox::information(this, "撤回", "请等待当前文件操作完成。"); return;
+    }
     const UndoOperation op = m_undoStack.takeLast();
-    QStringList restoredPaths;
-    QStringList failedPaths;
-
-    switch (op.type) {
-    case UndoOperation::Type::Create:
-        for (const QString &path : op.targetPaths) {
-            if (!deletePathForUndo(path))
-                failedPaths << path;
+    const bool accepted = FileClipboard::runOperationAsync(this, [op] {
+        FileClipboard::PasteResult result;
+        const QStringList paths = op.type == UndoOperation::Type::Trash ? op.sourcePaths : op.targetPaths;
+        for (int i=0; i<paths.size(); ++i) {
+            const QString path=paths[i]; QString restored;
+            bool ok=false;
+            if (op.type==UndoOperation::Type::Trash) { restored=restoreTrashedPath(path); ok=!restored.isEmpty(); }
+            else if (op.type==UndoOperation::Type::Rename || (op.type==UndoOperation::Type::Paste && op.move)) {
+                restored=op.sourcePaths.value(i); ok=!restored.isEmpty() && movePathForUndo(path,restored);
+            } else ok=deletePathForUndo(path);
+            if (!ok) result.failedPaths << path;
+            else if (!restored.isEmpty()) { result.placedPaths << restored; result.placedSourcePaths << path; }
         }
-        break;
-
-    case UndoOperation::Type::Rename:
-        for (int i = 0; i < op.targetPaths.size(); ++i) {
-            const QString oldPath = op.sourcePaths.value(i);
-            const QString newPath = op.targetPaths.value(i);
-            if (movePathForUndo(newPath, oldPath)) {
-                restoredPaths << oldPath;
-                if (auto *fence = fenceById(op.fenceIds.value(i))) {
-                    fence->removeItem(newPath);
-                    DesktopItem item = DesktopItem::fromPath(oldPath);
-                    if (item.isValid()) fence->addItem(item);
-                }
-            } else {
-                failedPaths << newPath;
-            }
-        }
-        break;
-
-    case UndoOperation::Type::Trash:
-        for (int i = 0; i < op.sourcePaths.size(); ++i) {
-            const QString restored = restoreTrashedPath(op.sourcePaths.value(i));
-            if (restored.isEmpty()) {
-                failedPaths << op.sourcePaths.value(i);
-                continue;
-            }
-
-            restoredPaths << restored;
-            if (auto *fence = fenceById(op.fenceIds.value(i))) {
-                DesktopItem item = DesktopItem::fromPath(restored);
-                if (item.isValid()) {
-                    fence->addItem(item);
-                    removeLooseIcon(restored);
+        return result;
+    }, [this, op](const FileClipboard::PasteResult &result) {
+        for (int i=0; i<result.placedPaths.size(); ++i) {
+            const QString path=result.placedPaths[i], old=result.placedSourcePaths.value(i);
+            const int index=(op.type==UndoOperation::Type::Trash ? op.sourcePaths : op.targetPaths).indexOf(old);
+            if (op.type==UndoOperation::Type::Trash || op.type==UndoOperation::Type::Rename) {
+                if (auto *fence=fenceById(op.fenceIds.value(index))) {
+                    fence->removeItem(old);
+                    const auto item=DesktopItem::fromPath(path);
+                    if (item.isValid()) { fence->addItem(item); removeLooseIcon(path); }
                 }
             }
         }
-        break;
-
-    case UndoOperation::Type::Paste:
-        if (op.move) {
-            for (int i = 0; i < op.targetPaths.size(); ++i) {
-                const QString placed = op.targetPaths.value(i);
-                const QString source = op.sourcePaths.value(i);
-                if (source.isEmpty() || !movePathForUndo(placed, source)) {
-                    failedPaths << placed;
-                    continue;
-                }
-                restoredPaths << source;
-            }
-        } else {
-            for (const QString &path : op.targetPaths) {
-                if (!deletePathForUndo(path))
-                    failedPaths << path;
-            }
-        }
-        break;
-    }
-
-    refreshDesktopIcons();
-    for (const QString &path : restoredPaths) {
-        if (!path.isEmpty() && !isInAnyFence(path) &&
-            isInDesktopDirectory(path)) {
-            placeFilesOnDesktop(QStringList() << path);
-        }
-    }
-    refreshTrashState();
-    syncCutVisualState();
-    saveLayout();
-
-    if (!failedPaths.isEmpty()) {
-        QMessageBox::warning(this, "撤回失败",
-            QString("有 %1 个项目无法撤回。").arg(failedPaths.size()));
-    }
+        refreshDesktopIcons();
+        for (const auto &path:result.placedPaths)
+            if (!isInAnyFence(path) && isInDesktopDirectory(path)) placeFilesOnDesktop({path});
+        refreshTrashState(); syncCutVisualState(); saveLayout();
+        if (!result.failedPaths.isEmpty())
+            QMessageBox::warning(this,"撤回失败",QString("有 %1 个项目无法撤回。").arg(result.failedPaths.size()));
+    });
+    if (!accepted) m_undoStack << op;
 }
 
 bool DesktopCanvas::isInAnyFence(const QString &filePath) const
@@ -4341,31 +4287,13 @@ void DesktopCanvas::trashSelectedIcons()
         != QMessageBox::Yes)
         return;
 
-    QStringList trashedPaths;
-    QStringList failedPaths;
-    for (const QString &path : paths) {
-        const int code = QProcess::execute("gio",
-            QStringList() << "trash" << path);
-        if (code == 0) {
-            trashedPaths << normalizedStoredPath(path);
-        } else {
-            failedPaths << path;
-        }
-    }
-
-    recordTrashUndo(trashedPaths);
-    for (const QString &path : trashedPaths)
-        removeLooseIcon(path);
-
-    if (!failedPaths.isEmpty()) {
-        QMessageBox::warning(this, "移到回收站失败",
-            QString("有 %1 个项目无法移到回收站。")
-                .arg(failedPaths.size()));
-    }
-
-    saveLayout();
-    refreshTrashState();
-    scheduleRefresh(300);
+    FileClipboard::trashFilesAsync(paths, this, [this](const FileClipboard::PasteResult &result) {
+        recordTrashUndo(result.placedPaths);
+        for (const auto &path : result.placedPaths) removeLooseIcon(path);
+        if (!result.failedPaths.isEmpty())
+            QMessageBox::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+        saveLayout(); refreshTrashState(); scheduleRefresh(300);
+    });
 }
 
 void DesktopCanvas::renameFirstSelectedIcon()
@@ -4459,59 +4387,22 @@ void DesktopCanvas::dropEvent(QDropEvent *e)
         return;
     }
 
-    QPoint pos = e->pos();
-    disableAutoArrangeForManualPlacement();
-    for (const QUrl &url : e->mimeData()->urls()) {
-        QString path = url.toLocalFile();
-        if (path.isEmpty()) continue;
-
-        const QFileInfo src(path);
-        if (!src.exists()) continue;
-
-        if (!isInDesktopDirectory(path)) {
-            const QString target =
-                FileClipboard::uniqueTargetPath(m_desktopPath, src.fileName());
-            const bool move =
-                e->proposedAction() == Qt::MoveAction ||
-                e->dropAction() == Qt::MoveAction;
-
-            if (!transferDroppedPathToDesktop(path, target, move)) {
-                QMessageBox::warning(this, "拖放失败",
-                    QString("无法将 \"%1\" 放到桌面。").arg(src.fileName()));
-                continue;
-            }
-            path = target;
-        }
-
-        for (auto *fence : m_fences)
-            fence->removeItem(path);
-
-        DesktopIcon *existing = nullptr;
-        for (auto *icon : m_looseIcons) {
-            if (icon->item().filePath == path) {
-                existing = icon;
-                break;
-            }
-        }
-
-        if (!existing) {
-            DesktopItem item = DesktopItem::fromStoredPath(path);
-            if (!item.isValid()) continue;
-
-            existing = new DesktopIcon(item, this);
-            configureIconAppearance(existing, IconSurface::Desktop);
-            connectLooseIcon(existing);
-            m_looseIcons.append(existing);
-            existing->show();
-        }
-
-        m_looseIconPositions[path] = pos;
-        pos += QPoint(18, 18);
-    }
-
-    layoutLooseIcons();
-    saveLayout();
-    e->acceptProposedAction();
+    QStringList paths;
+    for (const auto &url : e->mimeData()->urls())
+        if (url.isLocalFile()) paths << url.toLocalFile();
+    const QPoint position = e->pos();
+    const bool move = e->proposedAction() == Qt::MoveAction || e->dropAction() == Qt::MoveAction;
+    const bool accepted = FileClipboard::transferFilesAsync(paths, m_desktopPath, move, true, this,
+        [this, position](const FileClipboard::PasteResult &result) {
+            recordPasteUndo(result);
+            for (const auto &path : result.placedPaths)
+                for (auto *fence : m_fences) fence->removeItem(path);
+            placeFilesOnDesktop(result.placedPaths, position);
+            saveLayout();
+            if (!result.failedPaths.isEmpty())
+                QMessageBox::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+        });
+    if (accepted) e->acceptProposedAction(); else e->ignore();
 }
 
 void DesktopCanvas::keyPressEvent(QKeyEvent *e)
@@ -5193,9 +5084,7 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
         menuIcon(QStringList() << "application-exit" << "system-log-out",
                  "⏻", QColor("#dc2626")),
         "退出 ukui-fences");
-    connect(actQuit, &QAction::triggered, [] {
-        QApplication::quit();
-    });
+    connect(actQuit, &QAction::triggered, this, &DesktopCanvas::quitApp);
 
     auto *actExport = layoutMenu->addAction(
         menuIcon(QStringList() << "document-save-as" << "document-export",

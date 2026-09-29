@@ -12,7 +12,7 @@
 
 static QString setting(const QString &schema,const QString &key) {
     QProcess process;process.start("gsettings",{ "get",schema,key });
-    if(!process.waitForFinished(1200)){process.kill();process.waitForFinished();return {};}
+    if(!process.waitForFinished(1200)){process.kill();process.waitForFinished(500);return {};}
     if(process.exitCode()!=0)return {};
     QString value=QString::fromUtf8(process.readAllStandardOutput()).trimmed();
     if(value.startsWith('\'') && value.endsWith('\''))value=value.mid(1,value.size()-2);

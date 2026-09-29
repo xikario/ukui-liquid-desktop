@@ -20,7 +20,7 @@ jobs:
           cmake --build build/fences -j2
       - name: Python, menu, file operation and HiDPI regressions
         working-directory: build/fences
-        run: ctest --output-on-failure -R '^smart_space_(indexer|knowledge)$|^liquid-popup|^desktop_(appearance|icon-appearance|icon-damage|smart-interaction|clipboard)|^fence_glass_cpu$|^calendar_holiday_sync$'
+        run: ctest --output-on-failure -R '^smart_space_(indexer|knowledge)$|^liquid-popup|^liquid-material|^desktop_(appearance|icon-appearance|icon-damage|smart-interaction|clipboard|review_async)|^fence_glass_cpu$|^calendar_holiday_sync$'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -29,3 +29,30 @@ jobs:
             build/fences/Testing/Temporary/
             build/fences/artifacts/
             build/fences/liquid-popup/artifacts/
+  launcher-panel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [ukui-kaishicaidan-v2, ukui-panel-liquid]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ qtbase5-dev libx11-dev libxtst-dev libgl1-mesa-dev xvfb xauth dbus-x11 xdotool
+      - name: Build
+        run: |
+          cmake -S apps/${{ matrix.app }} -B build/app -DBUILD_TESTING=ON
+          cmake --build build/app -j2
+      - name: Regressions
+        run: ctest --test-dir build/app --output-on-failure
+      - name: Launcher button and Super key
+        if: matrix.app == 'ukui-kaishicaidan-v2'
+        env:
+          UKUI_KAISHICAIDAN_V2_BIN: ${{ github.workspace }}/build/app/ukui-kaishicaidan-v2
+        run: env QT_FONT_DPI=96 QT_SCALE_FACTOR=1.5 QT_SCREEN_SCALE_FACTORS=1 xvfb-run -a -s '-screen 0 1920x1200x24' dbus-run-session -- python3 apps/ukui-kaishicaidan-v2/tests/button-follow-test.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-${{ matrix.app }}
+          path: build/app/Testing/Temporary/

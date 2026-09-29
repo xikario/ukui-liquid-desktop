@@ -1,3 +1,4 @@
+#include <QEventLoop>
 #include "LiquidPopup.h"
 #include "LiquidSurface.h"
 #include <QLabel>
@@ -59,6 +60,15 @@ int main(int argc,char **argv){
        "left-edge tooltip switches direction and stays on screen clear of anchor");
  sideTip.dismiss();check(!sideTip.isVisible(),"side tooltip dismisses");
  QRect lastCapture;int captures=0;setBackdropProvider([&](const QRect &r,qreal d){lastCapture=r;++captures;QImage b(r.size(),QImage::Format_RGB32);b.fill(QColor(40,70,110));b.setDevicePixelRatio(d);return b;});
+ // Reversing the same bubble must preserve progress and backdrop.
+ theme().reducedMotion=false;
+ Shell reversal;reversal.setContent(new QLabel("reversal"));const QRect reverseAnchor(200,200,40,30);
+ reversal.openAt(reverseAnchor);
+ QEventLoop animationWait;QTimer::singleShot(90,&animationWait,&QEventLoop::quit);animationWait.exec();
+ reversal.dismiss();const qreal beforeReverse=reversal.progress();const int beforeCaptures=captures;
+ reversal.openAt(reverseAnchor);
+ check(beforeReverse>0 && reversal.progress()>=beforeReverse && captures==beforeCaptures,"same bubble reverses without progress reset or self-capture");
+ reversal.hide();theme().reducedMotion=true;captures=0;
  QMenu menu;menu.setStyleSheet("QMenu { background:#202020;color:white;padding:8px; } QMenu::item {padding:7px 20px;} QMenu::item:selected{background:#406080;}");
  auto *action=menu.addAction("toggle");action->setCheckable(true);
  QPixmap actionPixmap(16,16);actionPixmap.fill(Qt::red);

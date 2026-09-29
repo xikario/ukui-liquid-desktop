@@ -1,3 +1,4 @@
+#include <QProgressDialog>
 #pragma once
 #include "FileClipboard.h"
 #include <QElapsedTimer>
@@ -38,6 +39,19 @@ static int runClipboardTest(const QString &root)
         check(FileClipboard::transferPath(source+"/folder",external.path()+"/moved",true),"move fallback copies directory across filesystems");
         check(!QFileInfo::exists(source+"/folder") && QFileInfo::exists(external.path()+"/moved/kept.txt"),"source removed only after successful staged copy");
     }
+    // External drag/drop uses the same worker, with cancellation between files.
+    completed=false; ticks=0;
+    const QString second=source+"/second.txt";write(second,"second");
+    check(FileClipboard::transferFilesAsync({file,second},dest,false,false,&owner,[&](const auto &r){result=r;completed=true;}),"drag transfer accepted");
+    settle(100);
+    if(auto *dialog=owner.findChild<QProgressDialog *>())QMetaObject::invokeMethod(dialog,"canceled",Qt::DirectConnection);
+    elapsed.restart();while(!completed && elapsed.elapsed()<5000)settle(20);
+    check(completed && ticks>=5 && result.placedPaths.size()==1 && result.failedPaths.contains(second),"cancel keeps committed first file and skips later files");
+    auto *disposable=new QWidget;bool staleCallback=false;
+    check(FileClipboard::transferFilesAsync({file},dest,false,false,disposable,[&](const auto &){staleCallback=true;}),"owner destruction fixture accepted");
+    delete disposable;
+    elapsed.restart();while(FileClipboard::busy() && elapsed.elapsed()<5000)settle(20);
+    check(!FileClipboard::busy() && !staleCallback,"destroyed owner drops callback and frees job slot");
     write(bin+"/cp","#!/bin/sh\nexit 1\n");
     check(!FileClipboard::transferPath(file,dest+"/failed",false) && QFileInfo::exists(file) && !QFileInfo::exists(dest+"/failed"),"copy failure retains source without partial destination");
     qputenv("PATH",oldPath);return failures?1:0;

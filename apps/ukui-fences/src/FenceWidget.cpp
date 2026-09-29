@@ -110,12 +110,6 @@ QString primaryDesktopDirectory()
         }
     }
 
-    QProcess proc;
-    proc.start(QStringLiteral("xdg-user-dir"), QStringList() << QStringLiteral("DESKTOP"));
-    if (proc.waitForFinished(500))
-        addExistingDirectory(paths,
-            QString::fromUtf8(proc.readAllStandardOutput()).trimmed());
-
     addExistingDirectory(paths, QDir::homePath() + "/桌面");
     addExistingDirectory(paths, QDir::homePath() + "/Desktop");
     return paths.isEmpty() ? QDir::homePath() : paths.first();
@@ -536,30 +530,13 @@ void FenceWidget::trashSelectedIcons()
         != QMessageBox::Yes)
         return;
 
-    QStringList trashedPaths;
-    QStringList failedPaths;
-    for (const QString &path : paths) {
-        const QString normalized = normalizedStoredPath(path);
-        const int code = QProcess::execute("gio",
-            QStringList() << "trash" << path);
-        if (code == 0) {
-            trashedPaths << normalized;
-            removeItem(path);
-        } else {
-            failedPaths << normalized;
-        }
-    }
-
-    if (!failedPaths.isEmpty()) {
-        QMessageBox::warning(this, "移到回收站失败",
-            QString("有 %1 个项目无法移到回收站。")
-                .arg(failedPaths.size()));
-    }
-
-    if (!trashedPaths.isEmpty())
-        emit filesTrashed(trashedPaths);
-
-    emit geometryChanged();
+    FileClipboard::trashFilesAsync(paths, this, [this](const FileClipboard::PasteResult &result) {
+        for (const auto &path : result.placedPaths) removeItem(path);
+        if (!result.failedPaths.isEmpty())
+            QMessageBox::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+        if (!result.placedPaths.isEmpty()) emit filesTrashed(result.placedPaths);
+        emit geometryChanged();
+    });
 }
 
 void FenceWidget::renameFirstSelectedIcon()
@@ -2116,55 +2093,29 @@ void FenceWidget::dropEvent(QDropEvent *e)
         action = e->proposedAction();
     if (action == Qt::IgnoreAction)
         action = Qt::CopyAction;
-    const bool moveExternal = action == Qt::MoveAction;
-    const QString desktopPath = primaryDesktopDirectory();
-    QStringList transferredSources;
-    QStringList transferredTargets;
-    QStringList failedPaths;
-
-    int insertAt = dropInsertionIndex(e->pos());
-    bool placedAny = false;
-    for (const QString &path : paths) {
-        QString itemPath = path;
-        if (!internal &&
-            !FileClipboard::isInDirectory(path, desktopPath)) {
-            const QFileInfo source(path);
-            const QString target = FileClipboard::uniqueTargetPath(
-                desktopPath, source.fileName());
-            if (!FileClipboard::transferPath(
-                    source.absoluteFilePath(), target, moveExternal)) {
-                failedPaths << source.absoluteFilePath();
-                continue;
-            }
-            itemPath = QFileInfo(target).absoluteFilePath();
-            transferredSources << source.absoluteFilePath();
-            transferredTargets << itemPath;
+    const int insertAt = dropInsertionIndex(e->pos());
+    auto place = [this, insertAt](const FileClipboard::PasteResult &result) {
+        int at = insertAt;
+        for (const auto &path : result.placedPaths) {
+            const DesktopItem item = DesktopItem::fromStoredPath(path);
+            if (!item.isValid()) continue;
+            insertItem(item, at++); emit fileDropped(item.filePath);
         }
-
-        DesktopItem item = DesktopItem::fromStoredPath(itemPath);
-        if (!item.isValid())
-            continue;
-        insertItem(item, insertAt++);
-        emit fileDropped(item.filePath);
-        placedAny = true;
+        if (!result.transferredPaths.isEmpty())
+            emit filesPasted(result.placedSourcePaths, result.transferredPaths, result.move);
+        if (!result.failedPaths.isEmpty())
+            QMessageBox::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+    };
+    bool accepted = true;
+    if (internal) {
+        FileClipboard::PasteResult result; result.placedPaths = paths;
+        place(result);
+    } else {
+        accepted = FileClipboard::transferFilesAsync(paths, primaryDesktopDirectory(),
+            action == Qt::MoveAction, true, this, place);
     }
-
-    if (!transferredTargets.isEmpty()) {
-        emit filesPasted(transferredSources, transferredTargets, moveExternal);
-    }
-    if (!failedPaths.isEmpty()) {
-        QMessageBox::warning(this, "拖放失败",
-            QString("有 %1 个项目无法放入分区。").arg(failedPaths.size()));
-    }
-
-    if (internal || moveExternal)
-        e->setDropAction(Qt::MoveAction);
-    else
-        e->setDropAction(Qt::CopyAction);
-    if (placedAny)
-        e->accept();
-    else
-        e->ignore();
+    e->setDropAction(internal ? Qt::MoveAction : action);
+    if (accepted) e->accept(); else e->ignore();
 }
 
 // ── 分区字体设置对话框 ─────────────────────────────────

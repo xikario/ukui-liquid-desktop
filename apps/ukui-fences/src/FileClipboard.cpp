@@ -13,6 +13,9 @@
 #include <QProgressDialog>
 #include <QTemporaryDir>
 #include <memory>
+#include <atomic>
+#include <QMessageBox>
+#include "../../../shared/async-work/BackgroundTask.h"
 
 namespace {
 
@@ -211,7 +214,8 @@ bool transferPath(const QString &srcPath, const QString &targetPath, bool move)
                 : copyPath(srcPath, targetPath);
 }
 
-static PasteResult pasteFiles(const QString &targetDir, const ClipboardFiles &files)
+static PasteResult pasteFiles(const QString &targetDir, const ClipboardFiles &files,
+    bool keepExisting = false, const std::shared_ptr<std::atomic_bool> &cancel = {})
 {
     PasteResult result;
     result.sourcePaths = files.paths;
@@ -224,14 +228,19 @@ static PasteResult pasteFiles(const QString &targetDir, const ClipboardFiles &fi
     QDir().mkpath(normalizedTargetDir);
 
     for (const QString &path : files.paths) {
+        if (cancel && cancel->load()) {
+            result.cancelled = true;
+            result.failedPaths << path;
+            continue;
+        }
         const QFileInfo src(path);
-        if (!src.exists()) {
+        if (!src.exists() && !src.isSymLink()) {
             result.failedPaths << path;
             continue;
         }
 
         const QString srcPath = src.absoluteFilePath();
-        if (files.move && isInDirectory(srcPath, normalizedTargetDir)) {
+        if ((files.move || keepExisting) && isInDirectory(srcPath, normalizedTargetDir)) {
             result.placedPaths << srcPath;
             continue;
         }
@@ -265,32 +274,98 @@ PasteResult pasteFilesToDirectory(const QString &targetDir)
     const auto result=pasteFiles(targetDir,readFiles()); finishClipboard(result); return result;
 }
 
-bool pasteFilesToDirectoryAsync(const QString &targetDir, QWidget *owner,
-    std::function<void(const PasteResult &)> completed)
+namespace {
+bool jobActive = false;
+using Completion = std::function<void(const PasteResult &)>;
+using Work = std::function<PasteResult(const std::shared_ptr<std::atomic_bool> &)>;
+bool submit(QWidget *owner, Work work, Completion completed, bool cancellable = true)
 {
-    static QPointer<QThread> active;
-    if(active) return false;
-    const ClipboardFiles files=readFiles(); if(files.isEmpty())return false;
-    const QPointer<QMimeData> original=const_cast<QMimeData *>(QApplication::clipboard()->mimeData());
-    const QPointer<QWidget> context=owner;
-    auto result=std::make_shared<PasteResult>();
-    auto *progress=new QProgressDialog("正在粘贴文件，请稍候…",QString(),0,0,owner);
-    progress->setWindowTitle("文件操作");progress->setCancelButton(nullptr);
-    progress->setMinimumDuration(300);progress->setValue(0);
-    const QPointer<QProgressDialog> progressGuard=progress;
-    auto *worker=QThread::create([result,targetDir,files] { *result=pasteFiles(targetDir,files); });
-    active=worker;
-    const auto shutdown=QObject::connect(qApp,&QCoreApplication::aboutToQuit,worker,[worker]{worker->wait();});
-    QObject::connect(worker,&QThread::finished,qApp,[=] {
-        QObject::disconnect(shutdown);
-        active.clear();
-        if(progressGuard) {progressGuard->close();progressGuard->deleteLater();}
-        // Do not overwrite a clipboard changed by the user while copying.
-        if(original && QApplication::clipboard()->mimeData()==original) finishClipboard(*result);
-        if(context) completed(*result);
-        worker->deleteLater();
+    if (jobActive) {
+        auto *message = new QMessageBox(QMessageBox::Information, "文件操作",
+            "已有文件操作正在进行，请完成后重试。", QMessageBox::Ok, owner);
+        message->setAttribute(Qt::WA_DeleteOnClose); message->show();
+        return false;
+    }
+    jobActive = true;
+    auto cancel = std::make_shared<std::atomic_bool>(false);
+    auto *progress = new QProgressDialog("正在处理文件；取消将在当前项目完成后生效。", "取消后续项目", 0, 0, owner);
+    if (!cancellable) { progress->setLabelText("正在处理文件，请稍候…"); progress->setCancelButton(nullptr); }
+    progress->setWindowTitle("文件操作");
+    progress->setMinimumDuration(300);
+    progress->setValue(0);
+    const QPointer<QProgressDialog> progressGuard(progress);
+    QObject::connect(progress, &QProgressDialog::canceled, [cancel] { cancel->store(true); });
+    // Do not wait indefinitely for filesystem I/O when the desktop exits.
+    // Copy is staged; the original is retained until the destination commits.
+    const auto shutdown = QObject::connect(qApp, &QCoreApplication::aboutToQuit,
+        qApp, [cancel] { cancel->store(true); });
+    BackgroundTask::run(qApp, [work, cancel] { return work(cancel); },
+        [=](const PasteResult &result) {
+            QObject::disconnect(shutdown);
+            jobActive = false;
+            if (progressGuard) { progressGuard->close(); progressGuard->deleteLater(); }
+            // Clipboard maintenance must survive deletion of the initiating icon.
+            completed(result);
+        });
+    return true;
+}
+}
+
+bool busy() { return jobActive; }
+bool runOperationAsync(QWidget *owner, std::function<PasteResult()> work, Completion completed)
+{
+    const QPointer<QWidget> guard(owner);
+    return submit(owner, [work](const auto &) { return work(); }, [guard, completed](const PasteResult &result) {
+        if (guard) completed(result);
+    }, false);
+}
+
+bool transferFilesAsync(const QStringList &paths, const QString &targetDir,
+    bool move, bool keepExisting, QWidget *owner, Completion completed)
+{
+    if (paths.isEmpty()) return false;
+    const QPointer<QWidget> guard(owner);
+    const ClipboardFiles files{paths, move};
+    return submit(owner, [=](const auto &cancel) {
+        return pasteFiles(targetDir, files, keepExisting, cancel);
+    }, [guard, completed](const PasteResult &result) {
+        if (guard) completed(result);
     });
-    worker->start();return true;
+}
+
+bool trashFilesAsync(const QStringList &paths, QWidget *owner, Completion completed)
+{
+    if (paths.isEmpty()) return false;
+    const QPointer<QWidget> guard(owner);
+    return submit(owner, [paths](const auto &cancel) {
+        PasteResult result; result.sourcePaths = paths; result.move = true;
+        for (const auto &path : paths) {
+            if (cancel->load()) {
+                result.cancelled = true; result.failedPaths << path; continue;
+            }
+            if (QProcess::execute("gio", {"trash", "--", path}) == 0)
+                result.placedPaths << QFileInfo(path).absoluteFilePath();
+            else result.failedPaths << path;
+        }
+        return result;
+    }, [guard, completed](const PasteResult &result) {
+        if (guard) completed(result);
+    });
+}
+
+bool pasteFilesToDirectoryAsync(const QString &targetDir, QWidget *owner,
+    Completion completed)
+{
+    const ClipboardFiles files = readFiles();
+    if (files.isEmpty()) return false;
+    const QPointer<QMimeData> original = const_cast<QMimeData *>(QApplication::clipboard()->mimeData());
+    const QPointer<QWidget> guard(owner);
+    return submit(owner, [=](const auto &cancel) {
+        return pasteFiles(targetDir, files, false, cancel);
+    }, [=](const PasteResult &result) {
+        if (original && QApplication::clipboard()->mimeData() == original) finishClipboard(result);
+        if (guard) completed(result);
+    });
 }
 
 } // namespace FileClipboard

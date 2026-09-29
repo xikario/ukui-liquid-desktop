@@ -1,3 +1,5 @@
+#include <QElapsedTimer>
+#include <QDebug>
 #include "LiquidPopup.h"
 #include <QHelpEvent>
 #include <QAbstractItemView>
@@ -38,7 +40,13 @@ public:
     }
 };
 
+struct ProfileScope {
+    const char *name; bool enabled=qEnvironmentVariableIsSet("UKUI_LIQUID_POPUP_PROFILE"); QElapsedTimer timer;
+    explicit ProfileScope(const char *stage):name(stage){if(enabled)timer.start();}
+    ~ProfileScope(){if(enabled)qInfo()<<"[LiquidPopupProfile]"<<name<<"us"<<timer.nsecsElapsed()/1000;}
+};
 QImage capture(const QRect &area, qreal dpr) {
+    ProfileScope profile("capture");
     if (provider) return provider(area, dpr);
     // X11 snapshot before mapping. Wayland has no silent global capture;
     // return an empty image and use a readable tonal fallback there.
@@ -365,6 +373,7 @@ QPainterPath bubblePath(QRectF b,qreal radius,qreal connector,Placement side) {
     return p;
 }
 QImage renderMaterial(const QImage &input,QSize logical,qreal dpr,bool light,QRectF bounds) {
+    ProfileScope profile("renderMaterial");
     if(logical.isEmpty()) return {};
     dpr=qBound(1.0,dpr,3.0);
     if(bounds.isEmpty()) bounds=QRectF(QPointF(0,0),QSizeF(logical));
@@ -401,6 +410,7 @@ QImage renderMaterial(const QImage &input,QSize logical,qreal dpr,bool light,QRe
     out.setDevicePixelRatio(dpr);return out;
 }
 QImage renderMenuMaterial(const QImage &input,QSize logical,qreal dpr,bool light) {
+    ProfileScope profile("renderMenuMaterial");
     QImage out=renderMaterial(input,logical,dpr,light);
     if(out.isNull())return out;
     const QRectF body=QRectF(QPointF(),QSizeF(logical)).adjusted(.5,.5,-.5,-.5);
@@ -435,14 +445,20 @@ Shell::Shell(QWidget *parent,bool tooltip):QWidget(parent,tooltip?Qt::ToolTip:Qt
 }
 void Shell::setContent(QWidget *content) {
     if(m_content && m_content!=content) delete m_content;
+    m_material={};
     m_content=content;if(content) {content->setGraphicsEffect(new QGraphicsOpacityEffect(content));content->setParent(this);content->adjustSize();resize(content->size()+QSize(40,48));}
 }
 void Shell::openAt(const QRect &anchor, Placement placement) {
+    const bool reversing=m_closing && m_motion.state()==QAbstractAnimation::Running;
     m_motion.stop();m_closing=false;
     Placement chosen=placement;
     const QRect area=m_tooltip
         ? placeTooltip(size(),anchor,screenRect(anchor.center()),placement,&chosen)
         : place(size(),anchor,screenRect(anchor.center()));
+    const bool reverse = reversing && isVisible() && geometry() == area && !m_material.isNull()
+        && m_material.devicePixelRatio() == devicePixelRatioF()
+        && m_connectorX == anchor.center().x()-area.left()
+        && m_connectorY == anchor.center().y()-area.top();
     setGeometry(area);
     if (!m_tooltip && chosen==Placement::Auto)
         chosen=area.top()>=anchor.bottom()?Placement::Below:Placement::Above;
@@ -450,10 +466,10 @@ void Shell::openAt(const QRect &anchor, Placement placement) {
     m_top=chosen==Placement::Below;
     m_connectorX=anchor.center().x()-area.left();
     m_connectorY=anchor.center().y()-area.top();
-    m_material=renderMaterial(capture(area,devicePixelRatioF()),size(),devicePixelRatioF(),false,
+    if (!reverse) m_material=renderMaterial(capture(area,devicePixelRatioF()),size(),devicePixelRatioF(),false,
         QRectF(rect()).adjusted(8,12,-8,-12));
     if(m_content) {m_content->setGeometry(20,24,width()-40,height()-48);m_content->hide();}
-    m_progress=theme().reducedMotion?1:0;
+    m_progress=theme().reducedMotion?1:(reverse?m_progress:0);
     show();
     // Some X11 window managers apply their own tooltip placement during map.
     // Re-assert our adaptive rectangle after mapping so side bubbles remain
@@ -461,7 +477,7 @@ void Shell::openAt(const QRect &anchor, Placement placement) {
     if (m_tooltip) setGeometry(area);
     if(m_content && theme().reducedMotion) {static_cast<QGraphicsOpacityEffect *>(m_content->graphicsEffect())->setOpacity(1);m_content->show();}
     if(!theme().reducedMotion) {
-        m_motion.setStartValue(0.0);m_motion.setEndValue(1.0);m_motion.setDuration(theme().openMs);
+        m_motion.setStartValue(m_progress);m_motion.setEndValue(1.0);m_motion.setDuration(qMax(1,qRound(theme().openMs*(1-m_progress))));
         m_motion.setEasingCurve(QEasingCurve::OutCubic);m_motion.start();
     }
 }

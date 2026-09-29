@@ -2817,14 +2817,15 @@ void SmartSpaceWidget::startKnowledgeTask(
     }
     m_knowledgeProcess->setProperty(
         "usesProcessGroup", m_knowledgeUsesProcessGroup);
-    m_knowledgeProcess->start(program, processArguments);
-    if (!m_knowledgeProcess->waitForStarted(1000)) {
-        m_statusLabel->setText(QStringLiteral("知识库后台启动失败"));
-        m_knowledgeProcess->deleteLater();
-        m_knowledgeProcess = nullptr;
-        m_knowledgeUsesProcessGroup = false;
-        return;
-    }
+    QProcess *startingProcess = m_knowledgeProcess;
+    connect(startingProcess, &QProcess::errorOccurred, this,
+        [this, startingProcess](QProcess::ProcessError error) {
+            if (error != QProcess::FailedToStart || m_knowledgeProcess != startingProcess) return;
+            m_statusLabel->setText(QStringLiteral("知识库后台启动失败"));
+            startingProcess->deleteLater(); m_knowledgeProcess = nullptr;
+            m_knowledgeUsesProcessGroup = false;
+        });
+    startingProcess->start(program, processArguments);
     if (task == QLatin1String("search") ||
         task == QLatin1String("stats")) {
         QPointer<QProcess> process = m_knowledgeProcess;

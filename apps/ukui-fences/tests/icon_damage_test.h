@@ -23,7 +23,17 @@ static int runIconDamageTest(const QString &root)
     for(QPoint pos:{QPoint(500,400),QPoint(650,200),QPoint(410,450),QPoint(400,250)}) {
         canvas.paintedPixels=0;icon.move(pos);settle(60);const QImage incremental=capture();
         check(canvas.paintedPixels<qint64(canvas.width())*canvas.height()/2,"moving icon damages bounded footprints only");
-        canvas.update();settle(60);check(!incremental.isNull() && incremental==capture(),"moved icon backing store equals clean repaint without old wallpaper patches");
+        canvas.update();settle(60);const QImage full=capture();
+        if (incremental!=full) {
+            const QString artifacts=QDir::currentPath()+"/artifacts";QDir().mkpath(artifacts);
+            incremental.save(artifacts+QString("/damage-incremental-%1-%2.png").arg(pos.x()).arg(pos.y()));
+            full.save(artifacts+QString("/damage-full-%1-%2.png").arg(pos.x()).arg(pos.y()));
+            QRect changed;int pixels=0;
+            for(int y=0;y<qMin(incremental.height(),full.height());++y)for(int x=0;x<qMin(incremental.width(),full.width());++x)
+                if(incremental.pixel(x,y)!=full.pixel(x,y)){changed=changed.united(QRect(x,y,1,1));++pixels;}
+            qWarning()<<"Different pixels/bounds"<<pixels<<changed;
+        }
+        check(!incremental.isNull() && incremental==full,"moved icon backing store equals clean repaint without old wallpaper patches");
     }
     return failures?1:0;
 }

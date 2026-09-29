@@ -8,6 +8,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 #include <cstring>
+#include "NativeScreenMap.h"
 
 namespace {
     bool isX11Platform() {
@@ -42,7 +43,7 @@ TaskbarInfo TaskbarDetector::detect()
     if (!info.detected)
         info = fallback();
 
-    queryPanelDbus(info);
+    if (!info.detected) queryPanelDbus(info);
 
     qDebug() << "[TaskbarDetector] Fallback detection:"
              << info.geometry << "edge:" << info.edge
@@ -58,13 +59,6 @@ TaskbarInfo TaskbarDetector::detectPanelWindow()
 
     Display *dpy = XOpenDisplay(nullptr);
     if (!dpy) return info;
-
-    const QScreen *screen = QApplication::primaryScreen();
-    if (!screen) {
-        XCloseDisplay(dpy);
-        return info;
-    }
-    const QRect screenGeom = screen->geometry();
 
     // Get _NET_CLIENT_LIST from root
     const Window root = DefaultRootWindow(dpy);
@@ -173,11 +167,12 @@ TaskbarInfo TaskbarDetector::detectPanelWindow()
     // CRITICAL: X11 returns physical pixel coordinates, but Qt uses logical
     // pixels for move()/geometry(). On HiDPI (e.g. DPR=1.5, DPR=2.0) we must
     // convert, otherwise the menu position is scaled incorrectly.
-    const qreal dpr = screen->devicePixelRatio();
-    const int logX = static_cast<int>(absX / dpr);
-    const int logY = static_cast<int>(absY / dpr);
-    const int logW = static_cast<int>(attrs.width / dpr);
-    const int logH = static_cast<int>(attrs.height / dpr);
+    const QRect native(absX, absY, attrs.width, attrs.height);
+    const auto mapped = NativeScreenMap::best(native, NativeScreenMap::screens(dpy));
+    if (mapped.native.isEmpty()) { XCloseDisplay(dpy); return info; }
+    const QRect logical = NativeScreenMap::toLogical(native, mapped);
+    const QRect screenGeom = mapped.logical;
+    const int logX=logical.x(), logY=logical.y(), logW=logical.width(), logH=logical.height();
 
     info.nativeWindow = panelWin;
     info.geometry = QRect(logX, logY, logW, logH);
@@ -292,6 +287,18 @@ TaskbarInfo TaskbarDetector::detectFromStrut()
     bool foundStrut = false;
 
     for (unsigned long i = 0; i < nItems && !foundStrut; ++i) {
+        Atom classType=None; int classFormat=0; unsigned long classCount=0, classAfter=0;
+        unsigned char *classData=nullptr;
+        const Atom classAtom=XInternAtom(display,"WM_CLASS",True);
+        bool panel=false;
+        if (classAtom!=None && XGetWindowProperty(display,windows[i],classAtom,0,256,False,XA_STRING,
+            &classType,&classFormat,&classCount,&classAfter,&classData)==Success && classData) {
+            const auto names=QByteArray(reinterpret_cast<char *>(classData),classCount).split('\0');
+            for (const auto &name:names) if (name.toLower()=="ukui-panel") panel=true;
+        }
+        if (classData) XFree(classData);
+        if (!panel) continue;
+
         Atom sType = None;
         int sFmt = 0;
         unsigned long sN = 0, sAfter = 0;
@@ -304,6 +311,7 @@ TaskbarInfo TaskbarDetector::detectFromStrut()
             for (int k = 0; k < 12; ++k)
                 strut[k] = s[k];
             foundStrut = true;
+            info.nativeWindow = windows[i];
             XFree(sData);
         } else if (sData) {
             XFree(sData);
@@ -316,62 +324,29 @@ TaskbarInfo TaskbarDetector::detectFromStrut()
         return info;
     }
 
-    const unsigned long left   = strut[0];
-    const unsigned long right  = strut[1];
-    const unsigned long top    = strut[2];
-    const unsigned long bottom = strut[3];
-    const unsigned long bottom_start_x = strut[10];
-    const unsigned long bottom_end_x  = strut[11];
-    const unsigned long top_start_x   = strut[8];
-    const unsigned long top_end_x     = strut[9];
-    const unsigned long left_start_y  = strut[4];
-    const unsigned long left_end_y    = strut[5];
-    const unsigned long right_start_y = strut[6];
-    const unsigned long right_end_y   = strut[7];
-
-    const QScreen *screen = QApplication::primaryScreen();
-    if (!screen) {
-        XCloseDisplay(display);
-        return info;
+    const int rootWidth=DisplayWidth(display,DefaultScreen(display));
+    const int rootHeight=DisplayHeight(display,DefaultScreen(display));
+    QRect native;
+    if (strut[3]) { info.edge=3; native=QRect(int(strut[10]),rootHeight-int(strut[3]),int(strut[11]-strut[10]+1),int(strut[3])); }
+    else if (strut[2]) { info.edge=2; native=QRect(int(strut[8]),0,int(strut[9]-strut[8]+1),int(strut[2])); }
+    else if (strut[0]) { info.edge=0; native=QRect(0,int(strut[4]),int(strut[0]),int(strut[5]-strut[4]+1)); }
+    else if (strut[1]) { info.edge=1; native=QRect(rootWidth-int(strut[1]),int(strut[6]),int(strut[1]),int(strut[7]-strut[6]+1)); }
+    const auto screens=NativeScreenMap::screens(display);
+    auto mapped=NativeScreenMap::best(native,screens);
+    // Strut depth includes any distance from this monitor to the root edge.
+    // Prefer the panel window's actual monitor before clipping that reservation.
+    XWindowAttributes attributes{}; Window child=0; int x=0,y=0;
+    if (XGetWindowAttributes(display,info.nativeWindow,&attributes) &&
+        XTranslateCoordinates(display,info.nativeWindow,root,0,0,&x,&y,&child)) {
+        const auto panelScreen=NativeScreenMap::best(QRect(x,y,attributes.width,attributes.height),screens);
+        if (!panelScreen.native.isEmpty()) mapped=panelScreen;
     }
-    const QRect screenGeom = screen->geometry();
-
-    if (bottom > 0) {
-        info.edge = 3;
-        const int panelHeight = static_cast<int>(bottom);
-        const int panelX = static_cast<int>(bottom_start_x);
-        const int panelW = (bottom_end_x > bottom_start_x)
-                               ? static_cast<int>(bottom_end_x - bottom_start_x)
-                               : screenGeom.width();
-        info.geometry = QRect(panelX,
-                              screenGeom.bottom() - panelHeight + 1,
-                              panelW, panelHeight);
-    } else if (top > 0) {
-        info.edge = 2;
-        const int panelX = static_cast<int>(top_start_x);
-        const int panelW = (top_end_x > top_start_x)
-                               ? static_cast<int>(top_end_x - top_start_x)
-                               : screenGeom.width();
-        info.geometry = QRect(panelX, 0, panelW, static_cast<int>(top));
-    } else if (left > 0) {
-        info.edge = 0;
-        const int panelY = static_cast<int>(left_start_y);
-        const int panelH = (left_end_y > left_start_y)
-                               ? static_cast<int>(left_end_y - left_start_y)
-                               : screenGeom.height();
-        info.geometry = QRect(0, panelY, static_cast<int>(left), panelH);
-    } else if (right > 0) {
-        info.edge = 1;
-        const int panelY = static_cast<int>(right_start_y);
-        const int panelH = (right_end_y > right_start_y)
-                               ? static_cast<int>(right_end_y - right_start_y)
-                               : screenGeom.height();
-        info.geometry = QRect(screenGeom.right() - static_cast<int>(right) + 1,
-                              panelY, static_cast<int>(right), panelH);
-    }
-
-    info.detected = info.geometry.isValid();
-    info.screenGeometry = screenGeom;
+    native=native.intersected(mapped.native);
+    if (native.isEmpty()) { XCloseDisplay(display); return {}; }
+    info.geometry=NativeScreenMap::toLogical(native,mapped);
+    info.screenGeometry=mapped.logical;
+    info.panelCenter=info.geometry.center();
+    info.detected=info.geometry.isValid();
 
     if (info.detected) {
         if (info.edge == 3) {

@@ -1,3 +1,4 @@
+#include "../../../shared/async-work/BackgroundTask.h"
 #include "PanelController.h"
 #include "LiquidPopup.h"
 #include <QApplication>
@@ -39,7 +40,7 @@ PanelController::PanelController(QObject *parent):QObject(parent) {
     LiquidPopup::setEnabled(m_enabled);
     LiquidPopup::theme().reducedMotion=m_reducedMotion;
     LiquidPopup::theme().highlight=m_surface.highlight;
-    m_wallpaper.reload();
+    QTimer::singleShot(0, this, [this] { refreshBackdrop(true); });
     m_wallpaperRefresh.setSingleShot(true);m_wallpaperRefresh.setInterval(250);
     connect(&m_wallpaperRefresh,&QTimer::timeout,this,[this]{if(m_followWallpaper)refreshBackdrop(false);});
     connect(&m_wallpaperWatcher,&QFileSystemWatcher::fileChanged,this,[this]{m_wallpaperRefresh.start();});
@@ -153,7 +154,7 @@ bool PanelController::eventFilter(QObject *obj,QEvent *e) {
     }
     if(m_enabled && (e->type()==QEvent::MouseMove || e->type()==QEvent::Enter || e->type()==QEvent::Leave)) {
         QWidget *panel=w;
-        while(panel && !panel->inherits("UKUIPanel"))panel=panel->parentWidget();
+        while(panel && !m_cache.contains(panel))panel=panel->parentWidget();
         if(panel && m_cache.contains(panel))updatePointer(panel,panel->mapFromGlobal(QCursor::pos()));
     }
     if (!w->property("liquidPanelAttached").toBool())return false;
@@ -239,10 +240,22 @@ void PanelController::updateWallpaperWatchers() {
     }
 }
 void PanelController::refreshBackdrop(bool force) {
-    const bool changed=m_wallpaper.reload();
-    updateWallpaperWatchers();
-    if(!changed && !force)return;
-    for(auto i=m_cache.begin();i!=m_cache.end();++i){i.value()={};i.key()->update();}
+    m_wallpaperForce = m_wallpaperForce || force;
+    if (m_wallpaperLoading) { m_wallpaperPending = true; return; }
+    m_wallpaperLoading = true; m_wallpaperPending = false;
+    auto old = m_wallpaper;
+    BackgroundTask::run(this, [old]() mutable {
+        const bool changed = old.reload();
+        return qMakePair(old, changed);
+    }, [this](const QPair<WallpaperBackdrop, bool> &result) {
+        m_wallpaperLoading = false;
+        if (m_wallpaperPending) { refreshBackdrop(m_wallpaperForce); return; }
+        m_wallpaper = result.first; updateWallpaperWatchers();
+        const bool invalidate = result.second || m_wallpaperForce;
+        m_wallpaperForce = false;
+        if (invalidate)
+            for (auto i=m_cache.begin();i!=m_cache.end();++i) { i.value()={}; i.key()->update(); }
+    });
 }
 void PanelController::updatePointer(QWidget *panel,const QPointF &pos) {
     const QPointF old=m_pointers.value(panel,QPointF(-1000,-1000));

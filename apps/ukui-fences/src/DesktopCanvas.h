@@ -264,9 +264,9 @@ private:
     FenceWidget *fenceById(const QString &id) const;
     FenceWidget *fenceContainingPath(const QString &path) const;
     FenceWidget *desktopInboxFence() const;
-    QString restoreTrashedPath(const QString &originalPath) const;
-    bool deletePathForUndo(const QString &path) const;
-    bool movePathForUndo(const QString &srcPath, const QString &targetPath) const;
+    static QString restoreTrashedPath(const QString &originalPath);
+    static bool deletePathForUndo(const QString &path);
+    static bool movePathForUndo(const QString &srcPath, const QString &targetPath);
     void startMultiDrag();
     void refreshTrashState();
     void syncCutVisualState();
@@ -286,6 +286,9 @@ private:
     IconAppearance m_iconAppearance;
     QColor m_iconAccent = QColor("#7faee8");
     QPixmap             m_wallpaper;
+    bool m_glassPreparing = false;
+    bool m_wallpaperLoading = false;
+    bool m_wallpaperReloadPending = false;
     QList<QProcess *>   m_wallpaperMonitors;
     bool                m_fenceLiquidGlassEnabled = false;
     bool                m_wallpaperMagnetEnabled = true;

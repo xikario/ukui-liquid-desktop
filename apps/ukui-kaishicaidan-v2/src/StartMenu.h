@@ -134,8 +134,13 @@ private:
         QString actionText;
         QString detail;
     };
-    AppRemovalTarget detectAppRemovalTarget(const AppEntry &app) const;
+    static AppRemovalTarget detectAppRemovalTarget(const AppEntry &app);
     void removeApp(const AppEntry &app, const AppRemovalTarget &target);
+    void confirmDebRemoval(const AppEntry &app, const AppRemovalTarget &target, const QStringList &removedPackages);
+    bool m_removalPending = false;
+    bool m_palettePending = false;
+    bool m_paletteApplying = false;
+    QColor m_wallpaperAccent;
     void showAppContextMenu(const AppEntry &app, const QPoint &globalPos);
     void movePinnedApp(int fromIndex, int toIndex);
     void showPinnedView();
@@ -204,6 +209,9 @@ private:
     QGridLayout *m_pinnedGrid = nullptr;
     QWidget *m_recentContainer = nullptr;
     QFileSystemWatcher *m_appWatcher = nullptr;
+    QTimer *m_appRebuildTimer = nullptr;
+    bool m_appScanBusy = false;
+    bool m_appScanPending = false;
 
     // Data (use global types from AppRegistry / RecentFiles)
     QList<AppEntry> m_pinnedApps;

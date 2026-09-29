@@ -3,6 +3,7 @@
 #include <QRect>
 #include <QPainterPath>
 #include <memory>
+#include "../../../shared/liquid-glass/src/LiquidMaterial.h"
 
 // GUI-thread only. One wallpaper diffusion and one GL backend for all fences.
 // FenceWidget owns its final panel cache; hover never re-runs the shader.
@@ -12,6 +13,7 @@ public:
     FenceGlassRenderer();
     ~FenceGlassRenderer();
     void setWallpaper(const QImage &source);
+    void setPreparedWallpaper(const LiquidMaterial::Prepared &material);
     QImage renderPanel(const QRect &logicalRect, qreal radius, const QPainterPath &shape = {});
     bool usedGpu() const { return m_usedGpu; }
     int preparationCount() const { return m_preparationCount; }

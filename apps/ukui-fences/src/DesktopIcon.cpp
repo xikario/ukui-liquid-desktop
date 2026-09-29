@@ -40,6 +40,11 @@
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTimer>
+#include <QElapsedTimer>
+#include <QPointer>
+#include <QHelpEvent>
+#include <QToolTip>
+#include "../../../shared/async-work/BackgroundTask.h"
 
 namespace {
 
@@ -55,41 +60,6 @@ bool pathIsInside(const QString &path, const QString &directory)
     if (!cleanDirectory.endsWith(QDir::separator()))
         cleanDirectory += QDir::separator();
     return cleanPath.startsWith(cleanDirectory);
-}
-
-bool transferPathToDirectory(const QString &sourcePath,
-                             const QString &directory,
-                             bool move)
-{
-    const QFileInfo source(sourcePath);
-    if (!source.exists() || !QFileInfo(directory).isDir())
-        return false;
-
-    const QString normalizedSource = source.absoluteFilePath();
-    const QString normalizedDirectory =
-        QFileInfo(directory).absoluteFilePath();
-    if (FileClipboard::isInDirectory(normalizedSource, normalizedDirectory))
-        return true;
-    if (source.isDir() && pathIsInside(normalizedDirectory, normalizedSource))
-        return false;
-
-    const QString target = FileClipboard::uniqueTargetPath(
-        normalizedDirectory, source.fileName());
-    if (move) {
-        return QProcess::execute(QStringLiteral("gio"),
-            QStringList() << QStringLiteral("move")
-                          << QStringLiteral("-T")
-                          << normalizedSource
-                          << target) == 0;
-    }
-
-    if (source.isDir()) {
-        return QProcess::execute(QStringLiteral("cp"),
-            QStringList() << QStringLiteral("-aT")
-                          << normalizedSource
-                          << target) == 0;
-    }
-    return QFile::copy(normalizedSource, target);
 }
 
 QString findExecutable(const QStringList &names)
@@ -268,26 +238,25 @@ void addOpenWithMenu(QMenu &menu, const DesktopItem &item)
                                    "打开方式");
     MenuStyle::applyVenturaContextMenu(openWith);
 
-    const QStringList apps = applicationsForMime(item.mimeType);
-    for (const QString &appId : apps) {
-        const QString desktopFile = desktopFileForId(appId);
-        if (desktopFile.isEmpty()) continue;
-
-        auto *act = openWith->addAction(desktopFileName(desktopFile));
-        QObject::connect(act, &QAction::triggered,
-                         [desktopFile, path = item.filePath] {
-            if (QProcess::startDetached("gio",
-                    QStringList() << "launch" << desktopFile << path))
-                return;
-
-            launchDesktopFileWithPaths(desktopFile, QStringList() << path);
-        });
-    }
-
-    if (openWith->actions().isEmpty()) {
-        auto *actNone = openWith->addAction("无可用应用");
-        actNone->setEnabled(false);
-    }
+    auto *loading = openWith->addAction("正在查找应用…"); loading->setEnabled(false);
+    BackgroundTask::run(openWith, [mime = item.mimeType] {
+        QList<QPair<QString, QString>> found;
+        for (const auto &id : applicationsForMime(mime)) {
+            const QString file = desktopFileForId(id);
+            if (!file.isEmpty()) found.append(qMakePair(file, desktopFileName(file)));
+        }
+        return found;
+    }, [openWith, path = item.filePath](const QList<QPair<QString, QString>> &found) {
+        openWith->clear();
+        for (const auto &entry : found) {
+            auto *action = openWith->addAction(entry.second);
+            QObject::connect(action, &QAction::triggered, openWith, [file = entry.first, path] {
+                if (!QProcess::startDetached("gio", {"launch", file, path}))
+                    launchDesktopFileWithPaths(file, {path});
+            });
+        }
+        if (found.isEmpty()) openWith->addAction("无可用应用")->setEnabled(false);
+    });
 }
 
 void compressItem(const QString &path)
@@ -324,26 +293,32 @@ QString formatModified(const QFileInfo &fi)
     return fi.lastModified().toString("yyyy-MM-dd HH:mm");
 }
 
-QString folderSizeText(const QString &path)
+int folderJobs = 0; // GUI thread only; at most two filesystem walks.
+QString folderDetails(const QString &path)
 {
-    qint64 total = 0;
-    int visited = 0;
+    QElapsedTimer elapsed; elapsed.start();
+    qint64 bytes = 0;
+    int visited = 0, direct = 0;
+    QStringList preview, pending{path};
     bool partial = false;
-    QDirIterator it(path,
-        QDir::Files | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System,
-        QDirIterator::Subdirectories);
-
-    while (it.hasNext()) {
-        it.next();
-        ++visited;
-        if (visited > 500) {
-            partial = true;
-            break;
+    while (!pending.isEmpty() && !partial) {
+        const QString dir = pending.takeLast();
+        QDirIterator it(dir, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
+        while (it.hasNext()) {
+            if (++visited > 1000 || elapsed.elapsed() > 250) { partial = true; break; }
+            it.next();
+            const QFileInfo info = it.fileInfo();
+            if (dir == path) {
+                ++direct;
+                if (preview.size() < 2) preview << info.fileName();
+            }
+            if (info.isDir() && !info.isSymLink()) pending << info.absoluteFilePath();
+            else bytes += info.size();
         }
-        total += it.fileInfo().size();
     }
-
-    return (partial ? "约 " : "") + formatBytes(total);
+    return QString("<div><b>大小：</b>%1%2（%3%4 项）</div><div><b>项目预览：</b>%5</div>")
+        .arg(partial ? "至少 " : "", formatBytes(bytes), partial ? "至少 " : "")
+        .arg(direct).arg(preview.isEmpty() ? "无" : preview.join("、").toHtmlEscaped());
 }
 
 QString htmlLine(const QString &label, const QString &value)
@@ -369,6 +344,9 @@ DesktopIcon::DesktopIcon(const DesktopItem &item, QWidget *parent)
          m_item.filePath == QLatin1String("trash:///")) ||
         (m_item.isDir && !m_item.isSystemIcon))
         setAcceptDrops(true);
+
+    m_folderHoverTimer.setSingleShot(true); m_folderHoverTimer.setInterval(300);
+    connect(&m_folderHoverTimer, &QTimer::timeout, this, &DesktopIcon::requestFolderDetails);
 
     // 点击动画定时器
     m_clickAnimTimer.setInterval(16); // ~60fps
@@ -400,12 +378,18 @@ DesktopIcon::DesktopIcon(const DesktopItem &item, QWidget *parent)
 
 DesktopIcon::~DesktopIcon()
 {
+    // QProcess may emit finished from its destructor, after our m_item has
+    // already been destroyed by the time QObject deletes children.
+    for (auto *process : findChildren<QProcess *>()) {
+        process->disconnect(this); process->kill();
+    }
     finishInlineRename(false);
 }
 
 void DesktopIcon::setItem(const DesktopItem &item)
 {
     m_item = item;
+    ++m_folderRevision; m_folderDetails.clear(); m_folderDetailsTime = 0;
     updateToolTip();
     update();
 }
@@ -522,17 +506,8 @@ void DesktopIcon::updateToolTip()
         tip += htmlLine("文件名称：", fi.fileName());
         tip += htmlLine("路径：", m_item.filePath);
     } else if (m_item.isDir) {
-        QDir dir(m_item.filePath);
-        const QStringList entries = dir.entryList(
-            QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot,
-            QDir::Name | QDir::DirsFirst | QDir::IgnoreCase);
-        const QString preview = entries.mid(0, 2).join("、");
-
         tip += htmlLine("修改日期：", formatModified(fi));
-        tip += htmlLine("大小：",
-            QString("%1（%2 项）").arg(folderSizeText(m_item.filePath))
-                                .arg(entries.size()));
-        tip += htmlLine("前 2 项：", preview.isEmpty() ? "无" : preview);
+        tip += m_folderDetails.isEmpty() ? htmlLine("详情：", "悬停后按需统计") : m_folderDetails;
     } else {
         QMimeDatabase db;
         const QMimeType mime = db.mimeTypeForFile(m_item.filePath);
@@ -547,6 +522,34 @@ void DesktopIcon::updateToolTip()
 
     tip += "</body></html>";
     setToolTip(tip);
+}
+
+bool DesktopIcon::event(QEvent *e)
+{
+    if (e->type() == QEvent::ToolTip) requestFolderDetails();
+    return QWidget::event(e);
+}
+
+void DesktopIcon::requestFolderDetails()
+{
+    if (!m_item.isDir || m_item.isSystemIcon || m_folderPending || folderJobs >= 2) return;
+    if (!m_folderDetails.isEmpty() && QDateTime::currentMSecsSinceEpoch() - m_folderDetailsTime < 30000) return;
+    m_folderPending = true; ++folderJobs;
+    const auto revision = m_folderRevision;
+    const QString path = m_item.filePath;
+    const QPointer<DesktopIcon> guard(this);
+    BackgroundTask::run(qApp, [path] { return folderDetails(path); },
+        [guard, revision, path](const QString &details) {
+            --folderJobs;
+            if (!guard) return;
+            guard->m_folderPending = false;
+            if (guard->m_folderRevision != revision || guard->m_item.filePath != path) return;
+            guard->m_folderDetails = details;
+            guard->m_folderDetailsTime = QDateTime::currentMSecsSinceEpoch();
+            guard->updateToolTip();
+            if (guard->underMouse() && QToolTip::isVisible())
+                QToolTip::showText(QCursor::pos(), guard->toolTip(), guard);
+        });
 }
 
 QRect DesktopIcon::labelRect() const
@@ -672,7 +675,8 @@ void DesktopIcon::moveEvent(QMoveEvent *event)
     // A translucent child must not carry a copied patch of its old wallpaper.
     // Repaint only the previous and new footprints in the parent's coordinates.
     if (isVisible() && parentWidget() && event->oldPos()!=event->pos()) {
-        parentWidget()->update(QRegion(QRect(event->oldPos(),size())) | QRegion(geometry()));
+        parentWidget()->update(QRegion(QRect(event->oldPos(),size()).adjusted(-2,-2,2,2))
+                               | QRegion(geometry().adjusted(-2,-2,2,2)));
         update();
     }
 }
@@ -792,8 +796,8 @@ void DesktopIcon::paintEvent(QPaintEvent *)
 
 // ── 鼠标事件 ─────────────────────────────────────────────
 
-void DesktopIcon::enterEvent(QEvent *) { m_hovered = true;  update(); }
-void DesktopIcon::leaveEvent(QEvent *) { m_hovered = false; update(); }
+void DesktopIcon::enterEvent(QEvent *) { m_hovered = true; m_folderHoverTimer.start(); update(); }
+void DesktopIcon::leaveEvent(QEvent *) { m_hovered = false; m_folderHoverTimer.stop(); update(); }
 
 void DesktopIcon::mousePressEvent(QMouseEvent *e)
 {
@@ -1029,16 +1033,12 @@ void DesktopIcon::contextMenuEvent(QContextMenuEvent *e)
         if (QMessageBox::question(this, "确认删除",
                 QString("确定要将 \"%1\" 移到回收站吗？").arg(m_item.displayName))
             == QMessageBox::Yes) {
-            const QString oldPath = m_item.filePath;
-            const QString normalized = QFileInfo(oldPath).absoluteFilePath();
-            const int code = QProcess::execute("gio",
-                QStringList() << "trash" << oldPath);
-            if (code == 0) {
-                emit filesDroppedToTrash(QStringList() << normalized);
-            } else {
-                QMessageBox::warning(this, "移到回收站失败",
-                    QString("无法将 \"%1\" 移到回收站。").arg(m_item.displayName));
-            }
+            FileClipboard::trashFilesAsync({m_item.filePath}, this,
+                [this](const FileClipboard::PasteResult &result) {
+                    if (!result.failedPaths.isEmpty())
+                        QMessageBox::warning(this, "移到回收站失败", "项目未能移到回收站。");
+                    if (!result.placedPaths.isEmpty()) emit filesDroppedToTrash(result.placedPaths);
+                });
         }
     });
 
@@ -1053,15 +1053,16 @@ void DesktopIcon::contextMenuEvent(QContextMenuEvent *e)
             return;
 
         const QString oldPath = m_item.filePath;
-        const bool ok = m_item.isDir
-            ? QDir(oldPath).removeRecursively()
-            : QFile::remove(oldPath);
-        if (!ok) {
-            QMessageBox::warning(this, "删除失败",
-                QString("无法删除 \"%1\"。").arg(m_item.displayName));
-            return;
-        }
-        emit fileRemoved(oldPath);
+        FileClipboard::runOperationAsync(this, [oldPath] {
+            FileClipboard::PasteResult result;
+            const QFileInfo info(oldPath);
+            const bool ok=info.isDir() && !info.isSymLink() ? QDir(oldPath).removeRecursively() : QFile::remove(oldPath);
+            if (ok) result.placedPaths << oldPath; else result.failedPaths << oldPath;
+            return result;
+        }, [this, oldPath](const FileClipboard::PasteResult &result) {
+            if (!result.failedPaths.isEmpty()) QMessageBox::warning(this,"删除失败","项目未能删除。");
+            else emit fileRemoved(oldPath);
+        });
     });
 
     menu.addSeparator();
@@ -1130,80 +1131,34 @@ void DesktopIcon::dragMoveEvent(QDragMoveEvent *e)
 void DesktopIcon::dropEvent(QDropEvent *e)
 {
     m_hovered = false;
+    QStringList paths;
+    for (const auto &url : e->mimeData()->urls())
+        if (url.isLocalFile()) paths << url.toLocalFile();
+    bool accepted = false;
     if (m_item.isSystemIcon && m_item.filePath == QLatin1String("trash:///")) {
-        QStringList trashedPaths;
-        QStringList failedPaths;
-        for (const QUrl &url : e->mimeData()->urls()) {
-            const QString path = url.toLocalFile();
-            if (path.isEmpty())
-                continue;
-
-            const QString normalized = QFileInfo(path).absoluteFilePath();
-            const int code = QProcess::execute("gio",
-                QStringList() << "trash" << path);
-            if (code == 0)
-                trashedPaths << normalized;
-            else
-                failedPaths << normalized;
-        }
-
-        if (!failedPaths.isEmpty()) {
-            QMessageBox::warning(this, "移到回收站失败",
-                QString("有 %1 个项目无法移到回收站。")
-                    .arg(failedPaths.size()));
-        }
-
-        if (!trashedPaths.isEmpty()) {
-            emit filesDroppedToTrash(trashedPaths);
-            QTimer::singleShot(900, this, [this, trashedPaths] {
-                emit filesDroppedToTrash(trashedPaths);
+        accepted = FileClipboard::trashFilesAsync(paths, this,
+            [this](const FileClipboard::PasteResult &result) {
+                if (!result.failedPaths.isEmpty())
+                    QMessageBox::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
                 refreshTrashIcon();
+                if (!result.placedPaths.isEmpty()) emit filesDroppedToTrash(result.placedPaths);
             });
-            refreshTrashIcon();
-        }
         e->setDropAction(Qt::MoveAction);
-        e->accept();
-        update();
-        return;
+    } else if (m_item.isDir && !m_item.isSystemIcon) {
+        Qt::DropAction action = e->mimeData()->hasFormat(kInternalFileDragMime)
+            ? Qt::MoveAction : e->proposedAction();
+        if (action == Qt::IgnoreAction) action = Qt::MoveAction;
+        accepted = FileClipboard::transferFilesAsync(paths, m_item.filePath,
+            action == Qt::MoveAction, true, this,
+            [this](const FileClipboard::PasteResult &result) {
+                m_folderDetails.clear(); updateToolTip();
+                if (!result.failedPaths.isEmpty())
+                    QMessageBox::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+            });
+        e->setDropAction(action);
     }
-    if (m_item.isDir && !m_item.isSystemIcon && e->mimeData()->hasUrls()) {
-        const bool internal =
-            e->mimeData()->hasFormat(kInternalFileDragMime);
-        Qt::DropAction action =
-            internal ? Qt::MoveAction : e->proposedAction();
-        if (action == Qt::IgnoreAction)
-            action = Qt::MoveAction;
-
-        QStringList failedPaths;
-        bool transferredAny = false;
-        for (const QUrl &url : e->mimeData()->urls()) {
-            const QString path = url.toLocalFile();
-            if (path.isEmpty())
-                continue;
-            if (transferPathToDirectory(
-                    path, m_item.filePath, action == Qt::MoveAction)) {
-                transferredAny = true;
-            } else {
-                failedPaths << path;
-            }
-        }
-
-        if (!failedPaths.isEmpty()) {
-            QMessageBox::warning(this, "拖放失败",
-                QString("有 %1 个项目无法放入“%2”。")
-                    .arg(failedPaths.size())
-                    .arg(m_item.displayName));
-        }
-        if (transferredAny) {
-            e->setDropAction(action);
-            e->accept();
-        } else {
-            e->ignore();
-        }
-        update();
-        return;
-    }
-    e->ignore();
+    if (accepted) e->accept(); else e->ignore();
+    update();
 }
 
 // ── 回收站图标状态 ─────────────────────────────────────

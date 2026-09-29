@@ -61,6 +61,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "clipboard_test.h"
 #include "icon_damage_test.h"
 #include "smart_interaction_test.h"
+#include "review_async_test.h"
 
 int main(int argc, char **argv)
 {
@@ -78,6 +79,8 @@ int main(int argc, char **argv)
     LiquidPopup::install(app);
     app.setOrganizationName("kylin");
     app.setApplicationName("ukui-fences");
+    if (app.arguments().contains("--review-async-only"))
+        return runReviewAsyncTest(isolated.path());
     if (app.arguments().contains("--smart-interaction-only"))
         return runSmartInteractionTest(isolated.path());
     if (app.arguments().contains("--icon-damage-only"))
@@ -218,8 +221,10 @@ int main(int argc, char **argv)
         auto *third=canvas.createFence("新分区", QRect(1000,180,230,280));
         check(third->liquidGlassEnabled(), "new fences inherit enabled setting");
         check(QSettings().value("appearance/fenceLiquidGlass").toBool(), "global setting persisted");
-        settle();
-        const QImage glass=canvas.grab(QRect(225,165,755,375)).toImage();
+        QElapsedTimer preparationWait; preparationWait.start();
+        QImage glass;
+        do { settle(30); glass=canvas.grab(QRect(225,165,755,375)).toImage(); }
+        while (glass==before && preparationWait.elapsed()<3000);
         glass.save(output+"/fences-liquid-glass.png");
         const QImage magneticGlass=canvas.grab(QRect(225,565,350,190)).toImage();
         magneticGlass.save(output+"/fences-magnetic.png");

@@ -31,6 +31,7 @@ private:
     qreal m_refraction=3.5;
     qreal m_chroma=.48;
     WallpaperBackdrop m_wallpaper;
+    bool m_wallpaperLoading = false, m_wallpaperPending = false, m_wallpaperForce = false;
     QFileSystemWatcher m_wallpaperWatcher;
     QTimer m_wallpaperRefresh;
     QTimer m_hoverRefresh;

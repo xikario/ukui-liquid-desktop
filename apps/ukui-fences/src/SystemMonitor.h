@@ -44,6 +44,7 @@ public:
     };
 
     explicit SystemMonitor(QWidget *parent = nullptr);
+    ~SystemMonitor() override;
 
     void setEditMode(bool edit);
     void refreshWallpaperTheme();
@@ -135,16 +136,31 @@ private:
     };
 
     void refreshStats();
-    CpuTotals readCpuTotals() const;
-    MemStats readMemStats() const;
-    QVector<ProcessInfo> readTopProcesses(int count, quint64 totalDelta);
-    QVector<ProcessInfo> readProcessSnapshot(
-        int count, quint64 totalDelta, QHash<int, quint64> &previousTicks) const;
-    ProcessDetails readProcessDetails(int pid) const;
-    DiskIoTotals readDiskIoTotals() const;
-    QVector<double> readLoadAverages() const;
-    QString readCpuModel() const;
-    void readDiskStats();
+    static CpuTotals readCpuTotals();
+    static MemStats readMemStats();
+    static QVector<ProcessInfo> readProcessSnapshot(
+        int count, quint64 totalDelta, QHash<int, quint64> &previousTicks, int cores);
+    static ProcessDetails readProcessDetails(int pid);
+    static DiskIoTotals readDiskIoTotals();
+    static QVector<double> readLoadAverages();
+    static QString readCpuModel();
+    struct Sample {
+        CpuTotals cpu;
+        MemStats memory;
+        DiskIoTotals io;
+        ProcessDetails details;
+        QVector<ProcessInfo> processes;
+        QHash<int, quint64> ticks;
+        QVector<double> frequencies, loads;
+        double diskTotal = 0, diskUsed = 0, diskPercent = 0;
+    };
+    static Sample collectSample(bool processes, int count, quint64 previousTotal,
+        QHash<int, quint64> previousTicks, int targetPid, bool disk);
+    void applyStats(const Sample &sample, bool heavy);
+    void applyDiagnosisSample(const Sample &sample);
+    bool m_statsPending = false;
+    bool m_diagnosisPending = false;
+    quint64 m_diagnosisRevision = 0;
 
     void setCompact(bool compact);
     void restoreSettings();
@@ -193,7 +209,7 @@ private:
     int logicalHeight() const;
     QPoint logicalPosition(const QPoint &position) const;
     QString tooltipAt(const QPoint &logicalPosition) const;
-    double readCoreFrequencyGhz(int core) const;
+    static double readCoreFrequencyGhz(int core);
     QColor wallpaperSampleColor() const;
 
     QTimer m_timer;

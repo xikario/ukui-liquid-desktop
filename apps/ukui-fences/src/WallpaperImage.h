@@ -15,19 +15,10 @@ inline QSize wallpaperDecodeSize()
     return target;
 }
 
-// Content-aware decoding with one bounded cache entry shared by validation,
-// preview and display. Native-size tile/centre modes can request full decoding.
-inline QPixmap readWallpaperPixmap(const QString &path, QString *error=nullptr,
-                                   const QSize &target=wallpaperDecodeSize())
+// Pure QImage decoding is safe in background tasks. QPixmap cache stays GUI-only.
+inline QImage readWallpaperImage(const QString &path, QString *error, const QSize &target)
 {
-    struct Cache { QString key; QPixmap pix; };
-    static Cache cache;
-    const QFileInfo info(path);
-    const QString key=info.absoluteFilePath()+QString(":%1:%2:%3:%4:%5")
-        .arg(info.lastModified().toMSecsSinceEpoch()).arg(info.metadataChangeTime().toMSecsSinceEpoch())
-        .arg(info.size()).arg(target.width()).arg(target.height());
     if (error) error->clear();
-    if (cache.key==key && !cache.pix.isNull()) return cache.pix;
     QImageReader reader(path); reader.setDecideFormatFromContent(true); reader.setAutoTransform(true);
     const QSize source=reader.size();
     // Reject unreasonable headers before allocating. Scaling codecs still need
@@ -43,5 +34,23 @@ inline QPixmap readWallpaperPixmap(const QString &path, QString *error=nullptr,
     }
     QImage image=reader.read();
     if(image.isNull()) { if(error) *error=reader.errorString(); return {}; }
+    return image;
+}
+
+// Content-aware decoding with one bounded cache entry shared by validation,
+// preview and display. Native-size tile/centre modes can request full decoding.
+inline QPixmap readWallpaperPixmap(const QString &path, QString *error=nullptr,
+                                   const QSize &target=wallpaperDecodeSize())
+{
+    struct Cache { QString key; QPixmap pix; };
+    static Cache cache;
+    const QFileInfo info(path);
+    const QString key=info.absoluteFilePath()+QString(":%1:%2:%3:%4:%5")
+        .arg(info.lastModified().toMSecsSinceEpoch()).arg(info.metadataChangeTime().toMSecsSinceEpoch())
+        .arg(info.size()).arg(target.width()).arg(target.height());
+    if (error) error->clear();
+    if (cache.key==key && !cache.pix.isNull()) return cache.pix;
+    QImage image = readWallpaperImage(path, error, target);
+    if (image.isNull()) return {};
     cache.key=key; cache.pix=QPixmap::fromImage(std::move(image)); return cache.pix;
 }

@@ -1,3 +1,4 @@
+#include "LiquidMaterial.h"
 #include "LiquidOpticsRenderer.h"
 #include <QDebug>
 #include <QElapsedTimer>
@@ -16,31 +17,7 @@
 namespace {
 // Body diffusion (~7 logical pixels). Keep colour and large features intact.
 // The optical rim gets a separate, nearly clear texture below.
-QImage diffuse(const QImage &source, QSize logical, int radius=2, int divisor=3)
-{
-    QImage a = source.scaled(qMax(1, logical.width()/divisor), qMax(1, logical.height()/divisor),
-                            Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                        .convertToFormat(QImage::Format_RGB32);
-    QImage b(a.size(), a.format());
-    for (int pass = 0; pass < 6; ++pass) {
-        const bool horizontal = pass % 2 == 0;
-        for (int y = 0; y < a.height(); ++y) {
-            QRgb *out = reinterpret_cast<QRgb *>(b.scanLine(y));
-            for (int x = 0; x < a.width(); ++x) {
-                int r=0, g=0, blue=0;
-                for (int k=-radius; k<=radius; ++k) {
-                    const int sx = horizontal ? qBound(0,x+k,a.width()-1) : x;
-                    const int sy = horizontal ? y : qBound(0,y+k,a.height()-1);
-                    const QRgb c = reinterpret_cast<const QRgb *>(a.constScanLine(sy))[sx];
-                    r += qRed(c); g += qGreen(c); blue += qBlue(c);
-                }
-                out[x] = qRgb(r/(radius*2+1),g/(radius*2+1),blue/(radius*2+1));
-            }
-        }
-        a.swap(b);
-    }
-    return a.scaled(source.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-}
+using LiquidMaterial::diffuse;
 
 QByteArray resource(const char *path)
 {

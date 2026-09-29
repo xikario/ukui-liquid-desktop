@@ -59,6 +59,7 @@ signals:
     void filesDroppedToTrash(const QStringList &paths);
 
 protected:
+    bool event(QEvent *) override;
     void moveEvent(QMoveEvent *) override;
     void paintEvent(QPaintEvent *)          override;
     void mousePressEvent(QMouseEvent *)     override;
@@ -75,6 +76,12 @@ protected:
 
 private:
     void updateToolTip();
+    void requestFolderDetails();
+    QString m_folderDetails;
+    qint64 m_folderDetailsTime = 0;
+    quint64 m_folderRevision = 0;
+    bool m_folderPending = false;
+    QTimer m_folderHoverTimer;
     QRect labelRect() const;
     void finishInlineRename(bool commit);
 

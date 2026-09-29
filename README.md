@@ -16,6 +16,7 @@
 | --- | --- |
 | `shared/liquid-popup` | 公共菜单、提示气泡、矢量对号与箭头、锚点定位、圆角抗锯齿及预览程序 |
 | `shared/liquid-glass` | 公共 NextKde Snell 光学渲染器，GPU 折射/色散/高光与 CPU 降级 |
+| `shared/async-work` | 公共后台任务入口，接收控件销毁后停止投递结果 |
 | `apps/ukui-kaishicaidan-v2` | 开始菜单、透明开始按钮覆盖层、Win 键、应用搜索与玻璃控件 |
 | `apps/ukui-fences` | 桌面分区、智能空间、系统监视、时钟与倒计时、活动统计、Strawberry 音乐、日历与系统待办 |
 | `apps/ukui-panel-liquid` | 加载到系统 `ukui-panel` 的 Qt 5 样式插件、壁纸适应和登录恢复 |
@@ -55,6 +56,7 @@ cmake --build apps/ukui-panel-liquid/build -j2
 - [模块依赖与数据边界](docs/ARCHITECTURE.md)
 - [源码收录范围及发布整理](docs/SOURCE_SCOPE.md)
 - [本次源码验证结果](docs/VALIDATION.md)
+- [2026-09-29 审查整改与本机验证](docs/CODE_REVIEW_2026-09-29_IMPLEMENTATION.md)
 - [代码审阅与液态图标实现记录](docs/LIQUID_ICON_REVIEW.md)
 - [桌面小组件说明](apps/ukui-fences/docs/DESKTOP_WIDGETS.md)
 - [第三方来源与许可](THIRD_PARTY_NOTICES.md)

@@ -7,10 +7,22 @@
 #include <QVector>
 #include <X11/Xlib.h>
 
+namespace {
+Display *nativeDisplay()
+{
+    struct Connection {
+        Display *display = XOpenDisplay(nullptr);
+        ~Connection() { if (display) XCloseDisplay(display); }
+    };
+    static Connection connection;
+    return connection.display;
+}
+}
+
 void setPanelNativeBackdrop(QWidget *panel, bool liquid)
 {
     if(QGuiApplication::platformName()!=QStringLiteral("xcb") || !panel->testAttribute(Qt::WA_WState_Created))return;
-    Display *display=XOpenDisplay(nullptr);
+    Display *display=nativeDisplay();
     if(!display)return;
     const Window window=panel->winId();
     const Atom blur=XInternAtom(display,"_KDE_NET_WM_BLUR_BEHIND_REGION",False);
@@ -41,7 +53,7 @@ void setPanelNativeBackdrop(QWidget *panel, bool liquid)
                 reinterpret_cast<const unsigned char *>(data.constData()),panel->property("liquidBlurCount").toInt());
         } else XDeleteProperty(display,window,blur);
     }
-    XFlush(display);XCloseDisplay(display);
+    XFlush(display);
 }
 
 // Retain every partially covered optical pixel; discard the transparent outer
@@ -65,9 +77,9 @@ void setPanelNativeOutline(QWidget *panel, const QImage &coverage)
            && spans.last().y+spans.last().height==y)++spans.last().height;
         else spans.append(XRectangle{short(first),short(y),ushort(last-first+1),1});
     }
-    Display *display=XOpenDisplay(nullptr);if(!display)return;
+    Display *display=nativeDisplay();if(!display)return;
     // ShapeBounding=0, ShapeSet=0, YXBanded=3; input is bounded by this too.
     combine(display,panel->winId(),0,0,0,spans.data(),spans.size(),0,3);
-    XFlush(display);XCloseDisplay(display);
+    XFlush(display);
     panel->setProperty("liquidNativeOutlineKey",coverage.cacheKey());
 }
