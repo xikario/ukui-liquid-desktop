@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""X11 Peony-only workaround for the UKUI blur/magic-lamp rectangle.
+"""X11 workaround for the UKUI blur/magic-lamp rectangle.
 
-Waits on X events (no polling). Removes Peony normal-window blur requests;
-menus, desktop windows, and every other application remain untouched.
+Waits on X events (no polling). Removes blur requests from confirmed affected
+system applications' normal windows; menus and desktop surfaces stay intact.
 """
 import ctypes as C
 import ctypes.util
 import os
+
+# Exact WM_CLASS resource names verified on UKUI. Avoid prefix matching:
+# ukui-fences and other liquid surfaces intentionally keep their materials.
+AFFECTED_APPLICATIONS = frozenset({
+    'peony',
+    'kylin-software-center',
+    'ukui-control-center',
+    'kylin-os-manager',
+})
 
 class PropertyEvent(C.Structure):
     _fields_ = [('type',C.c_int),('serial',C.c_ulong),('send_event',C.c_int),
@@ -18,7 +27,7 @@ class ClassHint(C.Structure):
     _fields_ = [('name',C.c_void_p),('class_name',C.c_void_p)]
 
 def matches(name, window_types, normal_type):
-    return name == 'peony' and (not window_types or normal_type in window_types)
+    return name in AFFECTED_APPLICATIONS and (not window_types or normal_type in window_types)
 
 def run():
     x=C.CDLL(ctypes.util.find_library('X11'))

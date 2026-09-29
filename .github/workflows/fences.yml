@@ -14,6 +14,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake g++ qtbase5-dev libqt5svg5-dev libgl1-mesa-dev libx11-dev zlib1g-dev xvfb xauth dbus-x11 python3-pil python3-reportlab poppler-utils tesseract-ocr libglib2.0-bin
+      - name: System application blur compatibility
+        run: |
+          python3 integration/peony/test_blur_compat.py
+          xvfb-run -a python3 integration/peony/test_blur_compat_x11.py
       - name: Configure and build
         run: |
           cmake -S apps/ukui-fences -B build/fences -DBUILD_TESTING=ON -DLIQUID_POPUP_BUILD_DEMO=ON
