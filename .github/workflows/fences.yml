@@ -21,6 +21,9 @@ jobs:
       - name: Python, menu, file operation and HiDPI regressions
         working-directory: build/fences
         run: ctest --output-on-failure -R '^smart_space_(indexer|knowledge)$|^liquid-popup|^liquid-material|^desktop_(appearance|icon-appearance|icon-damage|smart-interaction|folder_drop_undo|clipboard|review_async|monitor_placement|startup_wallpaper)|^fence_glass_cpu$|^calendar_holiday_sync$'
+      - name: Appearance lifecycle regression
+        working-directory: build/fences
+        run: ctest --output-on-failure --repeat until-fail:10 -R '^desktop_appearance_1$'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -39,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake g++ qtbase5-dev libx11-dev libxtst-dev libgl1-mesa-dev xvfb xauth dbus-x11 xdotool
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ qtbase5-dev libx11-dev libxtst-dev libgl1-mesa-dev xvfb xauth dbus-x11 xdotool x11-utils
       - name: Build
         run: |
           cmake -S apps/${{ matrix.app }} -B build/app -DBUILD_TESTING=ON
