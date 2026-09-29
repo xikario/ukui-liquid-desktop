@@ -1,0 +1,31 @@
+name: Fences portable regression
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  cpu-xvfb:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ qtbase5-dev libqt5svg5-dev libgl1-mesa-dev libx11-dev zlib1g-dev xvfb xauth dbus-x11 python3-pil python3-reportlab poppler-utils tesseract-ocr libglib2.0-bin
+      - name: Configure and build
+        run: |
+          cmake -S apps/ukui-fences -B build/fences -DBUILD_TESTING=ON -DLIQUID_POPUP_BUILD_DEMO=ON
+          cmake --build build/fences -j2
+      - name: Python, menu, file operation and HiDPI regressions
+        working-directory: build/fences
+        run: ctest --output-on-failure -R '^smart_space_(indexer|knowledge)$|^liquid-popup|^desktop_(appearance|icon-appearance|clipboard)|^fence_glass_cpu$'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            build/fences/Testing/Temporary/
+            build/fences/artifacts/
+            build/fences/liquid-popup/artifacts/

@@ -1,5 +1,6 @@
 #include "LiquidPopup.h"
 #include "SystemMonitor.h"
+#include <QUrl>
 #include "DesktopCanvas.h"
 #include "MenuStyle.h"
 
@@ -2299,6 +2300,11 @@ void SystemMonitor::sendDiagnosisRequest()
               .arg(localHealthAssessment());
     update();
 
+    const QUrl endpoint(m_apiUrl.trimmed());
+    if (!endpoint.isValid() || endpoint.scheme() != "https" || endpoint.host().isEmpty() || !endpoint.userInfo().isEmpty()) {
+        m_aiError = QStringLiteral("AI 诊断地址必须使用有效的 HTTPS URL，且不能包含用户名或密码。");
+        m_aiBusy = false; m_aiProgressText.clear(); updateAiLayoutHeight(); update(); return;
+    }
     if (!prepareAiAuthHeader()) {
         m_aiError = QStringLiteral("无法创建受保护的临时认证头。");
         m_aiBusy = false;
@@ -2325,7 +2331,9 @@ void SystemMonitor::sendDiagnosisRequest()
             m_curlError.append(chunk.left(room));
     });
     QStringList arguments;
-    arguments << QStringLiteral("-s")
+    arguments << QStringLiteral("--proto") << QStringLiteral("=https")
+              << QStringLiteral("--connect-timeout") << QStringLiteral("10")
+              << QStringLiteral("-s")
               << QStringLiteral("-X") << QStringLiteral("POST")
               << QStringLiteral("-H") << QStringLiteral("Content-Type: application/json")
               << QStringLiteral("-H") << QStringLiteral("@") + m_aiAuthFile->fileName()

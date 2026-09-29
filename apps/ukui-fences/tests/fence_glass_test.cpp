@@ -57,6 +57,8 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "music_test.h"
 #include "calendar_test.h"
 #include "appearance_test.h"
+#include "icon_appearance_test.h"
+#include "clipboard_test.h"
 
 int main(int argc, char **argv)
 {
@@ -74,6 +76,10 @@ int main(int argc, char **argv)
     LiquidPopup::install(app);
     app.setOrganizationName("kylin");
     app.setApplicationName("ukui-fences");
+    if (app.arguments().contains("--clipboard-only"))
+        return runClipboardTest(isolated.path());
+    if (app.arguments().contains("--icon-appearance-only"))
+        return runIconAppearanceTest(isolated.path());
     if (app.arguments().contains("--appearance-only"))
         return runAppearanceTest(isolated.path());
     if (app.arguments().contains("--read-wallpaper")) {

@@ -4,6 +4,8 @@
 
 #include <QPainter>
 #include <QPainterPath>
+#include <QtMath>
+#include <QPixmapCache>
 #include <QMouseEvent>
 #include <QContextMenuEvent>
 #include <QDrag>
@@ -431,6 +433,48 @@ void DesktopIcon::setVisualScale(qreal scale)
     update();
 }
 
+void DesktopIcon::setIconAppearance(IconVisualStyle style, IconSurface surface,
+    const QColor &accent, qreal strength)
+{
+    strength=qBound(0.,strength,1.);
+    if (m_visualStyle==style && m_iconSurface==surface && m_liquidAccent==accent
+        && qFuzzyCompare(m_liquidStrength+1,strength+1)) return;
+    m_visualStyle=style; m_iconSurface=surface;
+    m_liquidAccent=accent; m_liquidStrength=strength; update();
+}
+QRectF DesktopIcon::plateRect() const
+{
+    const qreal size=m_iconSize+4*m_scale;
+    return QRectF((width()-size)/2.,6,size,size);
+}
+QRectF DesktopIcon::contentIconRect() const
+{
+    if (m_visualStyle==IconVisualStyle::Native)
+        return QRectF((width()-m_iconSize)/2.,6,m_iconSize,m_iconSize);
+    const auto plate=plateRect(); const qreal size=m_iconSize*.82;
+    return QRectF(plate.center()-QPointF(size/2,size/2),QSizeF(size,size));
+}
+QPixmap DesktopIcon::dragPixmap() const
+{
+    const qreal dpr=devicePixelRatioF();
+    const bool liquid=m_visualStyle==IconVisualStyle::LiquidPlate;
+    const QRectF bounds=liquid ? plateRect().adjusted(-3,-3,3,3) : contentIconRect();
+    const QString key=QString("liquid-icon-unit:%1:%2:%3:%4:%5:%6:%7:%8")
+        .arg(m_item.icon.cacheKey()).arg(m_iconSize).arg(bounds.width(),0,'f',2).arg(dpr,0,'f',3)
+        .arg(m_liquidAccent.rgba()).arg(qRound(m_liquidStrength*100)).arg(liquid).arg(m_cut);
+    QPixmap pix;
+    if(QPixmapCache::find(key,&pix)) return pix;
+    pix=QPixmap(qCeil(bounds.width()*dpr),qCeil(bounds.height()*dpr));
+    pix.setDevicePixelRatio(dpr); pix.fill(Qt::transparent);
+    QPainter p(&pix); p.setRenderHint(QPainter::Antialiasing);
+    p.setRenderHint(QPainter::SmoothPixmapTransform); p.translate(-bounds.topLeft());
+    if(liquid) LiquidIconRenderer::drawPlate(p,plateRect(),m_liquidAccent,m_liquidStrength,dpr,false,false);
+    LiquidIconRenderer::drawIcon(p,contentIconRect(),m_item.icon,dpr);
+    if(m_cut) { p.setCompositionMode(QPainter::CompositionMode_DestinationIn); p.fillRect(bounds,QColor(0,0,0,107)); }
+    p.end(); QPixmapCache::insert(key,pix);
+    return pix;
+}
+
 void DesktopIcon::setFontFamily(const QString &family)
 {
     m_fontFamily = family;
@@ -513,8 +557,8 @@ QRect DesktopIcon::labelRect() const
     font.setBold(m_fontBold);
     font.setItalic(m_fontItalic);
 
-    const QRect iconRect((width() - m_iconSize) / 2, 6,
-                         m_iconSize, m_iconSize);
+    const QRect iconRect = (m_visualStyle==IconVisualStyle::LiquidPlate
+        ? plateRect() : contentIconRect()).toAlignedRect();
     const QFontMetrics fm(font);
     return QRect(2, iconRect.bottom() + 3,
                  width() - 4,
@@ -641,33 +685,34 @@ void DesktopIcon::paintEvent(QPaintEvent *)
     }
 
     if (qAbs(drawScale - 1.0) > 0.001) {
-        p.translate(w / 2.0, h / 2.0);
+        const QPointF pivot = m_visualStyle==IconVisualStyle::LiquidPlate ? plateRect().center() : QPointF(w/2.,h/2.);
+        p.translate(pivot);
         p.scale(drawScale, drawScale);
-        p.translate(-w / 2.0, -h / 2.0);
+        p.translate(-pivot);
     }
 
     // 选中 / 悬浮背景（灰色边框）
     if (m_selected || m_hovered) {
-        const QColor bg = m_selected
+        QColor bg = m_selected
             ? QColor(160, 160, 160, 100)
             : QColor(255, 255, 255, 30);
+        if (m_visualStyle==IconVisualStyle::LiquidPlate) { bg=m_liquidAccent; bg.setAlpha(m_selected?32:10); }
         p.setBrush(bg);
-        p.setPen(m_selected
+        p.setPen(m_visualStyle==IconVisualStyle::LiquidPlate ? QPen(Qt::NoPen) : m_selected
             ? QPen(QColor(180, 180, 180, 200), 1)
             : QPen(QColor(255, 255, 255, 40), 1));
         p.drawRoundedRect(1, 1, w - 2, h - 2, 8, 8);
     }
 
-    // 图标
-    const QRect iconRect((w - m_iconSize) / 2, 6, m_iconSize, m_iconSize);
-    if (!m_item.icon.isNull()) {
-        p.save();
-        if (m_cut)
-            p.setOpacity(0.42);
-        const QIcon::Mode mode = m_cut ? QIcon::Disabled : QIcon::Normal;
-        p.drawPixmap(iconRect, m_item.icon.pixmap(
-            m_iconSize, m_iconSize, mode));
-        p.restore();
+    const bool liquid=m_visualStyle==IconVisualStyle::LiquidPlate;
+    const QRect iconRect=(liquid ? plateRect() : contentIconRect()).toAlignedRect();
+    if (m_cut) {
+        const QRectF bounds=liquid ? plateRect().adjusted(-3,-3,3,3) : contentIconRect();
+        p.drawPixmap(bounds.topLeft(),dragPixmap());
+    } else {
+        if(liquid) LiquidIconRenderer::drawPlate(p,plateRect(),m_liquidAccent,m_liquidStrength,
+                                               devicePixelRatioF(),m_hovered,m_selected);
+        LiquidIconRenderer::drawIcon(p,contentIconRect(),m_item.icon,devicePixelRatioF());
     }
 
     // ── 点击散出特效（参考特效文件 ping 动画）──
@@ -680,7 +725,8 @@ void DesktopIcon::paintEvent(QPaintEvent *)
         const int rw = qRound(iconRect.width() * expand / 2);
         const int rh = qRound(iconRect.height() * expand / 2);
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor(255, 255, 255, alpha));
+        QColor ripple=liquid ? m_liquidAccent : QColor(Qt::white); ripple.setAlpha(alpha);
+        p.setBrush(ripple);
         p.drawRoundedRect(cx - rw, cy - rh, rw * 2, rh * 2, 8, 8);
     }
 
@@ -778,8 +824,10 @@ void DesktopIcon::mouseMoveEvent(QMouseEvent *e)
         auto *mime = new QMimeData;
         mime->setData(kSystemIconMime, m_item.filePath.toUtf8());
         drag->setMimeData(mime);
-        drag->setPixmap(m_item.icon.pixmap(m_iconSize, m_iconSize));
-        drag->setHotSpot(QPoint(m_iconSize / 2, m_iconSize / 2));
+        const QPixmap preview=dragPixmap();
+    drag->setPixmap(preview);
+        drag->setHotSpot(QPoint(qRound(preview.width()/preview.devicePixelRatioF()/2),
+                               qRound(preview.height()/preview.devicePixelRatioF()/2)));
         drag->exec(Qt::MoveAction);
         e->accept();
         return;
@@ -794,8 +842,10 @@ void DesktopIcon::mouseMoveEvent(QMouseEvent *e)
     mime->setUrls(urls);
     mime->setData(kInternalFileDragMime, QByteArrayLiteral("1"));
     drag->setMimeData(mime);
-    drag->setPixmap(m_item.icon.pixmap(m_iconSize, m_iconSize));
-    drag->setHotSpot(QPoint(m_iconSize / 2, m_iconSize / 2));
+    const QPixmap preview=dragPixmap();
+    drag->setPixmap(preview);
+    drag->setHotSpot(QPoint(qRound(preview.width()/preview.devicePixelRatioF()/2),
+                               qRound(preview.height()/preview.devicePixelRatioF()/2)));
     const Qt::DropAction action =
         drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction);
     if (action == Qt::MoveAction) {

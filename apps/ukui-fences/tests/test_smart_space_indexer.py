@@ -32,6 +32,16 @@ def write_zip(path, members):
 
 
 class SmartSpaceIndexerTests(unittest.TestCase):
+    def test_authenticated_provider_requires_https(self):
+        for headers in ({"Authorization":"Bearer test"}, {"authorization":"Bearer test"}, {"X-API-Key":"test"}):
+            with mock.patch("urllib.request.build_opener") as network:
+                with self.assertRaisesRegex(ValueError, "HTTPS"):
+                    INDEXER_MODULE.run_provider({"type":"http", "url":"http://localhost/", "headers":headers}, [])
+                network.assert_not_called()
+        with mock.patch.dict(os.environ, {"TEST_PROVIDER_TOKEN":"test"}):
+            with self.assertRaisesRegex(ValueError, "HTTPS"):
+                INDEXER_MODULE.run_provider({"type":"http", "url":"http://localhost/", "tokenEnv":"TEST_PROVIDER_TOKEN"}, [])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="smart-space-test-")
         self.root = Path(self.temporary.name) / "root"

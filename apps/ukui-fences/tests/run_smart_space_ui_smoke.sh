@@ -117,7 +117,7 @@ case "$edge_state" in *true*) ;; *)
     exit 1
 ;; esac
 sleep 0.4
-import -window root "$RESULT_DIR/smart-space-default-hidden.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-default-hidden.png"
 gdbus call --session --dest org.ukui.fences \
     --object-path /ukuiFences \
     --method org.ukui.fences.revealSmartSpaceFromEdge >/dev/null
@@ -125,7 +125,7 @@ xdotool mousemove 1200 800
 sleep 0.2
 xdotool mousemove 450 324
 sleep 1.5
-import -window root "$RESULT_DIR/smart-space-index-progress.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-index-progress.png"
 attempt=0
 while [ "$attempt" -lt 80 ] && [ ! -s "$INDEX_PATH" ]; do
     attempt=$((attempt + 1))
@@ -145,7 +145,7 @@ overlap_state=$(gdbus call --session --dest org.ukui.fences \
     --object-path /ukuiFences \
     --method org.ukui.fences.smartSpaceOverlapsDesktopIcons)
 case "$overlap_state" in *false*) ;; *) echo "desktop icon overlaps Smart Space" >&2; exit 1;; esac
-import -window root "$RESULT_DIR/smart-space-initial.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-initial.png"
 
 # Result density has eight persisted positions.  Exercise both endpoints and
 # return to standard without changing the indexed result set.  D-Bus keeps
@@ -154,7 +154,7 @@ gdbus call --session --dest org.ukui.fences \
     --object-path /ukuiFences \
     --method org.ukui.fences.setSmartSpaceDensity -- -5 >/dev/null
 sleep 0.4
-import -window root "$RESULT_DIR/smart-space-density-compact.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-density-compact.png"
 grep -q '^resultDensity=-5$' "$CONFIG_DIR/kylin/ukui-fences.ini"
 gdbus call --session --dest org.ukui.fences \
     --object-path /ukuiFences \
@@ -171,10 +171,10 @@ sleep 0.3
 xdotool mousemove 935 289 click 1 key Home Down Down Return
 xdotool mousemove 935 289 click 1 key Home Down Down Down Down Down Return
 sleep 0.5
-import -window root "$RESULT_DIR/smart-space-type-filter.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-type-filter.png"
 xdotool mousemove 935 289 click 1
 sleep 0.3
-import -window root "$RESULT_DIR/smart-space-type-menu.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-type-menu.png"
 xdotool key Escape
 xdotool mousemove 935 289 click 1 key Home Return
 
@@ -183,10 +183,10 @@ xdotool mousemove 935 289 click 1 key Home Return
 xdotool mousemove 350 289 click 1 key ctrl+a
 xdotool type --delay 20 'Alpha txt'
 sleep 0.5
-import -window root "$RESULT_DIR/smart-space-search-pending.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-search-pending.png"
 xdotool mousemove 535 289 click 1
 sleep 0.5
-import -window root "$RESULT_DIR/smart-space-filtered.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-filtered.png"
 
 # Explicit re: mode compiles a Unicode/case-insensitive regular expression
 # once on submission.  Keep clipboard input so the backslash is exact.
@@ -194,18 +194,18 @@ xdotool mousemove 350 289 click 1 key ctrl+a
 printf '%s' 're:^alpha.*\.txt$' | xclip -selection clipboard
 xdotool key ctrl+v Return
 sleep 0.5
-import -window root "$RESULT_DIR/smart-space-regex-filtered.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-regex-filtered.png"
 xdotool mousemove 350 289 click 1 key ctrl+a BackSpace
 xdotool key Return
 sleep 0.4
 xdotool mousemove 200 388 click 1
 sleep 0.5
-import -window root "$RESULT_DIR/smart-space-folder-drilldown.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-folder-drilldown.png"
 # Clicking the otherwise empty lower part of the folder pane clears the scope
 # and collapses every drilldown level back to the default root presentation.
 xdotool mousemove 300 680 click 1
 sleep 0.5
-import -window root "$RESULT_DIR/smart-space-folder-blank-reset.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-folder-blank-reset.png"
 
 # Hovering a match exposes only a compact, highlighted relevant excerpt.
 xdotool mousemove 350 289 click 1 key ctrl+a
@@ -216,13 +216,13 @@ xdotool mousemove 1200 800
 sleep 0.2
 xdotool mousemove 700 403
 sleep 1.5
-import -window root "$RESULT_DIR/smart-space-hover-index.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-hover-index.png"
 
 # The eye action opens an on-demand text preview drawer without changing
 # single-click-to-open behavior on the filename/card.
 xdotool mousemove 938 403 click 1
 sleep 0.6
-import -window root "$RESULT_DIR/smart-space-text-preview.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-text-preview.png"
 xdotool key Escape
 
 # A real PDF fixture validates the low-priority first-page render path.
@@ -230,7 +230,7 @@ xdotool mousemove 750 289 click 1 key Home Down Down Down Return
 sleep 0.5
 xdotool mousemove 938 403 click 1
 sleep 1.2
-import -window root "$RESULT_DIR/smart-space-pdf-preview.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-pdf-preview.png"
 xdotool key Escape
 
 # Local full-text search stays inside the widget and does not call a remote
@@ -241,7 +241,7 @@ printf '%s' '宁波银行2025年报告' | xclip -selection clipboard
 xdotool key ctrl+v
 xdotool key Return
 sleep 0.6
-import -window root "$RESULT_DIR/smart-space-local-search.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-local-search.png"
 xdotool mousemove 350 289 click 1 key ctrl+a BackSpace
 xdotool key Return
 sleep 0.4
@@ -261,7 +261,7 @@ pin_state=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFence
     --method org.ukui.fences.smartSpaceAlwaysOnTop)
 case "$pin_state" in *true*) ;; *) echo "pin state was not enabled" >&2; exit 1;; esac
 sleep 0.4
-import -window root "$RESULT_DIR/smart-space-pinned.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-pinned.png"
 PIN_WINDOW=$(xdotool search --name '^智能空间$' 2>/dev/null | tail -n 1 || true)
 [ -n "$PIN_WINDOW" ] || { echo "pinned Smart Space native window was not found" >&2; exit 1; }
 if [ -n "$PIN_WINDOW" ]; then
@@ -281,7 +281,7 @@ fi
 gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
     --method org.ukui.fences.hideSmartSpaceToEdge >/dev/null
 sleep 0.4
-import -window root "$RESULT_DIR/smart-space-pinned-edge-star.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-pinned-edge-star.png"
 gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
     --method org.ukui.fences.revealSmartSpaceFromEdge >/dev/null
 geometry_after_pinned_edge=$(geometry_state)
@@ -307,7 +307,7 @@ edge_state=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFenc
     --method org.ukui.fences.smartSpaceEdgeHidden)
 case "$edge_state" in *true*) ;; *) echo "edge-hidden state was not enabled" >&2; exit 1;; esac
 sleep 0.4
-import -window root "$RESULT_DIR/smart-space-edge-star.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-edge-star.png"
 gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
     --method org.ukui.fences.revealSmartSpaceFromEdge >/dev/null
 edge_state=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
@@ -326,19 +326,19 @@ sleep 0.4
 gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
     --method org.ukui.fences.showSmartSpaceSettings >/dev/null
 sleep 0.4
-import -window root "$RESULT_DIR/smart-space-index-settings.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-index-settings.png"
 xdotool mousemove 680 118 click 1
 sleep 0.4
-import -window root "$RESULT_DIR/smart-space-skill-settings.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-skill-settings.png"
 xdotool mousemove 466 118 click 1
 sleep 0.4
-import -window root "$RESULT_DIR/smart-space-format-settings.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-format-settings.png"
 xdotool key Escape
 
 # Dragging inside the snap threshold must finish flush against the left edge.
 xdotool mousemove 88 289 mousedown 1 mousemove 5 289 mouseup 1
 sleep 0.5
-import -window root "$RESULT_DIR/smart-space-edge-snapped.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-edge-snapped.png"
 
 # Moving the widget over the desktop icon grid must push icons to their
 # nearest available cells outside the Smart Space reservation.
@@ -348,7 +348,7 @@ overlap_state=$(gdbus call --session --dest org.ukui.fences \
     --object-path /ukuiFences \
     --method org.ukui.fences.smartSpaceOverlapsDesktopIcons)
 case "$overlap_state" in *false*) ;; *) echo "desktop icon was not pushed out of Smart Space" >&2; exit 1;; esac
-import -window root "$RESULT_DIR/smart-space-icon-exclusion.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-icon-exclusion.png"
 
 # The compact breakpoint keeps the command bar and result cards usable while
 # collapsing the folder pane.  Exercise it through the same public D-Bus
@@ -369,7 +369,7 @@ overlap_state=$(gdbus call --session --dest org.ukui.fences \
     --object-path /ukuiFences \
     --method org.ukui.fences.smartSpaceOverlapsDesktopIcons)
 case "$overlap_state" in *false*) ;; *) echo "compact Smart Space overlaps a desktop icon" >&2; exit 1;; esac
-import -window root "$RESULT_DIR/smart-space-compact-responsive.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-compact-responsive.png"
 
 # The reduced rail remains usable at the declared minimum
 # at the declared minimum
@@ -378,7 +378,7 @@ gdbus call --session --dest org.ukui.fences \
     --object-path /ukuiFences \
     --method org.ukui.fences.resizeSmartSpace 620 360 >/dev/null
 sleep 0.6
-import -window root "$RESULT_DIR/smart-space-minimum-rail.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-minimum-rail.png"
 
 # Publish a deterministic fast-full snapshot before checking folder policy.
 # The final assertions verify both the snapshot mode and its contents.
@@ -414,12 +414,12 @@ gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
     --method org.ukui.fences.hideSmartSpaceFolder "$ROOT_DIR/Project A" >/dev/null
 sleep 0.5
 grep -q 'hiddenFolders=.*Project A' "$CONFIG_DIR/kylin/ukui-fences.ini"
-import -window root "$RESULT_DIR/smart-space-folder-hidden.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-folder-hidden.png"
 gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
     --method org.ukui.fences.excludeSmartSpaceFolder "$ROOT_DIR/Project B" >/dev/null
 sleep 0.6
 grep -q 'excludedFolders=.*Project B' "$CONFIG_DIR/kylin/ukui-fences.ini"
-import -window root "$RESULT_DIR/smart-space-folder-excluded.png"
+python3 "$PROJECT_DIR/tests/capture_ready_frame.py" "$RESULT_DIR/smart-space-folder-excluded.png"
 
 python3 - "$INDEX_PATH" "$ROOT_DIR" "$RUNTIME_DIR/sidecar-before.json" \
     "$CONFIG_DIR/kylin/ukui-fences.ini" \
@@ -459,9 +459,9 @@ if "currentSpace" in config:
 if (Path(sys.argv[4]).parent.parent / "kyfences" / "smart-spaces.json").exists():
     raise SystemExit("retired smart-spaces.json was created")
 images = [Image.open(path).convert("RGB") for path in sys.argv[5:]]
-for image in images:
+for image_path, image in zip(sys.argv[5:], images):
     if image.size != (1440, 900) or sum(ImageStat.Stat(image).var) < 50:
-        raise SystemExit("invalid or blank screenshot")
+        raise SystemExit("invalid or blank screenshot: " + image_path)
 print(json.dumps({"items": len(index["items"]),
                   "screenshots": len(images),
                   "fixedAllFilesScope": True,

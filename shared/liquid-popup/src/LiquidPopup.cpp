@@ -86,6 +86,7 @@ public:
             menu->setWindowOpacity(v.toReal());
         });
     }
+    ~MenuSkin() override { restoreIcons(); }
     void prepare() {
             if(!enabled || styled)return;
             originalStyle = menu->styleSheet();
@@ -93,6 +94,11 @@ public:
             originalTranslucent = menu->testAttribute(Qt::WA_TranslucentBackground);
             originalAutoFill = menu->autoFillBackground();
             styled = true;
+            originalWidgetStyle = menu->testAttribute(Qt::WA_SetStyle) ? menu->style() : nullptr;
+            if (qApp->property("liquidMenuGlyphStyleInstalled").toBool()) {
+                if (!glyphStyle) { glyphStyle = new MenuGlyphStyle; glyphStyle->setParent(this); }
+                menu->setStyle(glyphStyle);
+            }
             // Qt shares one column between an action icon and its check mark.
             // State must remain visible for toggles even when they have icons.
             for (QAction *action : menu->actions()) {
@@ -157,14 +163,21 @@ protected:
         styled = false;
         fade.stop();menu->setWindowOpacity(1);material={};
         menu->setStyleSheet(originalStyle);
+        if (glyphStyle) menu->setStyle(originalWidgetStyle);
         menu->setMask(originalMask);
         menu->setAutoFillBackground(originalAutoFill);
         menu->setAttribute(Qt::WA_TranslucentBackground, originalTranslucent);
+        restoreIcons();
+    }
+    void restoreIcons() {
+        // During QObject child destruction QMenu is no longer a QWidget.
+        // Only restore surviving externally-owned actions here.
         for (const auto &action : indicatorIcons)
             if (action) action->setIconVisibleInMenu(true);
         indicatorIcons.clear();
     }
 private:
+    QPointer<QStyle> glyphStyle, originalWidgetStyle;
     QString originalStyle;
     QRegion originalMask;
     bool styled = false, originalTranslucent = false, originalAutoFill = false;
@@ -528,8 +541,9 @@ void install(QApplication &app) {
     qInfo()<<"[LiquidPopup] shared popup v0.2 enabled: menus, widget and item-view tooltips";
 }
 void installMenuGlyphStyle(QApplication &app) {
+    if (qEnvironmentVariable("UKUI_LIQUID_POPUP") == "0") return;
     if (app.property("liquidMenuGlyphStyleInstalled").toBool()) return;
     app.setProperty("liquidMenuGlyphStyleInstalled", true);
-    app.setStyle(new MenuGlyphStyle);
+    // Each liquid menu owns a proxy; the application style stays untouched.
 }
 }

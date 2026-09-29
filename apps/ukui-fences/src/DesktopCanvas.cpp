@@ -675,6 +675,7 @@ QStringList defaultFenceIconPaths()
 DesktopCanvas::DesktopCanvas(QWidget *parent)
     : QWidget(parent)
 {
+    m_iconAppearance=IconAppearance::load();
     const QSettings appearanceSettings;
     m_fenceLiquidGlassEnabled = appearanceSettings.value("appearance/fenceLiquidGlass", false).toBool();
     m_wallpaperMagnetEnabled = appearanceSettings.value("appearance/wallpaperMagnetEnabled", true).toBool();
@@ -1327,7 +1328,8 @@ void DesktopCanvas::lockToDesktopGeometry()
 void DesktopCanvas::loadWallpaper()
 {
     if (m_wallpaperMode != WallpaperMode::System && !m_wallpaperPath.isEmpty()) {
-        QPixmap pix = readWallpaperPixmap(m_wallpaperPath);
+        QPixmap pix = readWallpaperPixmap(m_wallpaperPath,nullptr,
+            m_wallpaperMode==WallpaperMode::Tile || m_wallpaperMode==WallpaperMode::Center ? QSize() : wallpaperDecodeSize());
         if (!pix.isNull()) {
             m_wallpaper = pix;
             m_wallpaperUsingCustom = true;
@@ -1347,6 +1349,9 @@ void DesktopCanvas::loadWallpaper()
 
 void DesktopCanvas::clearWallpaperCache()
 {
+    m_iconAccent=accentColorFromWallpaper(m_wallpaper);
+    if (!m_iconAccent.isValid()) m_iconAccent=QColor("#7faee8");
+    applyIconAppearanceToAll();
     m_fenceGlassRenderer.reset();
     m_fenceGlassWallpaperKey = -1;
     for (auto *fence : m_fences) fence->invalidateGlassCache();
@@ -1721,6 +1726,7 @@ void DesktopCanvas::addSystemIcons()
         }
 
         auto *icon = new DesktopIcon(item, this);
+        configureIconAppearance(icon, IconSurface::Desktop);
         connectLooseIcon(icon);
         m_looseIcons.insert(qMin(insertAt, m_looseIcons.size()), icon);
         ++insertAt;
@@ -2053,7 +2059,8 @@ void DesktopCanvas::showWallpaperDialog()
         bool customMode = false;
         QPixmap source;
         if (mode != WallpaperMode::System && !chosenPath.isEmpty()) {
-            source = readWallpaperPixmap(chosenPath);
+            source = readWallpaperPixmap(chosenPath,nullptr,
+                mode==WallpaperMode::Tile || mode==WallpaperMode::Center ? QSize() : wallpaperDecodeSize());
             customMode = !source.isNull();
         }
         if (!customMode)
@@ -3007,6 +3014,7 @@ void DesktopCanvas::syncDesktopIcons(bool force)
         }
 
         auto *icon = new DesktopIcon(item, this);
+        configureIconAppearance(icon, IconSurface::Desktop);
         connectLooseIcon(icon);
         m_looseIcons.append(icon);
         icon->show();
@@ -3069,8 +3077,12 @@ void DesktopCanvas::startMultiDrag()
     // 第一个图标作为拖动缩略图
     if (!m_selectedIcons.isEmpty()) {
         DesktopIcon *first = *m_selectedIcons.constBegin();
-        if (first && !first->item().icon.isNull())
-            drag->setPixmap(first->item().icon.pixmap(48, 48));
+        if (first && !first->item().icon.isNull()) {
+            const QPixmap preview=first->dragPixmap();
+            drag->setPixmap(preview);
+            drag->setHotSpot(QPoint(qRound(preview.width()/preview.devicePixelRatioF()/2),
+                                   qRound(preview.height()/preview.devicePixelRatioF()/2)));
+        }
     }
     drag->exec(Qt::MoveAction | Qt::CopyAction);
 }
@@ -3545,6 +3557,7 @@ void DesktopCanvas::finishNewDesktopItem(const QString &filePath,
     DesktopIcon *icon = looseIconForPath(filePath);
     if (!icon) {
         icon = new DesktopIcon(item, this);
+        configureIconAppearance(icon, IconSurface::Desktop);
         connectLooseIcon(icon);
         m_looseIcons.append(icon);
         icon->show();
@@ -4150,6 +4163,7 @@ void DesktopCanvas::removeFence(FenceWidget *fence)
     for (const DesktopItem &item : fence->items()) {
         if (isInAnyFence(item.filePath)) continue;
         auto *icon = new DesktopIcon(item, this);
+        configureIconAppearance(icon, IconSurface::Desktop);
         connectLooseIcon(icon);
         m_looseIcons.append(icon);
         icon->show();
@@ -4280,6 +4294,7 @@ void DesktopCanvas::placeFilesOnDesktop(const QStringList &paths,
 
         if (!existing) {
             existing = new DesktopIcon(item, this);
+            configureIconAppearance(existing, IconSurface::Desktop);
             connectLooseIcon(existing);
             m_looseIcons.append(existing);
             existing->show();
@@ -4301,21 +4316,14 @@ void DesktopCanvas::placeFilesOnDesktop(const QStringList &paths,
 
 bool DesktopCanvas::pasteToDesktop(const QPoint &preferredPos)
 {
-    const FileClipboard::PasteResult result =
-        FileClipboard::pasteFilesToDirectory(m_desktopPath);
-    if (!result.hadFiles())
-        return false;
-
-    if (!result.failedPaths.isEmpty()) {
-        QMessageBox::warning(this, "粘贴失败",
-            QString("有 %1 个项目无法粘贴。").arg(result.failedPaths.size()));
-    }
-
-    recordPasteUndo(result);
-    placeFilesOnDesktop(result.placedPaths, preferredPos);
-    refreshDesktopIcons();
-    syncCutVisualState();
-    return result.hasPlacedFiles();
+    return FileClipboard::pasteFilesToDirectoryAsync(m_desktopPath,this,
+        [this,preferredPos](const FileClipboard::PasteResult &result) {
+            if (!result.failedPaths.isEmpty())
+                QMessageBox::warning(this,"粘贴失败",QString("有 %1 个项目无法粘贴。").arg(result.failedPaths.size()));
+            recordPasteUndo(result);
+            placeFilesOnDesktop(result.placedPaths,preferredPos);
+            refreshDesktopIcons();syncCutVisualState();
+        });
 }
 
 void DesktopCanvas::trashSelectedIcons()
@@ -4427,6 +4435,7 @@ void DesktopCanvas::dropEvent(QDropEvent *e)
             fence->removeItem(item.filePath);
 
         auto *icon = new DesktopIcon(item, this);
+        configureIconAppearance(icon, IconSurface::Desktop);
         connectLooseIcon(icon);
         m_looseIcons.append(icon);
 
@@ -4487,6 +4496,7 @@ void DesktopCanvas::dropEvent(QDropEvent *e)
             if (!item.isValid()) continue;
 
             existing = new DesktopIcon(item, this);
+            configureIconAppearance(existing, IconSurface::Desktop);
             connectLooseIcon(existing);
             m_looseIcons.append(existing);
             existing->show();
@@ -5052,6 +5062,9 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
             QStringLiteral("xdg-open"), QStringList() << home);
     });
 
+    auto *iconStyleAction = desktopSettingsMenu->addAction("桌面图标样式…");
+    iconStyleAction->setObjectName("desktopIconAppearanceAction");
+    connect(iconStyleAction,&QAction::triggered,this,&DesktopCanvas::showIconAppearanceDialog);
     auto *glassAction = desktopSettingsMenu->addAction("分区液态玻璃");
     glassAction->setObjectName("fenceLiquidGlassAction");
     glassAction->setCheckable(true);
@@ -5126,6 +5139,7 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
             "<p>右键 → 设置与帮助 → 启动设置，独立设置各组件随 Fences 启动。"
             "“显示”与“自启动”是两个独立选项。</p>"
             "<p>右键 → 外观与特效，可设置液态材质、主题配色和字体。"
+            "“桌面图标样式”可设置液态底座、强度和壁纸染色，并可单独允许分区内部使用。"
             "“从当前壁纸取色”调整分区底色并保留字体颜色。液态材质使用缓存壁纸，GPU 不可用时降级渲染。</p>"
             "<p>“Fences 壁纸”只修改 Fences 桌面层；选择“系统默认（跟随桌面）”恢复跟随系统壁纸。"
             "自定义壁纸按文件内容识别格式。</p>"

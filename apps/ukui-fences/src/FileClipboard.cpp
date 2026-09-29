@@ -8,6 +8,11 @@
 #include <QMimeData>
 #include <QProcess>
 #include <QUrl>
+#include <QThread>
+#include <QPointer>
+#include <QProgressDialog>
+#include <QTemporaryDir>
+#include <memory>
 
 namespace {
 
@@ -32,39 +37,44 @@ QStringList clipboardFormats()
     };
 }
 
+bool pathExists(const QString &path)
+{
+    const QFileInfo info(path); return info.exists() || info.isSymLink();
+}
+
+bool safeTarget(const QString &source, const QString &target)
+{
+    const QFileInfo src(source), dst(target);
+    if ((!src.exists() && !src.isSymLink()) || pathExists(target)) return false;
+    if (!src.isDir() || src.isSymLink()) return true;
+    const QString parent=QFileInfo(dst.absolutePath()).canonicalFilePath();
+    const QString origin=src.canonicalFilePath();
+    return !origin.isEmpty() && !parent.isEmpty() && parent!=origin && !parent.startsWith(origin+"/");
+}
+
 bool copyPath(const QString &srcPath, const QString &targetPath)
 {
-    const QFileInfo src(srcPath);
-    if (!src.exists()) return false;
-
-    QDir().mkpath(QFileInfo(targetPath).absolutePath());
-
-    if (src.isDir()) {
-        return QProcess::execute(QStringLiteral("cp"),
-            QStringList() << QStringLiteral("-aT") << srcPath << targetPath) == 0;
-    }
-
-    QFile::remove(targetPath);
-    return QFile::copy(srcPath, targetPath);
+    if (!QDir().mkpath(QFileInfo(targetPath).absolutePath()) || !safeTarget(srcPath,targetPath)) return false;
+    // Stage in the destination filesystem so a failed copy never publishes a
+    // partial destination. Preserve metadata and symlinks with cp -a.
+    QTemporaryDir staging(QFileInfo(targetPath).absolutePath()+"/.ukui-fences-transfer-XXXXXX");
+    if (!staging.isValid()) return false;
+    const QString ready=staging.path()+"/item";
+    if (QProcess::execute("cp", {"-aT", "--", srcPath, ready})!=0) return false;
+    if (pathExists(targetPath)) return false;
+    return QDir().rename(ready,targetPath);
 }
 
 bool movePath(const QString &srcPath, const QString &targetPath)
 {
+    if (!QDir().mkpath(QFileInfo(targetPath).absolutePath()) || !safeTarget(srcPath,targetPath)) return false;
+    if (QProcess::execute("gio", {"move", "-T", "--", srcPath, targetPath})==0) return true;
+    // A failed backend may have created a destination; never overwrite it.
+    if (pathExists(targetPath)) return false;
+    if (QDir().rename(srcPath,targetPath)) return true;
+    if (!copyPath(srcPath,targetPath)) return false;
     const QFileInfo src(srcPath);
-    if (!src.exists()) return false;
-
-    QDir().mkpath(QFileInfo(targetPath).absolutePath());
-
-    if (QProcess::execute(QStringLiteral("gio"),
-            QStringList() << QStringLiteral("move")
-                          << QStringLiteral("-T")
-                          << srcPath
-                          << targetPath) == 0)
-        return true;
-
-    return src.isDir()
-        ? QDir().rename(srcPath, targetPath)
-        : QFile::rename(srcPath, targetPath);
+    return src.isDir() && !src.isSymLink() ? QDir(srcPath).removeRecursively() : QFile::remove(srcPath);
 }
 
 void clearClipboard()
@@ -176,12 +186,12 @@ QString uniqueTargetPath(const QString &dirPath, const QString &fileName)
     const QString base = fi.completeBaseName().isEmpty()
         ? fi.fileName()
         : fi.completeBaseName();
-    const QString suffix = fi.suffix().isEmpty()
+    const QString suffix = fi.completeBaseName().isEmpty() || fi.suffix().isEmpty()
         ? QString()
         : QStringLiteral(".") + fi.suffix();
 
     QString target = QDir(dirPath).absoluteFilePath(fileName);
-    for (int i = 1; QFileInfo::exists(target); ++i) {
+    for (quint64 i = 1; pathExists(target); ++i) {
         target = QDir(dirPath).absoluteFilePath(
             QStringLiteral("%1 (%2)%3").arg(base).arg(i).arg(suffix));
     }
@@ -201,10 +211,9 @@ bool transferPath(const QString &srcPath, const QString &targetPath, bool move)
                 : copyPath(srcPath, targetPath);
 }
 
-PasteResult pasteFilesToDirectory(const QString &targetDir)
+static PasteResult pasteFiles(const QString &targetDir, const ClipboardFiles &files)
 {
     PasteResult result;
-    const ClipboardFiles files = readFiles();
     result.sourcePaths = files.paths;
     result.move = files.move;
 
@@ -240,14 +249,48 @@ PasteResult pasteFilesToDirectory(const QString &targetDir)
         }
     }
 
-    if (files.move) {
-        if (result.failedPaths.isEmpty())
-            clearClipboard();
-        else
-            writeFiles(result.failedPaths, true);
-    }
-
     return result;
+}
+
+static void finishClipboard(const PasteResult &result)
+{
+    if (result.move) {
+        if (result.failedPaths.isEmpty()) clearClipboard();
+        else writeFiles(result.failedPaths,true);
+    }
+}
+
+PasteResult pasteFilesToDirectory(const QString &targetDir)
+{
+    const auto result=pasteFiles(targetDir,readFiles()); finishClipboard(result); return result;
+}
+
+bool pasteFilesToDirectoryAsync(const QString &targetDir, QWidget *owner,
+    std::function<void(const PasteResult &)> completed)
+{
+    static QPointer<QThread> active;
+    if(active) return false;
+    const ClipboardFiles files=readFiles(); if(files.isEmpty())return false;
+    const QPointer<QMimeData> original=const_cast<QMimeData *>(QApplication::clipboard()->mimeData());
+    const QPointer<QWidget> context=owner;
+    auto result=std::make_shared<PasteResult>();
+    auto *progress=new QProgressDialog("正在粘贴文件，请稍候…",QString(),0,0,owner);
+    progress->setWindowTitle("文件操作");progress->setCancelButton(nullptr);
+    progress->setMinimumDuration(300);progress->setValue(0);
+    const QPointer<QProgressDialog> progressGuard=progress;
+    auto *worker=QThread::create([result,targetDir,files] { *result=pasteFiles(targetDir,files); });
+    active=worker;
+    const auto shutdown=QObject::connect(qApp,&QCoreApplication::aboutToQuit,worker,[worker]{worker->wait();});
+    QObject::connect(worker,&QThread::finished,qApp,[=] {
+        QObject::disconnect(shutdown);
+        active.clear();
+        if(progressGuard) {progressGuard->close();progressGuard->deleteLater();}
+        // Do not overwrite a clipboard changed by the user while copying.
+        if(original && QApplication::clipboard()->mimeData()==original) finishClipboard(*result);
+        if(context) completed(*result);
+        worker->deleteLater();
+    });
+    worker->start();return true;
 }
 
 } // namespace FileClipboard

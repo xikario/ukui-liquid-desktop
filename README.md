@@ -23,6 +23,8 @@
 
 四个新小组件统一布局编辑、边缘吸附、图标避让、壁纸取样及液态底板。音乐小组件包含最新的封面飘动音符：播放且可见时局部刷新，暂停、隐藏或播放器退出时停止。日历支持折叠待办、五行年月滚轮、农历及中国节假日；随仓库提供的调休数据为 **2026 年**。
 
+桌面散落图标默认使用缓存液态底座，保留原始应用图标。右键 → 外观与特效 → 桌面图标样式，可切换系统原始样式、调整强度与壁纸染色；分区内部默认关闭，可单独允许。
+
 ## 构建
 
 需要 CMake 3.16+、C++17、Qt 5 Core/Gui/Widgets/DBus/Network、X11、Xtst、OpenGL 开发头文件、Zlib，以及 Python 3。已验证环境为麒麟 V10 / ARM64 / Qt 5.12 / X11；其他发行版、OEM 面板版本和架构需自行验证，当前没有完整 Wayland 支持。
@@ -53,6 +55,7 @@ cmake --build apps/ukui-panel-liquid/build -j2
 - [模块依赖与数据边界](docs/ARCHITECTURE.md)
 - [源码收录范围及发布整理](docs/SOURCE_SCOPE.md)
 - [本次源码验证结果](docs/VALIDATION.md)
+- [代码审阅与液态图标实现记录](docs/LIQUID_ICON_REVIEW.md)
 - [桌面小组件说明](apps/ukui-fences/docs/DESKTOP_WIDGETS.md)
 - [第三方来源与许可](THIRD_PARTY_NOTICES.md)
 

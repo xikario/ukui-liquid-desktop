@@ -14,7 +14,16 @@
 using namespace LiquidPopup;
 void check(bool ok,const char *message){if(!ok){qCritical()<<message;std::exit(1);}}
 int main(int argc,char **argv){
- QApplication app(argc,argv);installMenuGlyphStyle(app);install(app);install(app);theme().reducedMotion=true;
+ QApplication app(argc,argv);auto *originalAppStyle=app.style();
+ installMenuGlyphStyle(app);install(app);install(app);
+ check(app.style()==originalAppStyle,"menu integration preserves application style");
+ if(qEnvironmentVariable("UKUI_LIQUID_POPUP")=="0") {
+   QMenu native;native.addAction("native");native.popup(QPoint(10,10));app.processEvents();
+   check(!native.property("liquidPopupSkin").toBool(),"environment switch disables adaptation");
+   check(!app.property("liquidMenuGlyphStyleInstalled").toBool(),"environment switch disables glyph style");
+   return 0;
+ }
+ theme().reducedMotion=true;
  const QRect screen(-1280,0,1280,800);
  for(QPoint pt:{QPoint(-1270,8),QPoint(-5,795),QPoint(-600,350)})
    check(screen.contains(place(QSize(260,150),QRect(pt,QSize(1,1)),screen)),"popup must stay within negative-origin screen");
@@ -83,6 +92,11 @@ int main(int argc,char **argv){
  QKeyEvent enter(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);QApplication::sendEvent(&menu,&enter);
  check(triggered&&action->isChecked(),"native keyboard action/check semantics retained");
  check(action->isIconVisibleInMenu(),"closing a menu restores the action icon preference");
+ QAction external("shared toggle",&app);external.setCheckable(true);external.setIcon(QIcon(actionPixmap));
+ auto *temporary=new QMenu;temporary->addAction(&external);temporary->popup(QPoint(10,10));app.processEvents();
+ check(!external.isIconVisibleInMenu(),"shared action adapted");delete temporary;
+ check(external.isIconVisibleInMenu(),"destroying open menu restores external action");
+ check(app.style()==originalAppStyle,"menu lifetime leaves application style unchanged");
  sub->popup(QPoint(300,50));app.processEvents();check(sub->property("liquidPopupSkin").toBool(),"native submenu adapted");sub->hide();
  // Exercise the actual nested QMenu::exec path, not just geometry math.
  const QRect anchor(250,80,200,35);

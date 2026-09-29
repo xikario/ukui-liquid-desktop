@@ -43,3 +43,7 @@ cmake -S . -B build -DBUILD_TESTING=ON
 cmake --build build -j2
 (cd build && ctest --output-on-failure)
 ```
+
+## Provider 配置边界
+
+`command` provider 会执行本机程序；只加载自己维护或已审阅的 provider 配置，以及可信的 `inheritFrom` 文件。它不是主题文件。带 Authorization、Cookie、X-API-Key 或 tokenEnv 凭据的 HTTP provider 必须使用 HTTPS，且不自动跟随重定向；无凭据的本地 HTTP 服务继续可用。

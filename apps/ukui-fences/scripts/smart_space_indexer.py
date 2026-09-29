@@ -18,6 +18,7 @@ import struct
 import subprocess
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -1020,12 +1021,21 @@ def run_provider(provider: Dict, roots: List[Path]) -> object:
         token_env = str(provider.get("tokenEnv", ""))
         if token_env and os.environ.get(token_env):
             headers.setdefault("Authorization", "Bearer " + os.environ[token_env])
+        sensitive = any(k.lower() in {"authorization", "proxy-authorization", "cookie", "x-api-key"} for k in headers)
+        if sensitive and urllib.parse.urlsplit(url).scheme != "https":
+            raise ValueError("authenticated http provider requires HTTPS")
         headers.setdefault("Content-Type", "application/json; charset=utf-8")
         http_request = urllib.request.Request(
             url, data=json.dumps(request, ensure_ascii=False).encode("utf-8"),
             headers=headers, method="POST",
         )
-        with urllib.request.urlopen(http_request, timeout=timeout) as response:
+        class NoCredentialRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, response_headers, newurl):
+                if sensitive:
+                    raise ValueError("authenticated provider redirects are disabled")
+                return super().redirect_request(req, fp, code, msg, response_headers, newurl)
+        opener = urllib.request.build_opener(NoCredentialRedirect())
+        with opener.open(http_request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     if kind == "dbus":
         gdbus = shutil.which("gdbus")

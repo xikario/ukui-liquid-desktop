@@ -1,5 +1,7 @@
 #include "LiquidPopup.h"
 #include <QApplication>
+#include <QDebug>
+#include <QDBusError>
 #include <QAction>
 #include <QFile>
 #include <QIcon>
@@ -143,16 +145,20 @@ int main(int argc, char *argv[])
 
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (!bus.registerService(kDbusService)) {
-        callExistingInstance(existingMethod);
-        return 0;
+        if (callExistingInstance(existingMethod)) return 0;
+        qCritical() << "Cannot register or contact desktop service:" << bus.lastError().message();
+        return 1;
     }
 
     if (args.contains("--quit"))
         return 0;
 
     DesktopCanvas canvas;
-    bus.registerObject(kDbusPath, &canvas,
-                       QDBusConnection::ExportScriptableSlots);
+    if (!bus.registerObject(kDbusPath, &canvas, QDBusConnection::ExportScriptableSlots)) {
+        qCritical() << "Cannot register desktop D-Bus object:" << bus.lastError().message();
+        bus.unregisterService(kDbusService);
+        return 1;
+    }
     setupTrayIcon(canvas, icon);
 
     if (args.contains("--hide"))

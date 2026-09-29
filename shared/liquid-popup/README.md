@@ -98,3 +98,5 @@ v1.1 性能修正：QMenu 在 Show（定位完成、原生映射前）只采样�
 `installMenuGlyphStyle(app)`，通过代理样式复用矢量勾选与箭头；Fences 已接入。
 液态菜单打开时临时隐藏可勾选动作的装饰图标，让 Qt 的状态列始终显示对号，
 关闭后恢复动作原本的图标设置。原生键盘、勾选和单选行为保留，菜单圆角不变。
+
+`installMenuGlyphStyle()` 只开启每个液态菜单拥有的局部代理，不替换 QApplication 样式。`UKUI_LIQUID_POPUP=0` 同时禁用适配器与该接入；关闭或销毁菜单时恢复仍存活的外部 QAction 图标偏好。

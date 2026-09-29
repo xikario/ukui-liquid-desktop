@@ -1,4 +1,5 @@
 #pragma once
+#include "IconAppearance.h"
 
 #include <QWidget>
 #include <QPixmap>
@@ -71,6 +72,9 @@ public:
     void setFontItalic(bool italic);
     QColor wallpaperColorAt(const QRect &area) const;
     bool wallpaperMagnetEnabled() const { return m_wallpaperMagnetEnabled; }
+    void configureIconAppearance(DesktopIcon *icon, IconSurface surface);
+    void applyIconAppearanceToAll();
+    void showIconAppearanceDialog();
     QImage wallpaperBackdrop(const QRect &globalArea, qreal dpr) const;
 
 signals:
@@ -279,6 +283,8 @@ private:
     bool isInDesktopDirectory(const QString &path) const;
     void scheduleRefresh(int delayMs = 0);
 
+    IconAppearance m_iconAppearance;
+    QColor m_iconAccent = QColor("#7faee8");
     QPixmap             m_wallpaper;
     QList<QProcess *>   m_wallpaperMonitors;
     bool                m_fenceLiquidGlassEnabled = false;

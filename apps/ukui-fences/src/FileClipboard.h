@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QPoint>
+#include <functional>
+class QWidget;
 #include <QString>
 #include <QStringList>
 
@@ -37,5 +39,8 @@ bool isInDirectory(const QString &path, const QString &dirPath);
 bool transferPath(const QString &srcPath, const QString &targetPath, bool move);
 
 PasteResult pasteFilesToDirectory(const QString &targetDir);
+// Returns whether a job was accepted; completion and clipboard updates run on GUI thread.
+bool pasteFilesToDirectoryAsync(const QString &targetDir, QWidget *owner,
+    std::function<void(const PasteResult &)> completed);
 
 } // namespace FileClipboard

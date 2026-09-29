@@ -9,6 +9,7 @@
 #include <QUrl>
 #include <QList>
 #include "DesktopItem.h"
+#include "LiquidIconRenderer.h"
 
 class QLineEdit;
 
@@ -26,6 +27,14 @@ public:
     void setCut(bool cut);
     bool isCut() const { return m_cut; }
     void setVisualScale(qreal scale);
+
+    void setIconAppearance(IconVisualStyle style, IconSurface surface, const QColor &accent, qreal strength);
+    IconVisualStyle visualStyle() const { return m_visualStyle; }
+    IconSurface iconSurface() const { return m_iconSurface; }
+    QColor liquidAccent() const { return m_liquidAccent; }
+    QPixmap dragPixmap() const;
+    QRectF plateRect() const;
+    QRectF contentIconRect() const;
 
     // 字体配置
     void setFontFamily(const QString &family);
@@ -68,6 +77,10 @@ private:
     QRect labelRect() const;
     void finishInlineRename(bool commit);
 
+    IconVisualStyle m_visualStyle = IconVisualStyle::Native;
+    IconSurface m_iconSurface = IconSurface::Desktop;
+    QColor m_liquidAccent = QColor("#7faee8");
+    qreal m_liquidStrength = .62;
     DesktopItem m_item;
     bool        m_selected  = false;
     bool        m_cut       = false;

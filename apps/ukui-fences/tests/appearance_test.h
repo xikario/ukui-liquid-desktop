@@ -1,5 +1,6 @@
 #pragma once
 #include "WallpaperImage.h"
+#include "DesktopIcon.h"
 
 static int runAppearanceTest(const QString &root)
 {
@@ -14,6 +15,12 @@ static int runAppearanceTest(const QString &root)
     QString error;
     check(readWallpaperPixmap(imagePath, &error).size() == original.size() && error.isEmpty(),
           "wallpaper decoder detects contents instead of suffix");
+    const auto cached=readWallpaperPixmap(imagePath);
+    check(cached.cacheKey()==readWallpaperPixmap(imagePath).cacheKey(),"wallpaper decode cache reused");
+    const QString largePath=root+"/large.jpg";
+    QImage large(3200,1600,QImage::Format_RGB32);large.fill(Qt::blue);large.save(largePath,"JPEG");
+    check(readWallpaperPixmap(largePath,nullptr,QSize(800,400)).size()==QSize(800,400),"large JPEG decoded to target size");
+    check(readWallpaperPixmap(largePath,nullptr,QSize()).size()==large.size(),"native-size wallpaper modes preserve pixels");
     const QString invalidPath = root + "/invalid.png";
     QFile invalid(invalidPath);invalid.open(QIODevice::WriteOnly);invalid.write("not an image");invalid.close();
     check(readWallpaperPixmap(invalidPath, &error).isNull() && !error.isEmpty(),
@@ -30,6 +37,15 @@ static int runAppearanceTest(const QString &root)
     const auto background = canvas.wallpaperBackdrop(QRect(canvas.mapToGlobal(QPoint(40,40)),QSize(20,20)),1);
     check(!background.isNull() && background.pixelColor(10,10).red()>200,
           "custom wallpaper reload uses content-aware decoder too");
+    DesktopIcon probe(DesktopItem::fromPath(imagePath),&canvas);
+    canvas.configureIconAppearance(&probe,IconSurface::Desktop);
+    const QColor previousAccent=probe.liquidAccent();
+    original.fill(QColor("#285acc"));original.save(imagePath,"JPEG");
+    { QFile changed(imagePath);changed.open(QIODevice::ReadWrite);
+      changed.setFileTime(QDateTime::currentDateTime().addSecs(2),QFileDevice::FileModificationTime); }
+    canvas.refreshAll();
+    check(probe.liquidAccent()!=previousAccent,"wallpaper refresh updates existing icon tint without recreating icon");
+    check(readWallpaperPixmap(imagePath).toImage().pixelColor(10,10).blue()>150,"same-path wallpaper replacement invalidates decoded cache");
     bool inspected = false;
     QTimer::singleShot(100, &canvas, [&] {
         auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());

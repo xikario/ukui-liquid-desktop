@@ -431,8 +431,8 @@ void FenceWidget::copySelectedIcons(bool move)
 void FenceWidget::pasteClipboardFiles()
 {
     const QString desktopPath = primaryDesktopDirectory();
-    const FileClipboard::PasteResult result =
-        FileClipboard::pasteFilesToDirectory(desktopPath);
+    FileClipboard::pasteFilesToDirectoryAsync(desktopPath,this,
+        [this](const FileClipboard::PasteResult &result) {
 
     if (!result.hadFiles())
         return;
@@ -455,6 +455,7 @@ void FenceWidget::pasteClipboardFiles()
                          result.move);
 
     emit geometryChanged();
+    });
 }
 
 void FenceWidget::finishNewItem(const QString &path)
@@ -595,6 +596,10 @@ void FenceWidget::insertItem(const DesktopItem &item, int index)
     if (hasItem(item.filePath)) return;
 
     auto *icon = new DesktopIcon(item, m_iconViewport ? m_iconViewport : this);
+    if (auto *canvas=qobject_cast<DesktopCanvas *>(parentWidget()))
+        canvas->configureIconAppearance(icon,IconSurface::Fence);
+    else
+        icon->setIconAppearance(IconVisualStyle::Native,IconSurface::Fence,QColor("#7faee8"),.4);
     icon->setVisualScale(m_iconScale);
     connect(icon, &DesktopIcon::activated,
             [](const DesktopItem &it) { it.open(); });
