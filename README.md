@@ -2,6 +2,14 @@
 
 面向银河麒麟 / UKUI X11 的 Qt 5 液态桌面组件集合。集中保存公共材质、开始菜单、桌面分区与小组件，以及系统任务栏的液态主题插件。
 
+## 上游代码与致谢
+
+本项目沿用、适配了 [SuceV587/NextKde](https://github.com/SuceV587/NextKde) 相关液态玻璃代码，并参考其桌面小组件设计。感谢原项目作者及贡献者的开源工作。
+
+- **液态玻璃代码**：`glass.glsl`、`snells-glass.glsl` 的直接引入来源为 [xikario/NextKde-kylinos](https://github.com/xikario/NextKde-kylinos/tree/0dcd60cbd8723a6da95349a82fbc63385081c22a)。本项目保留这些 shader，并在 Qt 5 / UKUI X11 下适配折射、色散和高光渲染，供公共材质模块及相关应用使用。
+- **桌面小组件设计**：时钟与倒计时、活动统计、日历参考 NextKde 的 DeskCenter 等组件，在本项目中以 Qt 5 Widgets 重新实现，并接入本地桌面和系统待办。
+- **来源与许可**：相关第三方文件保留原始署名及 GPL v3 许可证；具体来源提交、复用范围和许可证位置见 [第三方来源与许可](THIRD_PARTY_NOTICES.md)。
+
 ## 包含什么
 
 | 目录 | 内容 |
