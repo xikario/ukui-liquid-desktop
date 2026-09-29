@@ -4,6 +4,31 @@
 #include <QVariantAnimation>
 #include <QGraphicsOpacityEffect>
 
+class SmartTransitionVisibilityProbe final : public QObject
+{
+public:
+    bool recording = false;
+    int visibleGeometryChanges = 0;
+    int expandedShows = 0;
+    int transientEntryShows = 0;
+    SmartSpaceWidget *smart = nullptr;
+    QToolButton *entry = nullptr;
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (!recording) return false;
+        if (watched == smart) {
+            if ((event->type()==QEvent::Resize || event->type()==QEvent::Move)
+                && smart->isVisible()) ++visibleGeometryChanges;
+            if (event->type()==QEvent::Show && smart->width()>52)
+                ++expandedShows;
+        }
+        if (watched==entry && event->type()==QEvent::Show && smart->width()>52)
+            ++transientEntryShows;
+        return false;
+    }
+};
+
 static int runSmartInteractionTest(const QString &root)
 {
     QSettings settings;
@@ -33,13 +58,22 @@ static int runSmartInteractionTest(const QString &root)
     auto *smart=canvas.findChild<SmartSpaceWidget *>();
     check(smart!=nullptr,"Smart Space exists");
     if (!smart) return 1;
+    SmartTransitionVisibilityProbe visibility;
+    visibility.smart = smart;
+    visibility.entry = smart->findChild<QToolButton *>("smartEdgeReveal");
+    smart->installEventFilter(&visibility);
+    visibility.entry->installEventFilter(&visibility);
     check(smart->findChildren<QWidget *>("fileResultCard").size() >= 100,
           "transition regression includes a full page of file cards");
     for (bool pinned : {false,true}) {
         canvas.setSmartSpaceAlwaysOnTop(pinned); settle(100);
         const QRect before=smart->geometry();
         for (int i=0;i<3;++i) {
+            visibility.recording = true;
             smart->hideToNearestEdge();
+            visibility.recording = false;
+            check(visibility.visibleGeometryChanges==0 && visibility.transientEntryShows==0,
+                  "collapse preparation never exposes resized content or a transient entry window");
             check(smart->edgeHidden(),"collapse remains available during rapid toggles");
             auto *retract=canvas.findChild<QWidget *>("smartSpaceRetractFrame");
             check(retract && retract->isVisible(),"collapse animates a cached frame");
@@ -61,7 +95,11 @@ static int runSmartInteractionTest(const QString &root)
             auto *opacity = edge ? qobject_cast<QGraphicsOpacityEffect *>(edge->graphicsEffect()) : nullptr;
             check(opacity && qAbs(opacity->opacity() - (1-closingProgress)) < 0.001,
                   "edge entry fades in with the retracting content");
+            visibility.recording = true;
             smart->revealFromEdge();
+            visibility.recording = false;
+            check(visibility.visibleGeometryChanges==0 && visibility.expandedShows==0,
+                  "reveal preparation never maps the expanded content before its animation");
             check(!canvas.findChild<QWidget *>("smartSpaceRetractFrame"),"reopen cancels retraction immediately");
             auto *frame=canvas.findChild<QWidget *>("smartSpaceRevealFrame");
             check(frame && frame->isVisible(),"reveal animates a visible cached frame");

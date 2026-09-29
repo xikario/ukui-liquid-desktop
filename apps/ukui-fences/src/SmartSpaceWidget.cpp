@@ -2519,7 +2519,6 @@ void SmartSpaceWidget::hideToNearestEdge()
         : mapToGlobal(rect().center());
     m_expandedPosition = pos();
     m_expandedSize = size();
-    hidePreview();
 
     QRect bounds;
     if (isWindow()) {
@@ -2535,10 +2534,18 @@ void SmartSpaceWidget::hideToNearestEdge()
         return;
 
     const QRect current(pos(), size());
+    const bool animate = isVisible() || m_edgeTransition;
+    const bool restoreVisibility = !isHidden() || m_edgeTransition;
+    LiquidPopup::hideText();
+    // Unmap before changing children, minimum size or geometry. A native
+    // child/compositor can expose those intermediate states even though the
+    // event handler has not returned yet. QWidget::grab can render offscreen.
+    hide();
+    hidePreview();
     // Reversing an in-flight reveal keeps the exact frame and progress.
     const auto *transition = static_cast<SmartRevealFrame *>(m_edgeTransition.data());
     const QPixmap snapshot = transition ? transition->frame
-        : (isVisible() ? grab() : QPixmap());
+        : (animate ? grab() : QPixmap());
     const int distances[] = {
         qAbs(current.left() - bounds.left()),
         qAbs(bounds.right() - current.right()),
@@ -2591,6 +2598,7 @@ void SmartSpaceWidget::hideToNearestEdge()
     m_geometrySaveTimer.start();
     update();
     if (!snapshot.isNull()) animateEdgeFrame(snapshot, current, false);
+    else if (restoreVisibility) show();
     if (qEnvironmentVariableIsSet("UKUI_FENCES_ANIMATION_PROFILE"))
         qInfo() << "[SmartTransition] retract preparation us:" << preparation.nsecsElapsed()/1000;
 }
@@ -2601,6 +2609,12 @@ void SmartSpaceWidget::revealFromEdge()
         return;
     QElapsedTimer preparation;
     preparation.start();
+    const bool animate = isVisible() || m_edgeTransition;
+    const bool restoreVisibility = !isHidden() || m_edgeTransition;
+    LiquidPopup::hideText();
+    // Keep the real surface unmapped throughout layout, material preparation
+    // and capture. It is shown only when the transition hands over its frame.
+    hide();
     // Keep the hidden-state guard active while restoring child visibility and
     // the minimum size.  Qt emits intermediate resize events here; allowing
     // those events to persist geometry would replace the saved expanded size
@@ -2628,7 +2642,8 @@ void SmartSpaceWidget::revealFromEdge()
     updateRoundedMask();
     m_geometrySaveTimer.start();
     update();
-    animateEdgeReveal();
+    if (animate) animateEdgeReveal();
+    else if (restoreVisibility) show();
     if (qEnvironmentVariableIsSet("UKUI_FENCES_ANIMATION_PROFILE"))
         qInfo() << "[SmartTransition] reveal preparation us:" << preparation.nsecsElapsed()/1000;
 }
@@ -2647,7 +2662,7 @@ void SmartSpaceWidget::finishEdgeTransition()
 
 void SmartSpaceWidget::animateEdgeReveal()
 {
-    if ((!isVisible() && !m_edgeTransition) || m_fenceEmbedded) return;
+    if (m_fenceEmbedded) return;
     const auto *transition = static_cast<SmartRevealFrame *>(m_edgeTransition.data());
     // Keep a value reference if a screen/geometry change retires the old frame.
     const QPixmap snapshot = transition ? transition->frame : grab();
