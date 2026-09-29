@@ -59,6 +59,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "appearance_test.h"
 #include "icon_appearance_test.h"
 #include "clipboard_test.h"
+#include "folder_drop_undo_test.h"
 #include "icon_damage_test.h"
 #include "smart_interaction_test.h"
 #include "review_async_test.h"
@@ -91,6 +92,8 @@ int main(int argc, char **argv)
         return runSmartInteractionTest(isolated.path());
     if (app.arguments().contains("--icon-damage-only"))
         return runIconDamageTest(isolated.path());
+    if (app.arguments().contains("--folder-drop-undo-only"))
+        return runFolderDropUndoTest(isolated.path());
     if (app.arguments().contains("--clipboard-only"))
         return runClipboardTest(isolated.path());
     if (app.arguments().contains("--icon-appearance-only"))

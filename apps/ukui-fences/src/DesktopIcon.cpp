@@ -1,4 +1,5 @@
 #include "DesktopIcon.h"
+#include "DesktopCanvas.h"
 #include "FileClipboard.h"
 #include "MenuStyle.h"
 
@@ -1148,13 +1149,17 @@ void DesktopIcon::dropEvent(QDropEvent *e)
         Qt::DropAction action = e->mimeData()->hasFormat(kInternalFileDragMime)
             ? Qt::MoveAction : e->proposedAction();
         if (action == Qt::IgnoreAction) action = Qt::MoveAction;
-        accepted = FileClipboard::transferFilesAsync(paths, m_item.filePath,
-            action == Qt::MoveAction, true, this,
-            [this](const FileClipboard::PasteResult &result) {
-                m_folderDetails.clear(); updateToolTip();
-                if (!result.failedPaths.isEmpty())
-                    QMessageBox::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
-            });
+        // The canvas outlives icons rebuilt by file watchers during a transfer.
+        for (QWidget *owner = parentWidget(); owner; owner = owner->parentWidget()) {
+            if (auto *canvas = qobject_cast<DesktopCanvas *>(owner)) {
+                const QPointer<DesktopIcon> guard(this);
+                accepted = canvas->transferFilesToFolder(paths, m_item.filePath,
+                    action == Qt::MoveAction, [guard] {
+                        if (guard) { guard->m_folderDetails.clear(); guard->updateToolTip(); }
+                    });
+                break;
+            }
+        }
         e->setDropAction(action);
     }
     if (accepted) e->accept(); else e->ignore();

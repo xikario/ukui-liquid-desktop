@@ -3913,6 +3913,44 @@ void DesktopCanvas::recordPasteUndo(const FileClipboard::PasteResult &result,
     pushUndo(op);
 }
 
+bool DesktopCanvas::transferFilesToFolder(const QStringList &paths, const QString &targetDir,
+                                         bool move, std::function<void()> completed)
+{
+    // Capture ownership before watchers remove the source icons.
+    QMap<QString, QString> sourceFences;
+    QMap<QString, QPoint> sourcePositions;
+    for (const QString &path : paths) {
+        const QString source = normalizedStoredPath(path);
+        if (auto *fence = fenceContainingPath(source))
+            sourceFences.insert(source, fence->fenceId());
+        for (auto *icon : m_looseIcons)
+            if (sameStoredPath(icon->item().filePath, source))
+                sourcePositions.insert(source, icon->pos());
+    }
+    return FileClipboard::transferFilesAsync(paths, targetDir, move, true, this,
+        [this, sourceFences, sourcePositions, completed](const FileClipboard::PasteResult &result) {
+            UndoOperation op;
+            op.type = UndoOperation::Type::FolderDrop;
+            op.move = result.move;
+            op.sourcePaths = result.placedSourcePaths;
+            op.targetPaths = result.transferredPaths;
+            for (const QString &source : op.sourcePaths) {
+                const QString key = normalizedStoredPath(source);
+                op.fenceIds << sourceFences.value(key);
+                if (sourcePositions.contains(key))
+                    op.loosePositions.insert(source, sourcePositions.value(key));
+            }
+            pushUndo(op); // Only successful transfers, never same-directory no-ops.
+            if (result.move) removePathsFromAllViews(result.placedSourcePaths);
+            refreshDesktopIcons();
+            syncCutVisualState();
+            saveLayout();
+            if (completed) completed();
+            if (!result.failedPaths.isEmpty())
+                QMessageBox::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+        });
+}
+
 bool DesktopCanvas::deletePathForUndo(const QString &path)
 {
     const QFileInfo fi(path);
@@ -4004,7 +4042,8 @@ void DesktopCanvas::undoLastOperation()
             const QString path=paths[i]; QString restored;
             bool ok=false;
             if (op.type==UndoOperation::Type::Trash) { restored=restoreTrashedPath(path); ok=!restored.isEmpty(); }
-            else if (op.type==UndoOperation::Type::Rename || (op.type==UndoOperation::Type::Paste && op.move)) {
+            else if (op.type==UndoOperation::Type::Rename ||
+                     ((op.type==UndoOperation::Type::Paste || op.type==UndoOperation::Type::FolderDrop) && op.move)) {
                 restored=op.sourcePaths.value(i); ok=!restored.isEmpty() && movePathForUndo(path,restored);
             } else ok=deletePathForUndo(path);
             if (!ok) result.failedPaths << path;
@@ -4015,8 +4054,11 @@ void DesktopCanvas::undoLastOperation()
         for (int i=0; i<result.placedPaths.size(); ++i) {
             const QString path=result.placedPaths[i], old=result.placedSourcePaths.value(i);
             const int index=(op.type==UndoOperation::Type::Trash ? op.sourcePaths : op.targetPaths).indexOf(old);
-            if (op.type==UndoOperation::Type::Trash || op.type==UndoOperation::Type::Rename) {
+            if (op.type==UndoOperation::Type::Trash || op.type==UndoOperation::Type::Rename ||
+                (op.type==UndoOperation::Type::FolderDrop && op.move)) {
                 if (auto *fence=fenceById(op.fenceIds.value(index))) {
+                    if (op.type == UndoOperation::Type::FolderDrop)
+                        removePathsFromAllViews({path});
                     fence->removeItem(old);
                     const auto item=DesktopItem::fromPath(path);
                     if (item.isValid()) { fence->addItem(item); removeLooseIcon(path); }
@@ -4024,11 +4066,28 @@ void DesktopCanvas::undoLastOperation()
             }
         }
         refreshDesktopIcons();
-        for (const auto &path:result.placedPaths)
-            if (!isInAnyFence(path) && isInDesktopDirectory(path)) placeFilesOnDesktop({path});
+        for (const auto &path:result.placedPaths) {
+            // A watcher may already have routed this newly restored file to the
+            // inbox. Explicit original loose placement takes precedence.
+            if (op.loosePositions.contains(path) && isInDesktopDirectory(path))
+                placeFilesOnDesktop({path}, op.loosePositions.value(path));
+            else if (!isInAnyFence(path) && isInDesktopDirectory(path))
+                placeFilesOnDesktop({path}, op.loosePositions.value(path, QPoint(-1, -1)));
+        }
         refreshTrashState(); syncCutVisualState(); saveLayout();
-        if (!result.failedPaths.isEmpty())
-            QMessageBox::warning(this,"撤回失败",QString("有 %1 个项目无法撤回。").arg(result.failedPaths.size()));
+        if (!result.failedPaths.isEmpty()) {
+            UndoOperation pending = op;
+            pending.sourcePaths.clear(); pending.targetPaths.clear(); pending.fenceIds.clear();
+            const QStringList paths = op.type == UndoOperation::Type::Trash ? op.sourcePaths : op.targetPaths;
+            for (int i = 0; i < paths.size(); ++i) {
+                if (!result.failedPaths.contains(paths[i])) continue;
+                if (i < op.sourcePaths.size()) pending.sourcePaths << op.sourcePaths[i];
+                if (i < op.targetPaths.size()) pending.targetPaths << op.targetPaths[i];
+                pending.fenceIds << op.fenceIds.value(i);
+            }
+            pushUndo(pending);
+            QMessageBox::warning(this,"撤回失败",QString("有 %1 个项目无法撤回，可能原位置已有同名项目或权限不足。\n未覆盖现有文件；处理后可再次撤回。").arg(result.failedPaths.size()));
+        }
     });
     if (!accepted) m_undoStack << op;
 }

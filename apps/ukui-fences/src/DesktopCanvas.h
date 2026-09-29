@@ -51,6 +51,8 @@ public:
 
     FenceWidget *createFence(const QString &title, const QRect &geo);
     void removeFence(FenceWidget *fence);
+    bool transferFilesToFolder(const QStringList &paths, const QString &targetDir,
+                               bool move, std::function<void()> completed = {});
     void setGlobalEditMode(bool edit);
     bool globalEditMode() const { return m_editMode; }
 
@@ -171,13 +173,15 @@ private:
             Create,
             Rename,
             Trash,
-            Paste
+            Paste,
+            FolderDrop
         };
 
         Type type = Type::Create;
         QStringList sourcePaths;
         QStringList targetPaths;
         QStringList fenceIds;
+        QMap<QString, QPoint> loosePositions;
         bool move = false;
     };
 

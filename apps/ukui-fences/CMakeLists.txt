@@ -151,6 +151,11 @@ if(BUILD_TESTING)
                     ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --appearance-only)
         set_tests_properties(desktop_appearance PROPERTIES TIMEOUT 30 LABELS "integration;ui;appearance"
             ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1;QT_SCREEN_SCALE_FACTORS=1")
+        add_test(NAME desktop_folder_drop_undo
+            COMMAND ${XVFB_RUN_EXECUTABLE} -a ${DBUS_RUN_SESSION_EXECUTABLE} --
+                $<TARGET_FILE:fence-glass-test> --folder-drop-undo-only)
+        set_tests_properties(desktop_folder_drop_undo PROPERTIES TIMEOUT 45 LABELS "integration;files"
+            ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1")
         add_test(NAME desktop_clipboard_async
             COMMAND ${XVFB_RUN_EXECUTABLE} -a ${DBUS_RUN_SESSION_EXECUTABLE} --
                 $<TARGET_FILE:fence-glass-test> --clipboard-only)
