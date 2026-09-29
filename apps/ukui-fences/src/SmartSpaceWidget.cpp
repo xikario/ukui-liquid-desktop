@@ -2516,6 +2516,7 @@ void SmartSpaceWidget::hideToNearestEdge()
         return;
 
     const QRect current(pos(), size());
+    const QPixmap snapshot = isVisible() ? grab() : QPixmap();
     const int distances[] = {
         qAbs(current.left() - bounds.left()),
         qAbs(bounds.right() - current.right()),
@@ -2567,10 +2568,12 @@ void SmartSpaceWidget::hideToNearestEdge()
     updateRoundedMask();
     m_geometrySaveTimer.start();
     update();
+    if (!snapshot.isNull()) animateEdgeFrame(snapshot, current, false);
 }
 
 void SmartSpaceWidget::revealFromEdge()
 {
+    finishEdgeTransition();
     if (!m_edgeHidden)
         return;
     // Keep the hidden-state guard active while restoring child visibility and
@@ -2615,20 +2618,29 @@ void SmartSpaceWidget::animateEdgeReveal()
 {
     if (!isVisible() || m_fenceEmbedded) return;
     finishEdgeTransition();
-    const QPixmap snapshot = grab();
+    animateEdgeFrame(grab(), geometry(), true);
+}
+
+void SmartSpaceWidget::animateEdgeFrame(const QPixmap &snapshot, const QRect &area, bool revealing)
+{
+    // Both directions share one immutable snapshot and a bounded repaint area.
+    // The live widget is already at its final geometry before animation starts.
     const Qt::WindowFlags flags = isWindow()
         ? Qt::Tool | Qt::FramelessWindowHint | Qt::BypassWindowManagerHint
         : Qt::Widget;
     auto *overlay = new SmartRevealFrame(parentWidget(), flags);
-    overlay->setGeometry(geometry());
+    overlay->setObjectName(revealing ? "smartSpaceRevealFrame" : "smartSpaceRetractFrame");
+    overlay->setGeometry(area);
     overlay->frame = snapshot;
+    overlay->progress = revealing ? 0.0 : 1.0;
     const QPoint offsets[] = {QPoint(-22,0), QPoint(22,0), QPoint(0,-22), QPoint(0,22)};
     overlay->offset = offsets[qBound(0,m_edgeSide,3)];
     m_edgeTransition = overlay;
     auto *animation = new QVariantAnimation(overlay);
-    animation->setDuration(170);
-    animation->setStartValue(0.0); animation->setEndValue(1.0);
-    animation->setEasingCurve(QEasingCurve::OutCubic);
+    animation->setDuration(revealing ? 170 : 150);
+    animation->setStartValue(revealing ? 0.0 : 1.0);
+    animation->setEndValue(revealing ? 1.0 : 0.0);
+    animation->setEasingCurve(revealing ? QEasingCurve::OutCubic : QEasingCurve::InCubic);
     connect(animation, &QVariantAnimation::valueChanged, overlay, [overlay](const QVariant &v) {
         overlay->progress = v.toReal(); overlay->update();
     });
@@ -2638,8 +2650,11 @@ void SmartSpaceWidget::animateEdgeReveal()
         if (m_edgeTransition) m_edgeTransition->deleteLater();
         m_edgeTransition = nullptr;
     });
-    hide();
+    // Keep the small edge button clickable during retraction so a quick
+    // second click can reverse the interaction immediately.
+    if (revealing) hide();
     overlay->show(); overlay->raise();
+    if (!revealing) raise();
     animation->start();
 }
 

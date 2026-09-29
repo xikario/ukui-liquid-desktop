@@ -114,6 +114,7 @@ private:
     void scheduleGlassBackdropRefresh();
     void finishEdgeTransition();
     void animateEdgeReveal();
+    void animateEdgeFrame(const QPixmap &snapshot, const QRect &area, bool revealing);
     void applyMenuTheme(QMenu *menu) const;
     void setSimpleTheme(int mode, bool persist = true);
     void configureIndexScheduling();

@@ -1,6 +1,7 @@
 #include <QMessageBox>
 #include <QLabel>
 #include <QAbstractButton>
+#include <QVariantAnimation>
 
 static int runSmartInteractionTest(const QString &root)
 {
@@ -24,7 +25,19 @@ static int runSmartInteractionTest(const QString &root)
         for (int i=0;i<3;++i) {
             smart->hideToNearestEdge();
             check(smart->edgeHidden(),"collapse remains available during rapid toggles");
+            auto *retract=canvas.findChild<QWidget *>("smartSpaceRetractFrame");
+            check(retract && retract->isVisible(),"collapse animates a cached frame");
+            check(retract && retract->geometry()==before,"retraction stays within expanded footprint");
+            check(smart->isVisible() && smart->size()==QSize(52,52),"edge entry remains clickable during retraction");
+            if (retract) {
+                auto *animation=retract->findChild<QVariantAnimation *>();
+                check(animation && animation->startValue().toReal()==1.0
+                    && animation->endValue().toReal()==0.0 && animation->loopCount()==1
+                    && animation->duration()<=170,"retraction is a short one-shot reverse transition");
+            }
+            settle(30);
             smart->revealFromEdge();
+            check(!canvas.findChild<QWidget *>("smartSpaceRetractFrame"),"reopen cancels retraction immediately");
             auto *frame=canvas.findChild<QWidget *>("smartSpaceRevealFrame");
             check(frame && frame->isVisible(),"reveal animates a visible cached frame");
             check(smart->geometry()==before,"animation does not resize/reflow live content");
@@ -34,6 +47,15 @@ static int runSmartInteractionTest(const QString &root)
         check(smart->isVisible() && !smart->edgeHidden(),"live content restored after reveal");
         check(!canvas.findChild<QWidget *>("smartSpaceRevealFrame"),"transition frame released after completion");
         check(smart->geometry()==before,"rapid toggles retain expanded geometry");
+        smart->hideToNearestEdge();
+        const QRect collapsed=smart->geometry();
+        settle(250);
+        check(smart->isVisible() && smart->edgeHidden() && smart->geometry()==collapsed,
+            "completed retraction leaves the edge entry at its final location");
+        check(!canvas.findChild<QWidget *>("smartSpaceRetractFrame"),
+            "retraction releases its frame and animation when idle");
+        smart->revealFromEdge(); settle(250);
+        check(smart->geometry()==before,"reveal after completed retraction preserves original geometry");
     }
     canvas.setSmartSpaceAlwaysOnTop(false); settle(100);
     auto *toggle=smart->findChild<QToolButton *>("smartThemeToggle");
