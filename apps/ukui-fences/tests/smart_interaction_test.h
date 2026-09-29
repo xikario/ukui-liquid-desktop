@@ -2,6 +2,7 @@
 #include <QLabel>
 #include <QAbstractButton>
 #include <QVariantAnimation>
+#include <QGraphicsOpacityEffect>
 
 static int runSmartInteractionTest(const QString &root)
 {
@@ -12,6 +13,19 @@ static int runSmartInteractionTest(const QString &root)
     settings.setValue("smartSpace/autoStart", false);
     settings.setValue("systemMonitor/autoStart", false);
     settings.sync();
+    // Exercise the populated card hierarchy, not just an empty search pane.
+    QJsonArray items;
+    for (int i=0; i<120; ++i) {
+        const QString path = root + QString("/document-%1.txt").arg(i);
+        QFile file(path); file.open(QIODevice::WriteOnly); file.write("fixture");
+        items.append(QJsonObject{{"path", path}, {"root", root},
+            {"category", "text"}, {"content", "animation fixture"}});
+    }
+    const QString indexDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+        + "/smart-space";
+    QDir().mkpath(indexDir);
+    QFile index(indexDir + "/index.json"); index.open(QIODevice::WriteOnly);
+    index.write(QJsonDocument(QJsonObject{{"items", items}}).toJson()); index.close();
     DesktopCanvas canvas;
     canvas.show(); canvas.showSmartSpaceWidget();
     canvas.moveSmartSpace(100,100); canvas.resizeSmartSpace(800,500);
@@ -19,6 +33,8 @@ static int runSmartInteractionTest(const QString &root)
     auto *smart=canvas.findChild<SmartSpaceWidget *>();
     check(smart!=nullptr,"Smart Space exists");
     if (!smart) return 1;
+    check(smart->findChildren<QWidget *>("fileResultCard").size() >= 100,
+          "transition regression includes a full page of file cards");
     for (bool pinned : {false,true}) {
         canvas.setSmartSpaceAlwaysOnTop(pinned); settle(100);
         const QRect before=smart->geometry();
@@ -31,21 +47,34 @@ static int runSmartInteractionTest(const QString &root)
             check(smart->isVisible() && smart->size()==QSize(52,52),"edge entry remains clickable during retraction");
             if (retract) {
                 auto *animation=retract->findChild<QVariantAnimation *>();
-                check(animation && animation->startValue().toReal()==1.0
+                check(animation && animation->startValue().toReal()>=0.0
+                    && animation->startValue().toReal()<=1.0
                     && animation->endValue().toReal()==0.0 && animation->loopCount()==1
-                    && animation->duration()<=170,"retraction is a short one-shot reverse transition");
+                    && animation->duration()<=200,"retraction is a short one-shot reverse transition");
             }
             settle(30);
+            auto *closingAnimation = retract ? retract->findChild<QVariantAnimation *>() : nullptr;
+            const qreal closingProgress = closingAnimation ? closingAnimation->currentValue().toReal() : -1;
+            auto *edge = smart->findChild<QToolButton *>("smartEdgeReveal");
+            auto *opacity = edge ? qobject_cast<QGraphicsOpacityEffect *>(edge->graphicsEffect()) : nullptr;
+            check(opacity && qAbs(opacity->opacity() - (1-closingProgress)) < 0.001,
+                  "edge entry fades in with the retracting content");
             smart->revealFromEdge();
             check(!canvas.findChild<QWidget *>("smartSpaceRetractFrame"),"reopen cancels retraction immediately");
             auto *frame=canvas.findChild<QWidget *>("smartSpaceRevealFrame");
             check(frame && frame->isVisible(),"reveal animates a visible cached frame");
+            auto *openingAnimation = frame ? frame->findChild<QVariantAnimation *>() : nullptr;
+            check(frame == retract && openingAnimation
+                      && qAbs(openingAnimation->startValue().toReal()-closingProgress)<0.001,
+                  "reversal reuses the frame and continues at exactly the current progress");
             check(smart->geometry()==before,"animation does not resize/reflow live content");
             settle(30);
         }
         settle(250);
         check(smart->isVisible() && !smart->edgeHidden(),"live content restored after reveal");
         check(!canvas.findChild<QWidget *>("smartSpaceRevealFrame"),"transition frame released after completion");
+        check(!smart->findChild<QToolButton *>("smartEdgeReveal")->graphicsEffect(),
+              "entry effect is released when animation is idle");
         check(smart->geometry()==before,"rapid toggles retain expanded geometry");
         smart->hideToNearestEdge();
         const QRect collapsed=smart->geometry();

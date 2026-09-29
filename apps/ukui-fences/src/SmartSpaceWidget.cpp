@@ -14,6 +14,7 @@
 #include <QCryptographicHash>
 #include <QCursor>
 #include <QDateTime>
+#include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -24,6 +25,8 @@
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QFrame>
+#include <QGraphicsOpacityEffect>
+#include <QElapsedTimer>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHash>
@@ -164,6 +167,7 @@ public:
     QPixmap frame;
     qreal progress = 0;
     QPoint offset;
+    QVariantAnimation *motion = nullptr;
     explicit SmartRevealFrame(QWidget *parent, Qt::WindowFlags flags)
         : QWidget(parent, flags)
     {
@@ -2492,9 +2496,10 @@ QPoint SmartSpaceWidget::boundedPosition(const QPoint &position) const
 
 void SmartSpaceWidget::hideToNearestEdge()
 {
-    finishEdgeTransition();
     if (m_fenceEmbedded || m_edgeHidden)
         return;
+    QElapsedTimer preparation;
+    preparation.start();
     const QPoint railAnchorGlobal = m_closeButton
         ? m_closeButton->mapToGlobal(m_closeButton->rect().center())
         : mapToGlobal(rect().center());
@@ -2516,7 +2521,10 @@ void SmartSpaceWidget::hideToNearestEdge()
         return;
 
     const QRect current(pos(), size());
-    const QPixmap snapshot = isVisible() ? grab() : QPixmap();
+    // Reversing an in-flight reveal keeps the exact frame and progress.
+    const auto *transition = static_cast<SmartRevealFrame *>(m_edgeTransition.data());
+    const QPixmap snapshot = transition ? transition->frame
+        : (isVisible() ? grab() : QPixmap());
     const int distances[] = {
         qAbs(current.left() - bounds.left()),
         qAbs(bounds.right() - current.right()),
@@ -2569,13 +2577,16 @@ void SmartSpaceWidget::hideToNearestEdge()
     m_geometrySaveTimer.start();
     update();
     if (!snapshot.isNull()) animateEdgeFrame(snapshot, current, false);
+    if (qEnvironmentVariableIsSet("UKUI_FENCES_ANIMATION_PROFILE"))
+        qInfo() << "[SmartTransition] retract preparation us:" << preparation.nsecsElapsed()/1000;
 }
 
 void SmartSpaceWidget::revealFromEdge()
 {
-    finishEdgeTransition();
     if (!m_edgeHidden)
         return;
+    QElapsedTimer preparation;
+    preparation.start();
     // Keep the hidden-state guard active while restoring child visibility and
     // the minimum size.  Qt emits intermediate resize events here; allowing
     // those events to persist geometry would replace the saved expanded size
@@ -2604,58 +2615,94 @@ void SmartSpaceWidget::revealFromEdge()
     m_geometrySaveTimer.start();
     update();
     animateEdgeReveal();
+    if (qEnvironmentVariableIsSet("UKUI_FENCES_ANIMATION_PROFILE"))
+        qInfo() << "[SmartTransition] reveal preparation us:" << preparation.nsecsElapsed()/1000;
 }
 
 void SmartSpaceWidget::finishEdgeTransition()
 {
     if (!m_edgeTransition) return;
     delete m_edgeTransition.data();
+    m_edgeTransition = nullptr;
+    m_edgeRevealButton->setGraphicsEffect(nullptr);
     show();
     raise();
+    emit geometryChanged();
 }
 
 void SmartSpaceWidget::animateEdgeReveal()
 {
-    if (!isVisible() || m_fenceEmbedded) return;
-    finishEdgeTransition();
-    animateEdgeFrame(grab(), geometry(), true);
+    if ((!isVisible() && !m_edgeTransition) || m_fenceEmbedded) return;
+    const auto *transition = static_cast<SmartRevealFrame *>(m_edgeTransition.data());
+    // Keep a value reference if a screen/geometry change retires the old frame.
+    const QPixmap snapshot = transition ? transition->frame : grab();
+    animateEdgeFrame(snapshot, geometry(), true);
 }
 
 void SmartSpaceWidget::animateEdgeFrame(const QPixmap &snapshot, const QRect &area, bool revealing)
 {
-    // Both directions share one immutable snapshot and a bounded repaint area.
-    // The live widget is already at its final geometry before animation starts.
-    const Qt::WindowFlags flags = isWindow()
-        ? Qt::Tool | Qt::FramelessWindowHint | Qt::BypassWindowManagerHint
-        : Qt::Widget;
-    auto *overlay = new SmartRevealFrame(parentWidget(), flags);
+    // Reuse a single frame and timeline when the user reverses direction.
+    // Layout changes once per interaction, never once per animation frame.
+    auto *overlay = static_cast<SmartRevealFrame *>(m_edgeTransition.data());
+    if (overlay && overlay->geometry() != area) {
+        finishEdgeTransition();
+        overlay = nullptr;
+    }
+    if (!overlay) {
+        const Qt::WindowFlags flags = isWindow()
+            ? Qt::Tool | Qt::FramelessWindowHint | Qt::BypassWindowManagerHint
+            : Qt::Widget;
+        overlay = new SmartRevealFrame(parentWidget(), flags);
+        overlay->setGeometry(area);
+        overlay->frame = snapshot;
+        overlay->progress = revealing ? 0.0 : 1.0;
+        const QPoint offsets[] = {QPoint(-22,0), QPoint(22,0), QPoint(0,-22), QPoint(0,22)};
+        overlay->offset = offsets[qBound(0,m_edgeSide,3)];
+        m_edgeTransition = overlay;
+        auto *opacity = new QGraphicsOpacityEffect(m_edgeRevealButton);
+        m_edgeRevealButton->setGraphicsEffect(opacity);
+        auto *animation = new QVariantAnimation(overlay);
+        overlay->motion = animation;
+        animation->setEasingCurve(QEasingCurve::InOutCubic);
+        connect(animation, &QVariantAnimation::valueChanged, overlay,
+                [overlay, opacity](const QVariant &v) {
+            overlay->progress = v.toReal();
+            opacity->setOpacity(1.0 - overlay->progress);
+            overlay->update();
+        });
+        connect(animation, &QVariantAnimation::finished, this, [this, overlay] {
+            if (m_edgeTransition != overlay) return;
+            show(); raise();
+            m_edgeTransition = nullptr;
+            // Stop painting immediately; deferred deletion must not leave an
+            // old transparent frame above a newly started interaction.
+            overlay->hide();
+            overlay->deleteLater();
+            m_edgeRevealButton->setGraphicsEffect(nullptr);
+            emit geometryChanged();
+        });
+    }
+    overlay->motion->stop();
+    const qreal startProgress = overlay->progress;
     overlay->setObjectName(revealing ? "smartSpaceRevealFrame" : "smartSpaceRetractFrame");
-    overlay->setGeometry(area);
-    overlay->frame = snapshot;
-    overlay->progress = revealing ? 0.0 : 1.0;
-    const QPoint offsets[] = {QPoint(-22,0), QPoint(22,0), QPoint(0,-22), QPoint(0,22)};
-    overlay->offset = offsets[qBound(0,m_edgeSide,3)];
-    m_edgeTransition = overlay;
-    auto *animation = new QVariantAnimation(overlay);
-    animation->setDuration(revealing ? 170 : 150);
-    animation->setStartValue(revealing ? 0.0 : 1.0);
-    animation->setEndValue(revealing ? 1.0 : 0.0);
-    animation->setEasingCurve(revealing ? QEasingCurve::OutCubic : QEasingCurve::InCubic);
-    connect(animation, &QVariantAnimation::valueChanged, overlay, [overlay](const QVariant &v) {
-        overlay->progress = v.toReal(); overlay->update();
-    });
-    connect(animation, &QVariantAnimation::finished, this, [this] {
-        // Map the live, already laid-out content before removing its snapshot.
-        show(); raise();
-        if (m_edgeTransition) m_edgeTransition->deleteLater();
-        m_edgeTransition = nullptr;
-    });
-    // Keep the small edge button clickable during retraction so a quick
-    // second click can reverse the interaction immediately.
+    const qreal target = revealing ? 1.0 : 0.0;
+    const qreal remaining = qAbs(target - startProgress);
+    {
+        // Setters recalculate currentValue even while stopped. Do not let
+        // those intermediate values overwrite the frame being reversed.
+        const QSignalBlocker blocker(overlay->motion);
+        overlay->motion->setDuration(qMax(1, qRound(180 * remaining)));
+        overlay->motion->setStartValue(startProgress);
+        overlay->motion->setEndValue(target);
+        overlay->motion->setCurrentTime(0);
+    }
+    static_cast<QGraphicsOpacityEffect *>(m_edgeRevealButton->graphicsEffect())
+        ->setOpacity(1.0 - overlay->progress);
     if (revealing) hide();
+    else show(); // The small entry keeps accepting clicks, even while fading in.
     overlay->show(); overlay->raise();
     if (!revealing) raise();
-    animation->start();
+    overlay->motion->start();
 }
 
 void SmartSpaceWidget::updateRoundedMask()
@@ -4383,13 +4430,13 @@ void SmartSpaceWidget::showPreviewForPath(const QString &path)
 
 void SmartSpaceWidget::hidePreview()
 {
-    if (m_previewProcess && m_previewProcess->state() != QProcess::NotRunning) {
-        m_previewProcess->kill();
-        m_previewProcess->waitForFinished(120);
-    }
+    // Invalidate the result before stopping the process. finished() is handled
+    // asynchronously and must not revive the preview during retraction.
     m_previewVisible = false;
     m_previewPath.clear();
     m_pendingPreviewImage.clear();
+    if (m_previewProcess && m_previewProcess->state() != QProcess::NotRunning)
+        m_previewProcess->kill();
     if (m_previewImage)
         m_previewImage->clear();
     if (m_previewImage)

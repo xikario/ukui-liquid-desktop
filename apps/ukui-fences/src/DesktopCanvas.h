@@ -78,6 +78,7 @@ public:
     QImage wallpaperBackdrop(const QRect &globalArea, qreal dpr) const;
 
 signals:
+    void initialWallpaperReady();
     void wallpaperChanged();
 
 public slots:
@@ -287,6 +288,7 @@ private:
     QColor m_iconAccent = QColor("#7faee8");
     QPixmap             m_wallpaper;
     bool m_glassPreparing = false;
+    bool m_initialWallpaperReady = false;
     bool m_wallpaperLoading = false;
     bool m_wallpaperReloadPending = false;
     QList<QProcess *>   m_wallpaperMonitors;

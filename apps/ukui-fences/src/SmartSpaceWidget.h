@@ -85,6 +85,7 @@ public:
     void hideToNearestEdge();
     void revealFromEdge();
     bool edgeHidden() const { return m_edgeHidden; }
+    bool edgeTransitionActive() const { return !m_edgeTransition.isNull(); }
     QColor fenceThemeColor() const { return m_surfaceColor; }
     QColor titleThemeColor() const { return m_textColor; }
     void refreshInheritedTheme();

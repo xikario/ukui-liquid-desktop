@@ -57,6 +57,7 @@ cmake --build apps/ukui-panel-liquid/build -j2
 - [源码收录范围及发布整理](docs/SOURCE_SCOPE.md)
 - [本次源码验证结果](docs/VALIDATION.md)
 - [2026-09-29 审查整改与本机验证](docs/CODE_REVIEW_2026-09-29_IMPLEMENTATION.md)
+- [智能空间开合与登录壁纸修复](docs/SMART_SPACE_STARTUP_2026-09-29.md)
 - [代码审阅与液态图标实现记录](docs/LIQUID_ICON_REVIEW.md)
 - [桌面小组件说明](apps/ukui-fences/docs/DESKTOP_WIDGETS.md)
 - [第三方来源与许可](THIRD_PARTY_NOTICES.md)

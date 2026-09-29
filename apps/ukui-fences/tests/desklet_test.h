@@ -195,7 +195,10 @@ static int runDeskletTest(const QString &root)
         recorder->flush();QFile f(recorder->dataPath());check(f.open(QIODevice::ReadOnly) && QJsonDocument::fromJson(f.readAll()).isObject(),"activity data saves atomically as valid local JSON");
     }
     {
-        DesktopCanvas canvas;canvas.show();settle(1900);
+        DesktopCanvas canvas;canvas.showAndActivate();
+        QElapsedTimer startup; startup.start();
+        while ((!canvas.clockWidgetVisible() || !canvas.activityWidgetVisible())
+               && startup.elapsed()<5000) settle(20);
         check(canvas.clockWidgetVisible() && canvas.activityWidgetVisible(),"saved startup choices restore both widgets");
         auto *clock=canvas.findChild<ClockDesklet *>();check(clock && clock->pos()==QPoint(123,145),"widget position survives host restart");
     }

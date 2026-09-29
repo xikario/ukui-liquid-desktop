@@ -710,7 +710,7 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
     // 从一开始就按桌面窗口处理，同时 QWidget 子控件仍保持正常父子层级。
     winId();
     applyX11DesktopHints();
-    show();
+    // Map only after the first wallpaper is ready; otherwise login flashes blue.
     setupAsDesktop();
     lockToDesktopGeometry();
     updateHotCornerGuards();
@@ -781,6 +781,9 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
         syncCutVisualState();
     });
     connect(m_smartSpaceRelayoutTimer, &QTimer::timeout, this, [this] {
+        // Edge transitions change widget geometry before their visual frame
+        // finishes. Defer icon collision/layout work until that frame is done.
+        if (m_smartSpace && m_smartSpace->edgeTransitionActive()) return;
         layoutLooseIcons();
         if (m_smartSpace && !m_smartSpace->isWindow())
             m_smartSpace->raise();
@@ -789,7 +792,6 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
             this, &DesktopCanvas::syncCutVisualState);
 
     loadLayout();
-    loadWallpaper();
     // Event-driven: changing wallpaper must also invalidate dependent glass
     // surfaces, even when the settings application does not call refreshAll.
     auto *wallpaperDebounce = new QTimer(this);
@@ -822,24 +824,30 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
     saveLayout();
     setFocus(Qt::OtherFocusReason);
 
-    QTimer::singleShot(1400, this, [this] {
-        if (LiquidDesklet::autoStartEnabled("clock")) setClockWidgetVisible(true);
-        if (LiquidDesklet::autoStartEnabled("activity")) setActivityWidgetVisible(true);
-        if (LiquidDesklet::autoStartEnabled("music")) setMusicWidgetVisible(true);
-        if (LiquidDesklet::autoStartEnabled("calendar")) setCalendarWidgetVisible(true);
-    });
+    connect(this, &DesktopCanvas::initialWallpaperReady, this, [this] {
+        QTimer::singleShot(1400, this, [this] {
+            if (LiquidDesklet::autoStartEnabled("clock")) setClockWidgetVisible(true);
+            if (LiquidDesklet::autoStartEnabled("activity")) setActivityWidgetVisible(true);
+            if (LiquidDesklet::autoStartEnabled("music")) setMusicWidgetVisible(true);
+            if (LiquidDesklet::autoStartEnabled("calendar")) setCalendarWidgetVisible(true);
+        });
 
-    // 若用户启用了"随 Fences 自动启动系统监控"，则自动创建小组件
-    if (SystemMonitor::autoStartEnabled()) {
-        QTimer::singleShot(800, this, [this] {
-            setSystemMonitorVisible(true);
-        });
-    }
-    if (SmartSpaceWidget::autoStartEnabled()) {
-        QTimer::singleShot(1100, this, [this] {
-            setSmartSpaceVisible(true);
-        });
-    }
+        // 若用户启用了"随 Fences 自动启动系统监控"，则自动创建小组件
+        if (SystemMonitor::autoStartEnabled()) {
+            QTimer::singleShot(800, this, [this] {
+                setSystemMonitorVisible(true);
+            });
+        }
+        if (SmartSpaceWidget::autoStartEnabled()) {
+            QTimer::singleShot(1100, this, [this] {
+                setSmartSpaceVisible(true);
+            });
+        }
+    });
+    // Start only after restoration hooks exist. Layout/icon initialization can
+    // run nested event loops; a fast worker must not show a half-built desktop
+    // or emit the one-shot readiness signal before those hooks are connected.
+    loadWallpaper();
 }
 
 DesktopCanvas::~DesktopCanvas()
@@ -869,6 +877,7 @@ DesktopCanvas::~DesktopCanvas()
 void DesktopCanvas::showAndActivate()
 {
     m_userHidden = false;
+    if (!m_initialWallpaperReady) return;
     show();
     setWindowState(windowState() & ~Qt::WindowMinimized);
     lockToDesktopGeometry();
@@ -934,7 +943,7 @@ void DesktopCanvas::activateOnSessionStartup()
     const int delays[] = { 0, 900, 2200, 4500, 8000, 13000 };
     for (const int delay : delays) {
         QTimer::singleShot(delay, this, [this] {
-            if (m_userHidden)
+            if (m_userHidden || !m_initialWallpaperReady)
                 return;
             show();
             setWindowState(windowState() & ~Qt::WindowMinimized);
@@ -1064,6 +1073,7 @@ void DesktopCanvas::restackDesktopLayer()
 {
     if (m_userHidden)
         m_userHidden = false;
+    if (!m_initialWallpaperReady) return;
 
     show();
     setWindowState(windowState() & ~Qt::WindowMinimized);
@@ -1075,7 +1085,7 @@ void DesktopCanvas::restackDesktopLayer()
     const int delays[] = { 120, 500, 1200 };
     for (const int delay : delays) {
         QTimer::singleShot(delay, this, [this] {
-            if (m_userHidden)
+            if (m_userHidden || !m_initialWallpaperReady)
                 return;
             show();
             lockToDesktopGeometry();
@@ -1327,6 +1337,13 @@ void DesktopCanvas::loadWallpaper()
         m_wallpaperUsingCustom = loaded.second;
         clearWallpaperCache(); rebuildWallpaperCache(); update();
         if (m_monitor) m_monitor->refreshWallpaperTheme();
+        if (!m_initialWallpaperReady) {
+            // Failed decoding must also release the gate so a missing image
+            // cannot leave the desktop and its controls inaccessible forever.
+            m_initialWallpaperReady = true;
+            if (!m_userHidden) showAndActivate();
+            emit initialWallpaperReady();
+        }
     });
 }
 
