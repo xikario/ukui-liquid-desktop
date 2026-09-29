@@ -73,6 +73,7 @@
 #include <QTextBrowser>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QVariantAnimation>
 #include <QtEndian>
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QDBusConnection>
@@ -91,6 +92,100 @@
 #endif
 
 namespace {
+
+// UKUI's native message helper ignores our surface styling but inherits its
+// light foreground. Keep confirmations inside a regular, explicitly styled
+// QDialog so the window and its text always use the same color scheme.
+QMessageBox::StandardButton smartMessage(QWidget *parent, const QString &title,
+    const QString &text, QMessageBox::Icon icon, QMessageBox::StandardButtons buttons,
+    QMessageBox::StandardButton defaultButton)
+{
+    QDialog dialog(parent);
+    dialog.setObjectName("smartSpaceMessage"); dialog.setWindowTitle(title);
+    const QColor inherited = parent->palette().color(QPalette::WindowText);
+    const bool dark = inherited.lightness() > 128;
+    const QString bg = dark ? "#182330" : "#f5f7fa";
+    const QString fg = dark ? "#f4f8fc" : "#182330";
+    const QString button = dark ? "#293d50" : "#e2e9f0";
+    QPalette pal = dialog.palette();
+    pal.setColor(QPalette::Window,QColor(bg));
+    pal.setColor(QPalette::WindowText,QColor(fg));
+    pal.setColor(QPalette::ButtonText,QColor(fg)); dialog.setPalette(pal);
+    dialog.setStyleSheet(QStringLiteral(
+        "QDialog#smartSpaceMessage { background: %1; color: %2; }"
+        "QDialog#smartSpaceMessage QLabel { color: %2; background: transparent; font-size: 14px; }"
+        "QDialog#smartSpaceMessage QPushButton { color: %2; background: %3; border: 1px solid #72869a;"
+        "border-radius: 7px; padding: 7px 18px; min-width: 58px; }"
+        "QDialog#smartSpaceMessage QPushButton:focus, QDialog#smartSpaceMessage QPushButton:hover {"
+        "border: 2px solid #339bdd; padding: 6px 17px; }").arg(bg,fg,button));
+    auto *layout = new QVBoxLayout(&dialog); layout->setContentsMargins(24,22,24,20);
+    auto *row = new QHBoxLayout; row->setSpacing(16);
+    auto *symbol = new QLabel(&dialog);
+    symbol->setPixmap(dialog.style()->standardIcon(icon==QMessageBox::Question
+        ? QStyle::SP_MessageBoxQuestion : icon==QMessageBox::Warning
+        ? QStyle::SP_MessageBoxWarning : QStyle::SP_MessageBoxInformation).pixmap(32,32));
+    row->addWidget(symbol,0,Qt::AlignTop);
+    auto *label = new QLabel(text,&dialog); label->setObjectName("smartMessageText");
+    label->setTextFormat(Qt::PlainText); label->setWordWrap(true); label->setMinimumWidth(380);
+    row->addWidget(label,1); layout->addLayout(row); layout->addSpacing(18);
+    auto *box = new QDialogButtonBox(&dialog); layout->addWidget(box);
+    QMessageBox::StandardButton result = QMessageBox::Cancel;
+    for (auto choice : {QMessageBox::Yes,QMessageBox::No,QMessageBox::Ok,QMessageBox::Cancel}) {
+        if (!buttons.testFlag(choice)) continue;
+        const bool startsTask = title == QStringLiteral("快速全量索引")
+            || title == QStringLiteral("OCR 检测与补全");
+        const QString caption = choice==QMessageBox::Yes ? (startsTask ? "开始" : "确定") : choice==QMessageBox::No
+            ? "取消" : choice==QMessageBox::Ok ? "确定" : "取消";
+        auto *buttonWidget = box->addButton(caption, choice==QMessageBox::Yes || choice==QMessageBox::Ok
+            ? QDialogButtonBox::AcceptRole : QDialogButtonBox::RejectRole);
+        buttonWidget->setProperty("messageChoice",int(choice));
+        buttonWidget->setDefault(choice==defaultButton);
+        if (choice==defaultButton) buttonWidget->setFocus();
+        QObject::connect(buttonWidget,&QPushButton::clicked,&dialog,[&dialog,&result,choice] {
+            result=choice; dialog.accept();
+        });
+    }
+    dialog.resize(560,dialog.sizeHint().height());
+    dialog.exec();
+    return result;
+}
+QMessageBox::StandardButton smartQuestion(QWidget *p,const QString &title,const QString &text,
+    QMessageBox::StandardButtons buttons,QMessageBox::StandardButton defaultButton)
+{ return smartMessage(p,title,text,QMessageBox::Question,buttons,defaultButton); }
+void smartInformation(QWidget *p,const QString &title,const QString &text)
+{ smartMessage(p,title,text,QMessageBox::Information,QMessageBox::Ok,QMessageBox::Ok); }
+void smartWarning(QWidget *p,const QString &title,const QString &text)
+{ smartMessage(p,title,text,QMessageBox::Warning,QMessageBox::Ok,QMessageBox::Ok); }
+
+// Animate a single captured frame, not the file-card hierarchy or its layout.
+class SmartRevealFrame final : public QWidget
+{
+public:
+    QPixmap frame;
+    qreal progress = 0;
+    QPoint offset;
+    explicit SmartRevealFrame(QWidget *parent, Qt::WindowFlags flags)
+        : QWidget(parent, flags)
+    {
+        setObjectName("smartSpaceRevealFrame");
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        if (isWindow()) setAttribute(Qt::WA_TranslucentBackground);
+    }
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        if (isWindow()) {
+            p.setCompositionMode(QPainter::CompositionMode_Source);
+            p.fillRect(rect(), Qt::transparent);
+            p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        }
+        p.setOpacity(progress);
+        p.drawPixmap(QPoint(qRound(offset.x() * (1-progress)),
+                            qRound(offset.y() * (1-progress))), frame);
+    }
+};
 
 constexpr int kDefaultWidth = 920;
 constexpr int kDefaultHeight = 520;
@@ -706,6 +801,9 @@ SmartSpaceWidget::SmartSpaceWidget(bool fenceEmbedded, QWidget *parent)
 
     buildUi();
     restoreSettings();
+    m_geometrySaveTimer.setSingleShot(true);
+    m_geometrySaveTimer.setInterval(250);
+    connect(&m_geometrySaveTimer, &QTimer::timeout, this, &SmartSpaceWidget::saveSettings);
     m_glassBackdropRefreshTimer.setSingleShot(true);
     connect(&m_glassBackdropRefreshTimer, &QTimer::timeout,
             this, &SmartSpaceWidget::refreshGlassBackdrop);
@@ -833,6 +931,8 @@ SmartSpaceWidget::SmartSpaceWidget(bool fenceEmbedded, QWidget *parent)
 
 SmartSpaceWidget::~SmartSpaceWidget()
 {
+    delete m_edgeTransition.data();
+    m_geometrySaveTimer.stop();
     m_glassPointerTimer.stop();
     saveSettings();
     if (m_indexer && m_indexer->state() != QProcess::NotRunning) {
@@ -2263,6 +2363,7 @@ void SmartSpaceWidget::setResultDensity(int density)
 
 void SmartSpaceWidget::recreateNativeSurface(bool translucent)
 {
+    finishEdgeTransition();
     // WA_TranslucentBackground affects the X11 visual chosen while the native
     // window is created.  Reparenting an already-created 24-bit child window
     // is insufficient: Qt otherwise keeps the old visual and the alpha edge
@@ -2300,6 +2401,11 @@ void SmartSpaceWidget::refreshGlassBackdrop()
     if (m_themeMode != 3 || m_edgeHidden || width() < 2 || height() < 2)
         return;
 
+    const QRect sampleGeometry(mapToGlobal(QPoint()), size());
+    const qreal sampleDpr = devicePixelRatioF();
+    if (!m_glassBackdrop.isNull() && m_glassBackdropGeometry == sampleGeometry
+        && qFuzzyCompare(m_glassBackdropDpr, sampleDpr)) return;
+
     // Sample the canvas' final wallpaper cache directly. Hiding and grabbing
     // the X11 root can capture the previous compositor frame (or this window).
     DesktopCanvas *canvas = nullptr;
@@ -2331,6 +2437,8 @@ void SmartSpaceWidget::refreshGlassBackdrop()
             QRect(local, QSize(width(), height())));
     }
 
+    m_glassBackdropGeometry = sampleGeometry;
+    m_glassBackdropDpr = sampleDpr;
     m_glassBackdrop = {};
     if (!source.isNull()) {
         const QImage image = source.toImage().convertToFormat(
@@ -2384,6 +2492,7 @@ QPoint SmartSpaceWidget::boundedPosition(const QPoint &position) const
 
 void SmartSpaceWidget::hideToNearestEdge()
 {
+    finishEdgeTransition();
     if (m_fenceEmbedded || m_edgeHidden)
         return;
     const QPoint railAnchorGlobal = m_closeButton
@@ -2456,7 +2565,7 @@ void SmartSpaceWidget::hideToNearestEdge()
     move(target);
     m_edgeRevealButton->setGeometry(rect());
     updateRoundedMask();
-    saveSettings();
+    m_geometrySaveTimer.start();
     update();
 }
 
@@ -2481,14 +2590,57 @@ void SmartSpaceWidget::revealFromEdge()
     resize(restoredSize);
     move(boundedPosition(restoredPosition));
     m_edgeHidden = false;
-    scheduleGlassBackdropRefresh();
+    updateResponsiveLayout();
+    if (layout()) layout()->activate();
+    refreshGlassBackdrop();
     if (m_themeMode == 3 && !m_fenceEmbedded)
         m_glassPointerTimer.start();
     m_expandedSize = size();
     m_expandedPosition = pos();
     updateRoundedMask();
-    saveSettings();
+    m_geometrySaveTimer.start();
     update();
+    animateEdgeReveal();
+}
+
+void SmartSpaceWidget::finishEdgeTransition()
+{
+    if (!m_edgeTransition) return;
+    delete m_edgeTransition.data();
+    show();
+    raise();
+}
+
+void SmartSpaceWidget::animateEdgeReveal()
+{
+    if (!isVisible() || m_fenceEmbedded) return;
+    finishEdgeTransition();
+    const QPixmap snapshot = grab();
+    const Qt::WindowFlags flags = isWindow()
+        ? Qt::Tool | Qt::FramelessWindowHint | Qt::BypassWindowManagerHint
+        : Qt::Widget;
+    auto *overlay = new SmartRevealFrame(parentWidget(), flags);
+    overlay->setGeometry(geometry());
+    overlay->frame = snapshot;
+    const QPoint offsets[] = {QPoint(-22,0), QPoint(22,0), QPoint(0,-22), QPoint(0,22)};
+    overlay->offset = offsets[qBound(0,m_edgeSide,3)];
+    m_edgeTransition = overlay;
+    auto *animation = new QVariantAnimation(overlay);
+    animation->setDuration(170);
+    animation->setStartValue(0.0); animation->setEndValue(1.0);
+    animation->setEasingCurve(QEasingCurve::OutCubic);
+    connect(animation, &QVariantAnimation::valueChanged, overlay, [overlay](const QVariant &v) {
+        overlay->progress = v.toReal(); overlay->update();
+    });
+    connect(animation, &QVariantAnimation::finished, this, [this] {
+        // Map the live, already laid-out content before removing its snapshot.
+        show(); raise();
+        if (m_edgeTransition) m_edgeTransition->deleteLater();
+        m_edgeTransition = nullptr;
+    });
+    hide();
+    overlay->show(); overlay->raise();
+    animation->start();
 }
 
 void SmartSpaceWidget::updateRoundedMask()
@@ -2883,7 +3035,7 @@ void SmartSpaceWidget::startIdleFullIndex()
         return;
     }
     if (m_indexer && m_indexer->state() != QProcess::NotRunning) {
-        QMessageBox::information(this, QStringLiteral("索引任务正在运行"),
+        smartInformation(this, QStringLiteral("索引任务正在运行"),
             QStringLiteral("请等待当前索引完成后再启动快速全量。"));
         return;
     }
@@ -2892,7 +3044,7 @@ void SmartSpaceWidget::startIdleFullIndex()
         ? QStringLiteral("将从上次快速全量断点继续。")
         : QStringLiteral("将建立所有已配置目录的快速全量索引。");
     if (qEnvironmentVariableIntValue("UKUI_FENCES_TEST_CONFIRM_IDLE") != 1 &&
-        QMessageBox::question(this, QStringLiteral("快速全量索引"),
+        smartQuestion(this, QStringLiteral("快速全量索引"),
             operation + QStringLiteral(
                            "\n\n本次不限文件数，但不启动 Tesseract OCR。"
                            "可直接读取的 PDF/Office/WPS 正文会正常提取；"
@@ -2907,7 +3059,7 @@ void SmartSpaceWidget::startIdleFullIndex()
 void SmartSpaceWidget::startOcrIndex()
 {
     if (m_indexer && m_indexer->state() != QProcess::NotRunning) {
-        QMessageBox::information(this, QStringLiteral("索引任务正在运行"),
+        smartInformation(this, QStringLiteral("索引任务正在运行"),
             QStringLiteral("请等待当前任务完成，或先点击“暂停”。"));
         return;
     }
@@ -2925,7 +3077,7 @@ void SmartSpaceWidget::startOcrIndex()
         ? QStringLiteral("将从上次 OCR 断点继续。")
         : QStringLiteral("先检测所有候选 PDF 的文本层，仅将图片和无文本层 PDF 交给 OCR。");
     if (qEnvironmentVariableIntValue("UKUI_FENCES_TEST_CONFIRM_OCR") != 1 &&
-        QMessageBox::question(this, QStringLiteral("OCR 检测与补全"),
+        smartQuestion(this, QStringLiteral("OCR 检测与补全"),
             detail + QStringLiteral(
                 "\n\nPDF 会逐页识别，任务使用最低 CPU/I/O 优先级，"
                 "可随时暂停，已完成文件会保留在断点中。是否开始？"),
@@ -3867,7 +4019,7 @@ void SmartSpaceWidget::excludeFolderFromIndex(const QString &path)
     if (clean.isEmpty() || pathExcluded(clean))
         return;
     if (qEnvironmentVariableIntValue("UKUI_FENCES_TEST_CONFIRM_EXCLUDE") != 1 &&
-        QMessageBox::question(this, QStringLiteral("取消索引文件夹"),
+        smartQuestion(this, QStringLiteral("取消索引文件夹"),
             QStringLiteral("将从当前结果移除“%1”及其全部子项，后续增量、快速全量和 OCR 都会跳过。\n\n"
                            "文件本身不会删除，可在设置 → 索引范围中恢复。是否继续？")
                 .arg(clean),
@@ -5230,7 +5382,7 @@ void SmartSpaceWidget::showSettingsDialog()
             return;
         }
         if (QDir(target).exists()) {
-            const auto answer = QMessageBox::question(
+            const auto answer = smartQuestion(
                 &dialog, QStringLiteral("确认覆盖"),
                 QStringLiteral("目标目录已存在，是否覆盖其中同名文件？"),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
@@ -5316,7 +5468,7 @@ void SmartSpaceWidget::showSettingsDialog()
             equalsRoot = equalsRoot || clean == root;
         }
         if (!insideRoot || equalsRoot) {
-            QMessageBox::information(&dialog, QStringLiteral("不能添加"),
+            smartInformation(&dialog, QStringLiteral("不能添加"),
                 equalsRoot
                     ? QStringLiteral("如需取消整个根目录，请从“索引目录”中移除。")
                     : QStringLiteral("排除文件夹必须位于已配置的索引目录内。"));
@@ -5432,7 +5584,7 @@ void SmartSpaceWidget::showSettingsDialog()
             const QByteArray bytes = textEdit->toPlainText().toUtf8();
             const QJsonDocument document = QJsonDocument::fromJson(bytes, &parseError);
             if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
-                QMessageBox::warning(&editor, QStringLiteral("JSON 无效"),
+                smartWarning(&editor, QStringLiteral("JSON 无效"),
                                      parseError.errorString());
                 return;
             }
@@ -5441,7 +5593,7 @@ void SmartSpaceWidget::showSettingsDialog()
             if (!output.open(QIODevice::WriteOnly) ||
                 output.write(document.toJson(QJsonDocument::Indented)) < 0 ||
                 !output.commit()) {
-                QMessageBox::warning(&editor, QStringLiteral("保存失败"), path);
+                smartWarning(&editor, QStringLiteral("保存失败"), path);
                 return;
             }
             providerEdit->setText(path);
@@ -5461,7 +5613,7 @@ void SmartSpaceWidget::showSettingsDialog()
             roots << path;
     }
     if (roots.isEmpty()) {
-        QMessageBox::information(this, QStringLiteral("智能空间"),
+        smartInformation(this, QStringLiteral("智能空间"),
                                  QStringLiteral("至少需要保留一个可访问的索引目录。"));
         restoreTheme();
         return;
@@ -5517,7 +5669,7 @@ void SmartSpaceWidget::showSettingsDialog()
     const QStringList visibleExtensions = checkedFormats(
         visibleFormatList, &noVisibleFormats);
     if (noIndexFormats || noVisibleFormats) {
-        QMessageBox::information(this, QStringLiteral("智能空间"),
+        smartInformation(this, QStringLiteral("智能空间"),
             noIndexFormats
                 ? QStringLiteral("索引格式至少需要保留一项。")
                 : QStringLiteral("匹配文件显示格式至少需要保留一项。"));
@@ -5792,7 +5944,7 @@ void SmartSpaceWidget::resizeEvent(QResizeEvent *event)
     m_expandedPosition = pos();
     m_expandedSize = size();
     scheduleGlassBackdropRefresh();
-    saveSettings();
+    m_geometrySaveTimer.start();
     emit geometryChanged();
 }
 

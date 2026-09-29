@@ -60,3 +60,7 @@ cmake --build apps/ukui-panel-liquid/build -j2
 - [第三方来源与许可](THIRD_PARTY_NOTICES.md)
 
 项目按 **GPL-3.0-or-later** 发布；第三方文件保留各自原始许可，详见 [LICENSE](LICENSE) 和第三方声明。
+
+### 智能空间交互与文件管理器动画兼容
+
+智能空间支持缓存帧展开过渡，并修正三种皮肤下确认窗口的文字对比度。Peony 魔壶动画后方矩形模糊的可选兼容处理见 [说明](integration/peony/README.md)，本轮验证见 [交互修复记录](docs/SMART_SPACE_INTERACTION_REVIEW.md)。

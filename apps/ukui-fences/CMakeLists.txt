@@ -156,7 +156,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:fence-glass-test> --clipboard-only)
         set_tests_properties(desktop_clipboard_async PROPERTIES TIMEOUT 30 LABELS "integration;files")
         foreach(SCALE 1 1.5 2)
-            foreach(KIND appearance icon-appearance icon-damage)
+            foreach(KIND appearance icon-appearance icon-damage smart-interaction)
                 add_test(NAME desktop_${KIND}_${SCALE}
                     COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
                         ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --${KIND}-only)

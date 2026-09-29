@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QHash>
 #include <QPoint>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QString>
 #include <QStringList>
@@ -111,6 +112,8 @@ private:
     void buildUi();
     void applyTheme();
     void scheduleGlassBackdropRefresh();
+    void finishEdgeTransition();
+    void animateEdgeReveal();
     void applyMenuTheme(QMenu *menu) const;
     void setSimpleTheme(int mode, bool persist = true);
     void configureIndexScheduling();
@@ -268,6 +271,10 @@ private:
     QPoint m_expandedPosition;
     QSize m_expandedSize {920, 520};
     QImage m_glassBackdrop;
+    QRect m_glassBackdropGeometry;
+    qreal m_glassBackdropDpr = 0;
+    QPointer<QWidget> m_edgeTransition;
+    QTimer m_geometrySaveTimer;
     QTimer m_glassBackdropRefreshTimer;
     QTimer m_glassPointerTimer;
     QPoint m_glassPointerPosition;

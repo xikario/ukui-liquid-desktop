@@ -20,7 +20,7 @@ jobs:
           cmake --build build/fences -j2
       - name: Python, menu, file operation and HiDPI regressions
         working-directory: build/fences
-        run: ctest --output-on-failure -R '^smart_space_(indexer|knowledge)$|^liquid-popup|^desktop_(appearance|icon-appearance|icon-damage|clipboard)|^fence_glass_cpu$|^calendar_holiday_sync$'
+        run: ctest --output-on-failure -R '^smart_space_(indexer|knowledge)$|^liquid-popup|^desktop_(appearance|icon-appearance|icon-damage|smart-interaction|clipboard)|^fence_glass_cpu$|^calendar_holiday_sync$'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
