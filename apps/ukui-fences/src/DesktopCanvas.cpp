@@ -825,24 +825,19 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
     setFocus(Qt::OtherFocusReason);
 
     connect(this, &DesktopCanvas::initialWallpaperReady, this, [this] {
-        QTimer::singleShot(1400, this, [this] {
+        // Restore the light widgets before Smart Space parses its full index.
+        // The latter is synchronous today and must never block their startup.
+        QTimer::singleShot(0, this, [this] {
             if (LiquidDesklet::autoStartEnabled("clock")) setClockWidgetVisible(true);
             if (LiquidDesklet::autoStartEnabled("activity")) setActivityWidgetVisible(true);
             if (LiquidDesklet::autoStartEnabled("music")) setMusicWidgetVisible(true);
             if (LiquidDesklet::autoStartEnabled("calendar")) setCalendarWidgetVisible(true);
+            if (SystemMonitor::autoStartEnabled()) setSystemMonitorVisible(true);
+            // Allow the restored widgets to paint before loading the large index.
+            QTimer::singleShot(250, this, [this] {
+                if (SmartSpaceWidget::autoStartEnabled()) setSmartSpaceVisible(true);
+            });
         });
-
-        // 若用户启用了"随 Fences 自动启动系统监控"，则自动创建小组件
-        if (SystemMonitor::autoStartEnabled()) {
-            QTimer::singleShot(800, this, [this] {
-                setSystemMonitorVisible(true);
-            });
-        }
-        if (SmartSpaceWidget::autoStartEnabled()) {
-            QTimer::singleShot(1100, this, [this] {
-                setSmartSpaceVisible(true);
-            });
-        }
     });
     // Start only after restoration hooks exist. Layout/icon initialization can
     // run nested event loops; a fast worker must not show a half-built desktop
@@ -945,6 +940,10 @@ void DesktopCanvas::activateOnSessionStartup()
         QTimer::singleShot(delay, this, [this] {
             if (m_userHidden || !m_initialWallpaperReady)
                 return;
+            if (m_smartSpace && m_smartSpace->edgeTransitionActive()) {
+                QTimer::singleShot(220, this, &DesktopCanvas::applyX11DesktopHints);
+                return;
+            }
             show();
             setWindowState(windowState() & ~Qt::WindowMinimized);
             lockToDesktopGeometry();
@@ -1098,6 +1097,10 @@ void DesktopCanvas::restackDesktopLayer()
 
 void DesktopCanvas::applyX11DesktopHints()
 {
+    if (m_smartSpace && m_smartSpace->edgeTransitionActive()) {
+        QTimer::singleShot(220, this, &DesktopCanvas::applyX11DesktopHints);
+        return;
+    }
     // 双桌面层：Peony 始终映射在最底层作保底，Fences 也是桌面类型，
     // 但创建得更晚并在桌面层内置顶。这样 Win+D 仍显示 Fences，
     // Fences 隐藏或崩溃时则立即露出 Peony。
@@ -2431,6 +2434,17 @@ QString DesktopCanvas::desktopWidgetsStatus() const
         result.insert(w->objectName(), QJsonObject{{"visible",w->isVisible()}, {"x",w->x()}, {"y",w->y()},
             {"width",w->width()}, {"height",w->height()}, {"materialBuilds",w->materialBuilds()},
             {"gpu",w->property("liquidOpticalGpu").toBool()}});
+    }
+    return QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact));
+}
+
+QString DesktopCanvas::smartSpaceAnimationStatus() const
+{
+    QJsonObject result;
+    if (m_smartSpace) {
+        result.insert("active", m_smartSpace->edgeTransitionActive());
+        for (const auto *key : {"edgePaintFrames", "edgeMaxPaintGapMs", "edgeElapsedMs", "edgeCachedBackground"})
+            result.insert(key, QJsonValue::fromVariant(m_smartSpace->property(key)));
     }
     return QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact));
 }

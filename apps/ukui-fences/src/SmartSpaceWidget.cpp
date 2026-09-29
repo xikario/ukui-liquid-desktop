@@ -165,6 +165,11 @@ class SmartRevealFrame final : public QWidget
 {
 public:
     QPixmap frame;
+    QPixmap background;
+    QElapsedTimer paintClock;
+    qint64 previousPaintMs = -1;
+    qint64 maxPaintGapMs = 0;
+    int paintedFrames = 0;
     qreal progress = 0;
     QPoint offset;
     QVariantAnimation *motion = nullptr;
@@ -179,8 +184,14 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override
     {
+        const qint64 now = paintClock.isValid() ? paintClock.elapsed() : 0;
+        if (previousPaintMs >= 0) maxPaintGapMs = qMax(maxPaintGapMs, now-previousPaintMs);
+        previousPaintMs = now;
+        ++paintedFrames;
         QPainter p(this);
-        if (isWindow()) {
+        if (!background.isNull()) {
+            p.drawPixmap(0, 0, background);
+        } else if (isWindow()) {
             p.setCompositionMode(QPainter::CompositionMode_Source);
             p.fillRect(rect(), Qt::transparent);
             p.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -807,7 +818,10 @@ SmartSpaceWidget::SmartSpaceWidget(bool fenceEmbedded, QWidget *parent)
     restoreSettings();
     m_geometrySaveTimer.setSingleShot(true);
     m_geometrySaveTimer.setInterval(250);
-    connect(&m_geometrySaveTimer, &QTimer::timeout, this, &SmartSpaceWidget::saveSettings);
+    connect(&m_geometrySaveTimer, &QTimer::timeout, this, [this] {
+        if (m_edgeTransition) return; // completion schedules the deferred save
+        saveSettings();
+    });
     m_glassBackdropRefreshTimer.setSingleShot(true);
     connect(&m_glassBackdropRefreshTimer, &QTimer::timeout,
             this, &SmartSpaceWidget::refreshGlassBackdrop);
@@ -2625,6 +2639,7 @@ void SmartSpaceWidget::finishEdgeTransition()
     delete m_edgeTransition.data();
     m_edgeTransition = nullptr;
     m_edgeRevealButton->setGraphicsEffect(nullptr);
+    m_geometrySaveTimer.start();
     show();
     raise();
     emit geometryChanged();
@@ -2655,6 +2670,14 @@ void SmartSpaceWidget::animateEdgeFrame(const QPixmap &snapshot, const QRect &ar
         overlay = new SmartRevealFrame(parentWidget(), flags);
         overlay->setGeometry(area);
         overlay->frame = snapshot;
+        if (!isWindow() && parentWidget()) {
+            // A translucent child makes Qt repaint the desktop and overlapping
+            // siblings on every tick. Freeze the uncovered background once,
+            // then repaint this opaque local surface only (no root screenshot).
+            hide();
+            overlay->background = parentWidget()->grab(area);
+            overlay->setAttribute(Qt::WA_OpaquePaintEvent, !overlay->background.isNull());
+        }
         overlay->progress = revealing ? 0.0 : 1.0;
         const QPoint offsets[] = {QPoint(-22,0), QPoint(22,0), QPoint(0,-22), QPoint(0,22)};
         overlay->offset = offsets[qBound(0,m_edgeSide,3)];
@@ -2672,6 +2695,14 @@ void SmartSpaceWidget::animateEdgeFrame(const QPixmap &snapshot, const QRect &ar
         });
         connect(animation, &QVariantAnimation::finished, this, [this, overlay] {
             if (m_edgeTransition != overlay) return;
+            setProperty("edgePaintFrames", overlay->paintedFrames);
+            setProperty("edgeMaxPaintGapMs", overlay->maxPaintGapMs);
+            setProperty("edgeElapsedMs", overlay->paintClock.elapsed());
+            setProperty("edgeCachedBackground", !overlay->background.isNull());
+            if (qEnvironmentVariableIsSet("UKUI_FENCES_ANIMATION_PROFILE"))
+                qInfo() << "[SmartTransition] painted frames:" << overlay->paintedFrames
+                        << "max gap ms:" << overlay->maxPaintGapMs
+                        << "elapsed ms:" << overlay->paintClock.elapsed();
             show(); raise();
             m_edgeTransition = nullptr;
             // Stop painting immediately; deferred deletion must not leave an
@@ -2679,10 +2710,12 @@ void SmartSpaceWidget::animateEdgeFrame(const QPixmap &snapshot, const QRect &ar
             overlay->hide();
             overlay->deleteLater();
             m_edgeRevealButton->setGraphicsEffect(nullptr);
+            m_geometrySaveTimer.start();
             emit geometryChanged();
         });
     }
     overlay->motion->stop();
+    m_geometrySaveTimer.stop();
     const qreal startProgress = overlay->progress;
     overlay->setObjectName(revealing ? "smartSpaceRevealFrame" : "smartSpaceRetractFrame");
     const qreal target = revealing ? 1.0 : 0.0;
@@ -2702,6 +2735,10 @@ void SmartSpaceWidget::animateEdgeFrame(const QPixmap &snapshot, const QRect &ar
     else show(); // The small entry keeps accepting clicks, even while fading in.
     overlay->show(); overlay->raise();
     if (!revealing) raise();
+    overlay->paintClock.restart();
+    overlay->paintedFrames = 0;
+    overlay->previousPaintMs = -1;
+    overlay->maxPaintGapMs = 0;
     overlay->motion->start();
 }
 

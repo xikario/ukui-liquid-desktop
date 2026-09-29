@@ -46,5 +46,32 @@ static int runStartupWallpaperTest(const QString &root)
         settle(500);
         check(!canvas.isVisible(), "wallpaper completion cannot override hide during startup");
     }
+    {
+        for (const auto *key : {"clock", "activity", "music", "calendar"})
+            settings.setValue(QString("desklets/%1/autoStart").arg(key), true);
+        settings.setValue("smartSpace/autoStart", true);
+        settings.setValue("smartSpace/defaultHidden", true);
+        settings.sync();
+        DesktopCanvas canvas;
+        canvas.activateOnSessionStartup();
+        bool observed = false;
+        QElapsedTimer timer; timer.start();
+        while (timer.elapsed()<5000 && !observed) {
+            settle(10);
+            if (canvas.smartSpaceVisible()) {
+                check(canvas.clockWidgetVisible() && canvas.activityWidgetVisible()
+                      && canvas.musicWidgetVisible() && canvas.calendarWidgetVisible(),
+                      "all four auto-start widgets exist before Smart Space finishes startup");
+                observed = true;
+            }
+        }
+        check(observed, "session startup restores Smart Space after the small widgets");
+        // Keep exercising the default-hidden entry as created during login.
+        settle(500);
+        canvas.revealSmartSpaceFromEdge(); settle(250);
+        check(!canvas.smartSpaceEdgeHidden(), "first reveal works after automatic login collapse");
+        canvas.hideSmartSpaceToEdge(); settle(250);
+        check(canvas.smartSpaceEdgeHidden(), "first retract works after automatic login collapse");
+    }
     return failures ? 1 : 0;
 }

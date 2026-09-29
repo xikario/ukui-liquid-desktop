@@ -125,6 +125,7 @@ public slots:
     Q_SCRIPTABLE void setCalendarWidgetVisible(bool visible);
     Q_SCRIPTABLE bool calendarWidgetVisible() const;
     Q_SCRIPTABLE QString desktopWidgetsStatus() const;
+    Q_SCRIPTABLE QString smartSpaceAnimationStatus() const;
     Q_SCRIPTABLE void refreshAll();
     Q_SCRIPTABLE void activateOnSessionStartup();
     Q_SCRIPTABLE void quitApp();

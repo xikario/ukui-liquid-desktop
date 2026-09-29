@@ -44,6 +44,8 @@ static int runSmartInteractionTest(const QString &root)
             auto *retract=canvas.findChild<QWidget *>("smartSpaceRetractFrame");
             check(retract && retract->isVisible(),"collapse animates a cached frame");
             check(retract && retract->geometry()==before,"retraction stays within expanded footprint");
+            check(retract && (pinned || retract->testAttribute(Qt::WA_OpaquePaintEvent)),
+                  "desktop transition does not repaint transparent ancestors every frame");
             check(smart->isVisible() && smart->size()==QSize(52,52),"edge entry remains clickable during retraction");
             if (retract) {
                 auto *animation=retract->findChild<QVariantAnimation *>();
@@ -83,6 +85,8 @@ static int runSmartInteractionTest(const QString &root)
             "completed retraction leaves the edge entry at its final location");
         check(!canvas.findChild<QWidget *>("smartSpaceRetractFrame"),
             "retraction releases its frame and animation when idle");
+        check(smart->property("edgePaintFrames").toInt() > 1,
+              "completed transition records actual paint frames");
         smart->revealFromEdge(); settle(250);
         check(smart->geometry()==before,"reveal after completed retraction preserves original geometry");
     }
