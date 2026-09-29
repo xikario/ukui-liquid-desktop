@@ -1256,11 +1256,11 @@ void DesktopCanvas::syncScreenGeometry()
     updateHotCornerGuards();
 
     if (m_monitor) {
+        // Match drag/restore bounds: a monitor at y=0 must remain at the edge
+        // when the panel publishes its work area during login.
         const QPoint bounded(
-            qBound(16, m_monitor->x(),
-                   qMax(16, width() - m_monitor->width() - 16)),
-            qBound(16, m_monitor->y(),
-                   qMax(16, height() - m_monitor->height() - 16)));
+            qBound(0, m_monitor->x(), qMax(0, width() - m_monitor->width())),
+            qBound(0, m_monitor->y(), qMax(0, height() - m_monitor->height())));
         if (m_monitor->pos() != bounded)
             m_monitor->move(bounded);
     }

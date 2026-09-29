@@ -62,6 +62,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "icon_damage_test.h"
 #include "smart_interaction_test.h"
 #include "review_async_test.h"
+#include "monitor_placement_test.h"
 
 int main(int argc, char **argv)
 {
@@ -79,6 +80,8 @@ int main(int argc, char **argv)
     LiquidPopup::install(app);
     app.setOrganizationName("kylin");
     app.setApplicationName("ukui-fences");
+    if (app.arguments().contains("--monitor-placement-only"))
+        return runMonitorPlacementTest();
     if (app.arguments().contains("--review-async-only"))
         return runReviewAsyncTest(isolated.path());
     if (app.arguments().contains("--smart-interaction-only"))

@@ -329,6 +329,11 @@ install(FILES scripts/chinese_calendar.py scripts/holiday_sync.py scripts/china_
 install(FILES vendor/holiday-cn/LICENSE vendor/holiday-cn/README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/ukui-fences/holiday-cn)
 
 if(TARGET fence-glass-test)
+    add_test(NAME desktop_monitor_placement
+        COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
+            ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --monitor-placement-only)
+    set_tests_properties(desktop_monitor_placement PROPERTIES TIMEOUT 30
+        ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1" LABELS "integration;ui;screen")
     add_test(NAME desktop_review_async
         COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
             ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --review-async-only)

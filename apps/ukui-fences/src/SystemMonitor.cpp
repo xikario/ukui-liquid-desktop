@@ -1382,21 +1382,21 @@ QPoint SystemMonitor::boundedPosition(const QPoint &position) const
         return position;
     const QRect bounds = parentWidget()->rect();
     constexpr int snapDist = 32;  // 磁吸触发距离（像素）
+    const int maxX = std::max(bounds.left(), bounds.right() - width() + 1);
+    const int maxY = std::max(bounds.top(), bounds.bottom() - height() + 1);
 
-    int x = qBound(bounds.left(), position.x(),
-                   std::max(bounds.left(), bounds.right() - width() + 1));
-    int y = qBound(bounds.top(), position.y(),
-                   std::max(bounds.top(), bounds.bottom() - height() + 1));
+    int x = qBound(bounds.left(), position.x(), maxX);
+    int y = qBound(bounds.top(), position.y(), maxY);
 
     // 边缘磁吸：靠近屏幕边缘时自动吸附
     if (qAbs(x - bounds.left()) < snapDist)
         x = bounds.left();
-    if (qAbs(x + width() - bounds.right()) < snapDist)
-        x = bounds.right() - width();
+    if (qAbs(x - maxX) < snapDist)
+        x = maxX;
     if (qAbs(y - bounds.top()) < snapDist)
         y = bounds.top();
-    if (qAbs(y + height() - bounds.bottom()) < snapDist)
-        y = bounds.bottom() - height();
+    if (qAbs(y - maxY) < snapDist)
+        y = maxY;
 
     return QPoint(x, y);
 }
