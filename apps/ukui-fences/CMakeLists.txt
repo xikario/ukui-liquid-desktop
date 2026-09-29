@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ukui-fences VERSION 0.4.0 LANGUAGES CXX)
+project(ukui-fences VERSION 0.5.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CTest)

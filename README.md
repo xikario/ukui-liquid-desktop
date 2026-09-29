@@ -2,6 +2,12 @@
 
 面向银河麒麟 / UKUI X11 的 Qt 5 液态桌面组件集合。集中保存公共材质、开始菜单、桌面分区与小组件，以及系统任务栏的液态主题插件。
 
+## 当前版本
+
+**v0.5.0 · 桌面稳定性与文件操作升级**（2026-09-29），首个带标签的源码版本。包含本轮审查整改、智能空间开合与登录恢复、系统监视贴边恢复，以及文件夹拖放撤回。Fences 核心版本同步为 0.5.0，其他组件保留各自版本号。
+
+[GitHub Release](https://github.com/xikario/ukui-liquid-desktop/releases/tag/v0.5.0) · [更新日志](CHANGELOG.md) · [版本说明](docs/versions/v0.5.0.md)
+
 ## 上游代码与致谢
 
 本项目沿用、适配了 [SuceV587/NextKde](https://github.com/SuceV587/NextKde) 相关液态玻璃代码，并参考其桌面小组件设计。感谢原项目作者及贡献者的开源工作。
