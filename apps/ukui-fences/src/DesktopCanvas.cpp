@@ -3457,6 +3457,8 @@ void DesktopCanvas::layoutLooseIcons()
         return true;
     };
 
+    QRegion damage;
+    bool stackingChanged=false;
     for (int index = 0; index < m_looseIcons.size(); ++index) {
         DesktopIcon *icon = m_looseIcons[index];
         if (!icon) continue;
@@ -3507,18 +3509,21 @@ void DesktopCanvas::layoutLooseIcons()
         snapped.setY(qBound(area.top(), snapped.y(),
                             area.bottom() - icon->height()));
         m_looseIconPositions[path] = snapped;
-        icon->move(snapped);
-        icon->show();
-        icon->raise();
-        icon->update();
+        const bool moved=icon->pos()!=snapped;
+        const bool hidden=icon->isHidden();
+        if(moved || hidden) {
+            damage += icon->geometry();
+            icon->move(snapped);
+            icon->show();icon->raise();icon->update();
+            damage += icon->geometry();stackingChanged=true;
+        }
     }
-    for (auto *widget : {static_cast<LiquidDesklet *>(m_clockWidget),
+    if (stackingChanged) for (auto *widget : {static_cast<LiquidDesklet *>(m_clockWidget),
                          static_cast<LiquidDesklet *>(m_activityWidget), static_cast<LiquidDesklet *>(m_musicWidget), static_cast<LiquidDesklet *>(m_calendarWidget)})
         if (widget && widget->isVisible()) widget->raise();
-    // 用 repaint() 而不是 update()：桌面窗口是原生 X11 窗口，KWin
-    // compositor 可能在异步 update 到达之前缓存父控件的中间帧（仅壁纸、
-    // 不含子控件），导致新增图标只在重启后可见。
-    repaint();
+    // Unchanged periodic reconciliation must not repaint the entire desktop.
+    // Moving translucent children invalidates both footprints, not their union rectangle.
+    if(!damage.isEmpty()) update(damage);
 }
 
 void DesktopCanvas::removeLooseIcon(const QString &filePath)
@@ -4417,7 +4422,6 @@ void DesktopCanvas::dropEvent(QDropEvent *e)
                 - QPoint(icon->width() / 2, icon->height() / 2);
             disableAutoArrangeForManualPlacement();
             m_looseIconPositions[path] = pos;
-            icon->move(pos);
             icon->show();
             layoutLooseIcons();
             saveLayout();
@@ -4443,7 +4447,6 @@ void DesktopCanvas::dropEvent(QDropEvent *e)
             - QPoint(icon->width() / 2, icon->height() / 2);
         disableAutoArrangeForManualPlacement();
         m_looseIconPositions[item.filePath] = pos;
-        icon->move(pos);
         icon->show();
         layoutLooseIcons();
         saveLayout();
@@ -4503,7 +4506,6 @@ void DesktopCanvas::dropEvent(QDropEvent *e)
         }
 
         m_looseIconPositions[path] = pos;
-        existing->move(pos);
         pos += QPoint(18, 18);
     }
 
@@ -5134,7 +5136,7 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
             "<p>右键 → 桌面小组件，可切换智能空间、系统监视、时钟与倒计时、活动统计、"
             "Strawberry 音乐、日历与系统待办。对号表示已启用；智能空间可收起成贴边星标。</p>"
             "<p>活动统计记录前台应用停留时间；音乐组件通过 MPRIS 控制 Strawberry。"
-            "日历支持农历、节假日、年月滚轮和待办折叠；内置中国调休数据为 2026 年，系统待办只读。</p>"
+            "日历支持农历、节假日、年月滚轮和待办折叠；内置中国调休数据为 2026 年，日历右键可同步最新农历和已发布的节假日；系统待办只读。</p>"
             "<h3>自启动与外观</h3>"
             "<p>右键 → 设置与帮助 → 启动设置，独立设置各组件随 Fences 启动。"
             "“显示”与“自启动”是两个独立选项。</p>"
@@ -5279,6 +5281,7 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     sortModeMenu->insertSeparator(actExport);
     resetMenu(desktopSettingsMenu);
     desktopSettingsMenu->addAction(glassAction);
+    desktopSettingsMenu->addAction(iconStyleAction);
     desktopSettingsMenu->addAction(magnetAction);
     desktopSettingsMenu->addAction(previewAction);
     desktopSettingsMenu->addSeparator();

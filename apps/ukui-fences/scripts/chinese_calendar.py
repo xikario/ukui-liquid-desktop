@@ -9,6 +9,7 @@ import datetime as dt
 import json
 from pathlib import Path
 import re
+from holiday_sync import cache_directory, validate
 
 MONTHS = ('正月','二月','三月','四月','五月','六月','七月','八月','九月','十月','冬月','腊月')
 DAYS = tuple('初'+x for x in '一二三四五六七八九十') + tuple('十'+x for x in '一二三四五六七八九') + ('二十',) + tuple('廿'+x for x in '一二三四五六七八九') + ('三十',)
@@ -72,6 +73,18 @@ def metadata(begin,end):
     data=json.loads(Path(__file__).with_name('china_holidays_2026.json').read_text())
     known.add(data['year'])
     for item in data['days']:overrides[item['date']]={'off':item['isOffDay'],'holiday':item['name']}
+    # A valid downloaded year replaces that whole year's older overrides.
+    for year in range(begin.year, end.year + 1):
+        cached=cache_directory() / (str(year)+'.json')
+        if not cached.exists(): continue
+        try:
+            if cached.stat().st_size > 512*1024: continue
+            newer=validate(json.loads(cached.read_text(encoding='utf-8')),year)
+            overrides={key:value for key,value in overrides.items() if not key.startswith(str(year)+'-')}
+            for item in newer['days']:
+                overrides[item['date']]={'off':item['isOffDay'],'holiday':item['name']}
+            known.add(year)
+        except (OSError,ValueError,TypeError): pass
     result={}
     with LunarCalendar() as calendar:
         cursor=begin

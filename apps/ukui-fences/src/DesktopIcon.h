@@ -59,6 +59,7 @@ signals:
     void filesDroppedToTrash(const QStringList &paths);
 
 protected:
+    void moveEvent(QMoveEvent *) override;
     void paintEvent(QPaintEvent *)          override;
     void mousePressEvent(QMouseEvent *)     override;
     void mouseMoveEvent(QMouseEvent *)      override;

@@ -17,6 +17,15 @@ static int runCalendarTest(const QString &root){
         auto *list=calendar->findChild<QListWidget *>("calendarAgenda");check(list && list->count()==1 && list->item(0)->text().contains("系统待办测试"),"agenda shows native task title and time");
         canvas.setClockWidgetVisible(true);canvas.setActivityWidgetVisible(true);canvas.setMusicWidgetVisible(true);settle(100);
         check(canvas.findChildren<QPushButton *>("deskletClose").isEmpty(),"all new desklets have no close X button");
+        bool foundSync=false;
+        QTimer::singleShot(80,calendar,[&]{
+            auto *menu=qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            if(menu) {auto *action=menu->findChild<QAction *>("calendarSyncHolidays");
+                foundSync=action && menu->actions().contains(action) && action->isEnabled();menu->close();}
+        });
+        QContextMenuEvent menuEvent(QContextMenuEvent::Mouse,QPoint(20,20),calendar->mapToGlobal(QPoint(20,20)));
+        QApplication::sendEvent(calendar,&menuEvent);
+        check(foundSync,"calendar context menu exposes enabled holiday synchronization action");
         const int builds=calendar->materialBuilds();
         check(sql(QString("INSERT INTO Schedule VALUES('two','%1','%1','18','0','新增待办','不重复',0,0,'','');").arg(today)),"external system calendar update written");settle(600);
         check(calendar->scheduleCount()==2 && calendar->materialBuilds()==builds,"database watcher updates tasks without rebuilding glass");

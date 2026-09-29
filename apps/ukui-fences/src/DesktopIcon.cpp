@@ -7,6 +7,7 @@
 #include <QtMath>
 #include <QPixmapCache>
 #include <QMouseEvent>
+#include <QMoveEvent>
 #include <QContextMenuEvent>
 #include <QDrag>
 #include <QDragEnterEvent>
@@ -665,6 +666,17 @@ void DesktopIcon::finishInlineRename(bool commit)
 
 // ── 绘制 ─────────────────────────────────────────────────
 
+void DesktopIcon::moveEvent(QMoveEvent *event)
+{
+    QWidget::moveEvent(event);
+    // A translucent child must not carry a copied patch of its old wallpaper.
+    // Repaint only the previous and new footprints in the parent's coordinates.
+    if (isVisible() && parentWidget() && event->oldPos()!=event->pos()) {
+        parentWidget()->update(QRegion(QRect(event->oldPos(),size())) | QRegion(geometry()));
+        update();
+    }
+}
+
 void DesktopIcon::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
@@ -819,13 +831,15 @@ void DesktopIcon::mouseMoveEvent(QMouseEvent *e)
     if ((e->pos() - m_dragStart).manhattanLength()
             < QApplication::startDragDistance()) return;
     m_renameTimer.stop();
+    m_clickAnimTimer.stop();m_clickAnim=false;m_clickAnimProgress=0;
+    m_hovered=false;update();
     if (m_item.isSystemIcon) {
         auto *drag = new QDrag(this);
         auto *mime = new QMimeData;
         mime->setData(kSystemIconMime, m_item.filePath.toUtf8());
         drag->setMimeData(mime);
         const QPixmap preview=dragPixmap();
-    drag->setPixmap(preview);
+        drag->setPixmap(preview);
         drag->setHotSpot(QPoint(qRound(preview.width()/preview.devicePixelRatioF()/2),
                                qRound(preview.height()/preview.devicePixelRatioF()/2)));
         drag->exec(Qt::MoveAction);

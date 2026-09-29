@@ -60,6 +60,10 @@ static int runAppearanceTest(const QString &root)
             themeAction->trigger();
             check(canvas.fontColor() == QColor("#273344"), "wallpaper tint preserves explicit dark label preference");
         }
+        auto *appearance=menu->findChild<QMenu *>("desktopAppearanceMenu");
+        auto *iconStyle=menu->findChild<QAction *>("desktopIconAppearanceAction");
+        check(appearance && iconStyle && appearance->actions().contains(iconStyle),
+              "icon style action remains visible after final menu reordering");
         auto *widgets = menu->findChild<QMenu *>("desktopWidgetsMenu");
         check(widgets && widgets->actions().size()==6, "six widget visibility toggles available");
         if (widgets) {

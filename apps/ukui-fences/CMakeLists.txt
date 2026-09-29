@@ -92,6 +92,8 @@ if(BUILD_TESTING)
         set_tests_properties(smart_space_indexer PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             TIMEOUT 180)
+        add_test(NAME calendar_holiday_sync COMMAND ${Python3_EXECUTABLE} -m unittest -v tests/test_holiday_sync.py)
+        set_tests_properties(calendar_holiday_sync PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 30)
         add_test(NAME smart_space_knowledge
             COMMAND ${Python3_EXECUTABLE} -m unittest -v
                     tests/test_smart_space_knowledge.py)
@@ -154,7 +156,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:fence-glass-test> --clipboard-only)
         set_tests_properties(desktop_clipboard_async PROPERTIES TIMEOUT 30 LABELS "integration;files")
         foreach(SCALE 1 1.5 2)
-            foreach(KIND appearance icon-appearance)
+            foreach(KIND appearance icon-appearance icon-damage)
                 add_test(NAME desktop_${KIND}_${SCALE}
                     COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
                         ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --${KIND}-only)
@@ -323,5 +325,5 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
     add_test(NAME calendar_snapshot COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_calendar_snapshot.py)
 endif()
 
-install(FILES scripts/chinese_calendar.py scripts/china_holidays_2026.json DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES scripts/chinese_calendar.py scripts/holiday_sync.py scripts/china_holidays_2026.json DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES vendor/holiday-cn/LICENSE vendor/holiday-cn/README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/ukui-fences/holiday-cn)

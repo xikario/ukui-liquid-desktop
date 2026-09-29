@@ -24,6 +24,7 @@ protected:
     void extendMenu(QMenu &) override;
 private:
     void reload();
+    void syncCalendarData();
     void setAgendaCollapsed(bool collapsed);
     void showYearMenu();
     void showMonthMenu();
@@ -43,6 +44,7 @@ private:
     bool m_agendaCollapsed=false;
     int m_expandedHeight=390;
     QProcess *m_reader;
+    QProcess *m_holidaySync=nullptr;
     QFileSystemWatcher *m_watcher;
     QTimer m_debounce,m_dayTimer,m_timeout;
     bool m_allDates=true,m_again=false;

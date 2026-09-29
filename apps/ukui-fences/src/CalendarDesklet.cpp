@@ -2,6 +2,7 @@
 #include "DesktopCanvas.h"
 #include "LiquidPopup.h"
 #include <QSettings>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QCoreApplication>
@@ -176,7 +177,7 @@ CalendarDesklet::CalendarDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"ca
     m_agendaCollapsed=collapsed;setAgendaCollapsed(collapsed);
     updateDateButtons();rewatch();arrangeControls();reload();
 }
-CalendarDesklet::~CalendarDesklet(){if(!m_agendaCollapsed)QSettings().setValue("desklets/calendar/expandedHeight",height());if(m_reader->state()!=QProcess::NotRunning){m_reader->kill();m_reader->waitForFinished(500);}}
+CalendarDesklet::~CalendarDesklet(){if(m_holidaySync){disconnect(m_holidaySync,nullptr,this,nullptr);m_holidaySync->kill();m_holidaySync->waitForFinished(500);}if(!m_agendaCollapsed)QSettings().setValue("desklets/calendar/expandedHeight",height());if(m_reader->state()!=QProcess::NotRunning){m_reader->kill();m_reader->waitForFinished(500);}}
 void CalendarDesklet::rewatch(){
     QStringList wanted;for(const QString &p:{QFileInfo(m_database).absolutePath(),m_database,m_database+"-wal"})if(QFileInfo::exists(p))wanted<<p;
     const auto existing=m_watcher->files()+m_watcher->directories();for(const QString &p:wanted)if(!existing.contains(p))m_watcher->addPath(p);
@@ -303,4 +304,40 @@ void CalendarDesklet::openSystemCalendar(QDate d){
     auto *w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(msg,1500),this);
     connect(w,&QDBusPendingCallWatcher::finished,this,[this,w]{QDBusPendingReply<> r=*w;w->deleteLater();if(r.isError()){m_warning="系统日历暂未响应，请从任务栏打开";update();}});
 }
-void CalendarDesklet::extendMenu(QMenu &menu){connect(menu.addAction("打开系统日历"),&QAction::triggered,this,[this]{openSystemCalendar(m_selected);});connect(menu.addAction("刷新系统待办"),&QAction::triggered,this,&CalendarDesklet::reload);}
+void CalendarDesklet::syncCalendarData()
+{
+    if(m_holidaySync) return;
+    QString script=QCoreApplication::applicationDirPath()+"/holiday_sync.py";
+    if(!QFileInfo::exists(script)) script=QFileInfo(QString::fromUtf8(UKUI_FENCES_CALENDAR_READER_PATH)).dir().filePath("holiday_sync.py");
+    auto *process=new QProcess(this);m_holidaySync=process;
+    m_calendarWarning="正在同步农历和节假日…";update();
+    auto *timeout=new QTimer(process);timeout->setSingleShot(true);
+    connect(timeout,&QTimer::timeout,process,&QProcess::kill);
+    auto finish=[this,process,timeout](bool started) {
+        if(m_holidaySync!=process) return;
+        timeout->stop();m_holidaySync=nullptr;
+        const auto result=QJsonDocument::fromJson(process->readAllStandardOutput()).object();
+        const QString message=result["message"].toString();
+        m_calendarWarning=message.isEmpty()?"同步失败，保留原农历与节假日数据":message;
+        reload();update();
+        auto *notice=new QMessageBox(QMessageBox::Information,"农历和节假日同步",
+            message.isEmpty() ? (started?"网络或数据源暂不可用，原数据已保留。":"无法启动同步程序，原数据已保留。")
+                              : "农历按系统 ICU 重新计算。\n"+message,
+            QMessageBox::Ok,this);
+        notice->setAttribute(Qt::WA_DeleteOnClose);notice->open();process->deleteLater();
+    };
+    connect(process,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[finish](int,QProcess::ExitStatus){finish(true);});
+    connect(process,&QProcess::errorOccurred,this,[finish](QProcess::ProcessError e){if(e==QProcess::FailedToStart)finish(false);});
+    const int current=QDate::currentDate().year();
+    process->start("/usr/bin/python3",{script,"--year",QString::number(m_selected.year()),"--year",QString::number(current),"--year",QString::number(current+1)});
+    timeout->start(30000);
+}
+void CalendarDesklet::extendMenu(QMenu &menu)
+{
+    connect(menu.addAction("打开系统日历"),&QAction::triggered,this,[this]{openSystemCalendar(m_selected);});
+    connect(menu.addAction("刷新系统待办"),&QAction::triggered,this,&CalendarDesklet::reload);
+    auto *sync=menu.addAction(m_holidaySync?"正在同步农历和节假日…":"同步最新农历和节假日");
+    sync->setObjectName("calendarSyncHolidays");sync->setEnabled(!m_holidaySync);
+    sync->setToolTip("重新计算农历，从 holiday-cn 同步当前、所选及下一年的已发布调休数据；失败保留原数据。");
+    connect(sync,&QAction::triggered,this,&CalendarDesklet::syncCalendarData);
+}
