@@ -63,6 +63,8 @@ add_executable(ukui-kaishicaidan-v2
     src/RecentFiles.cpp
     src/SettingsDialog.cpp
     src/NextKdeGlassView.cpp
+    # Reuse Fences' cached icon/plate renderer, without a second implementation.
+    ../ukui-fences/src/LiquidIconRenderer.cpp
     src/glass.qrc
 )
 

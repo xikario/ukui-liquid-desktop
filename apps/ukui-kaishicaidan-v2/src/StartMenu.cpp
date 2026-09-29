@@ -1,6 +1,7 @@
 #include <QImageReader>
 #include "../../../shared/async-work/BackgroundTask.h"
 #include "LiquidPopup.h"
+#include "../../ukui-fences/src/LiquidIconRenderer.h"
 #include "StartMenu.h"
 #include "StartButton.h"
 #include "TaskbarDetector.h"
@@ -769,10 +770,25 @@ static QIcon iconForDesktopIcon(const QString &appName, const QString &iconName,
             }
         }
     }
-    if (icon.isNull() || icon.availableSizes().isEmpty()) {
+    // Scalable theme engines can legitimately omit a fixed-size inventory.
+    if (icon.isNull()) {
         return generatePremiumIcon(appName);
     }
     return icon;
+}
+
+// One static, cached style for every application, including newly discovered
+// launchers. Reuse Fences' material and DPR-aware rasterization; no captures,
+// shaders or extra timers are needed for an icon plate.
+static void drawLauncherIcon(QPainter &p, const QIcon &icon, const QRectF &rect,
+                             qreal dpr, bool liquid)
+{
+    if (liquid) {
+        const qreal inset=rect.width()*4.0/38.0;
+        LiquidIconRenderer::drawPlate(p,rect.adjusted(-inset,-inset,inset,inset),
+                                     QColor(166,193,212),.42,dpr,false,false);
+    }
+    LiquidIconRenderer::drawIcon(p,rect,icon,dpr);
 }
 
 static QString appUseLabel(const AppEntry &app)
@@ -877,8 +893,8 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
 
-        // App icons sit directly on the shared menu glass. Keep hover lift
-        // and pressed icon feedback without a per-application tile/frame.
+        // Cached Fences plate under the original app icon; keep existing input
+        // feedback without adding a separately animated material.
         auto *menu = qobject_cast<StartMenu *>(window());
         const bool liquid = menu && menu->isLiquidTheme();
         if (!liquid && m_hoverFactor > 0.01) {
@@ -906,7 +922,7 @@ protected:
 
         QRectF iconRect(iconX, iconY, iconW, iconH);
         if (isDown()) iconRect=iconRect.adjusted(1.5,2.5,-1.5,-0.5);
-        m_icon.paint(&p, iconRect.toRect(), Qt::AlignCenter);
+        drawLauncherIcon(p,m_icon,iconRect,devicePixelRatioF(),liquid);
 
         p.setPen(m_palette->textSecondary);
         QFont labelFont = font();
@@ -939,7 +955,7 @@ protected:
             p.drawText(rect,flags,text);
         };
         if (m_isRecent) {
-            const QRect labelRect(2, iconY + iconH + 4, width() - 4, 12);
+            const QRect labelRect(2, iconY + iconH + 7, width() - 4, 12);
             const QString elided = p.fontMetrics().elidedText(m_app.name, Qt::ElideRight, width() - 8);
             readableText(labelRect, Qt::AlignHCenter | Qt::AlignTop, elided);
 
@@ -1223,7 +1239,9 @@ protected:
         const int iconY = (height() - 40) / 2;
         const QRect iconRect(iconX, iconY, 40, 40);
         if (!m_icon.isNull()) {
-            m_icon.paint(&p, iconRect.adjusted(7, 7, -7, -7), Qt::AlignCenter);
+            const auto *menu=qobject_cast<StartMenu *>(window());
+            drawLauncherIcon(p,m_icon,iconRect.adjusted(7,7,-7,-7),devicePixelRatioF(),
+                             menu && menu->isLiquidTheme());
         } else {
             p.setPen(m_app.accent);
             QFont f = font();
@@ -2435,10 +2453,6 @@ void StartMenu::drawRailApps(QPainter &p)
     for (int i = 0; i < m_railApps.size() && i < kMaxRailApps; ++i) {
         const int cy = railAppY(i);
         const QRect slotRect(cx - 18, cy - 18, 36, 36);
-        if (m_skin != Skin::EcoLiquid)
-            paintGlassControl(p, this, slotRect, 11,
-                              m_hoveredRailApp == i ? 1.0 : 0.0,
-                              m_pressedRailApp == i);
         if (m_hoveredRailApp == i) {
             p.setPen(Qt::NoPen);
             p.setBrush(m_palette.hoverBg);
@@ -2451,7 +2465,8 @@ void StartMenu::drawRailApps(QPainter &p)
         const QIcon icon = iconForDesktopIcon(m_railApps[i].name,
                                               m_railApps[i].iconName,
                                               m_railApps[i].desktopPath);
-        icon.paint(&p, QRect(cx - 13, cy - 13, 26, 26), Qt::AlignCenter);
+        drawLauncherIcon(p,icon,QRect(cx-13,cy-13,26,26),devicePixelRatioF(),
+                         m_skin==Skin::EcoLiquid);
     }
 
     if (m_railDropIndex >= 0 && m_railDropIndex < kMaxRailApps) {
