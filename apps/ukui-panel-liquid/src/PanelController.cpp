@@ -215,14 +215,18 @@ void PanelController::syncOutline(QWidget *w) {
         const QRegion original=m_originalMasks.value(w);
         if(original.isEmpty())w->clearMask();else w->setMask(original);
     } else {
+        if(!m_cache.value(w).isNull()) {
+            setPanelNativeOutline(w,m_cache.value(w));
+            setPanelNativeBackdrop(w,true);
+            return;
+        }
         QPainterPath outline;
         const qreal radius=qMin(m_surface.radius,qMin(w->width(),w->height())/2.);
-        // Never expand beyond the optical surface. X11 gets physical alpha
-        // coverage below so fractional-scale antialias pixels are retained.
-        outline.addRoundedRect(QRectF(w->rect()),radius,radius);
-        const QRegion logical(outline.toFillPolygon().toPolygon());
+        // Temporary paint envelope until the physical coverage is rendered.
+        // Keep AA pixels; the cached alpha surface supplies the exact outline.
+        outline.addRoundedRect(QRectF(w->rect()).adjusted(-2,-2,2,2),radius+2,radius+2);
+        const QRegion logical=QRegion(outline.toFillPolygon().toPolygon()) & w->rect();
         if(w->mask()!=logical)w->setMask(logical);
-        if(!m_cache.value(w).isNull())setPanelNativeOutline(w,m_cache.value(w));
     }
     setPanelNativeBackdrop(w,m_enabled);
 }

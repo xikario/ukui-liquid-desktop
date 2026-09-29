@@ -31,3 +31,16 @@ target_include_directories(liquid-optics-test PRIVATE src)
 target_link_libraries(liquid-optics-test PRIVATE ukui-liquid-optics)
 add_test(NAME optics-fallback COMMAND liquid-optics-test)
 set_tests_properties(optics-fallback PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;UKUI_LIQUID_GLASS_NO_GL=1")
+
+# Inspect actual X11 backing pixels: QWidget::grab() bypasses on-screen masks.
+find_program(XVFB_RUN_EXECUTABLE xvfb-run)
+find_program(DBUS_RUN_SESSION_EXECUTABLE dbus-run-session)
+if(BUILD_TESTING AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
+    foreach(SCALE 1 1.25 1.5 2)
+        add_test(NAME panel-corners-${SCALE}
+            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2560x1440x24"
+                ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:liquid-panel-test> -style ukuiliquidpanel)
+        set_tests_properties(panel-corners-${SCALE} PROPERTIES TIMEOUT 30
+            ENVIRONMENT "QT_PLUGIN_PATH=${CMAKE_BINARY_DIR}/plugins;QT_SCALE_FACTOR=${SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1")
+    endforeach()
+endif()

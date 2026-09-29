@@ -14,9 +14,11 @@
 #include <QSaveFile>
 #include <QEventLoop>
 #include <QProcess>
+#include <QPainterPath>
 #include <cstdlib>
 #include <QLibrary>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 class UKUIPanel : public QWidget {
     Q_OBJECT
 public:
@@ -34,13 +36,48 @@ int main(int argc,char **argv) {
     };
     replaceWallpaper(QColor("#bd6542"));qputenv("UKUI_LIQUID_WALLPAPER",wallpaper.toUtf8());
     auto settle=[] {QEventLoop loop;QTimer::singleShot(700,&loop,&QEventLoop::quit);loop.exec();};
-    QApplication app(argc,argv);UKUIPanel panel;panel.setAttribute(Qt::WA_TranslucentBackground);panel.resize(780,60);
+    QApplication app(argc,argv);UKUIPanel panel;panel.setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);panel.setAttribute(Qt::WA_TranslucentBackground);panel.resize(780,60);
     QLabel label("原有任务栏内容",&panel);label.move(60,20);panel.show();
     QTimer::singleShot(150,&app,[&]{
         check(panel.property("liquidPanelAttached").toBool(),"Qt style plugin attaches without panel source ABI");
+        settle();
         auto on=panel.grab().toImage();
         check(on.pixelColor(400,30)!=QColor("#ad2144"),"panel background replaced");
         check(label.isVisible(),"original children remain visible");
+        {
+            QImage reference=on;
+            const qreal dpr=panel.devicePixelRatioF();
+            QPainterPath curve;
+            curve.addRoundedRect(QRectF(QPointF(),QSizeF(reference.size())),16*dpr,16*dpr);
+            if(qEnvironmentVariableIsSet("UKUI_LIQUID_GLASS_NO_GL")) {
+                reference=QImage(on.size(),QImage::Format_ARGB32_Premultiplied);
+                reference.fill(Qt::transparent);
+                QPainter painter(&reference);painter.setRenderHint(QPainter::Antialiasing);painter.fillPath(curve,Qt::white);
+            }
+            // grab() bypasses QWidget's on-screen mask; inspect the actual X11
+            // backing pixels as well so an integer clip cannot hide in the test.
+            Display *display=QGuiApplication::platformName()=="xcb"?XOpenDisplay(nullptr):nullptr;
+            panel.update();settle();
+            XImage *native=display?XGetImage(display,panel.winId(),0,0,on.width(),on.height(),AllPlanes,ZPixmap):nullptr;
+            if(display)check(native!=nullptr,"actual X11 window pixels are readable");
+            int clipped=0,partial=0;
+            for(int y=0;y<on.height();++y)for(int x=0;x<on.width();++x) {
+                if(x>=20*dpr && x<on.width()-20*dpr)continue;
+                if(y>=20*dpr && y<on.height()-20*dpr)continue;
+                const int expected=qAlpha(reference.pixel(x,y));
+                if(expected>0 && expected<255)++partial;
+                const int actual=native?int((XGetPixel(native,x,y)>>24)&255):qAlpha(on.pixel(x,y));
+                // XGetImage outside ShapeBounding is undefined. Transparent
+                // corners are checked separately through the native region.
+                if(expected>0 && qAbs(actual-expected)>1)++clipped;
+
+            }
+            if(native)XDestroyImage(native);
+            if(display)XCloseDisplay(display);
+            qInfo()<<"corner coverage mismatches:"<<clipped<<"partial pixels:"<<partial;
+            check(partial>0 && clipped==0,"all four corners retain exact antialiased coverage through QWidget clipping");
+        }
+
         check(!panel.mask().contains(QPoint(0,0)) && panel.mask().contains(panel.rect().center()),"rounded native silhouette clips corners and retains body");
         check(panel.rect().contains(panel.mask().boundingRect()),"native outline stays inside panel bounds");
         const bool x11=QGuiApplication::platformName()=="xcb";

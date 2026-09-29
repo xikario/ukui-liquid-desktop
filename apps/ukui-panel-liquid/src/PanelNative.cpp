@@ -5,6 +5,7 @@
 #include <QImage>
 #include <QLibrary>
 #include <QVector>
+#include <QtMath>
 #include <X11/Xlib.h>
 
 namespace {
@@ -60,7 +61,26 @@ void setPanelNativeBackdrop(QWidget *panel, bool liquid)
 // margin instead of exposing child fills/shadows through a widened QRegion.
 void setPanelNativeOutline(QWidget *panel, const QImage &coverage)
 {
-    if(QGuiApplication::platformName()!=QStringLiteral("xcb") || coverage.isNull()
+    if(coverage.isNull())return;
+    // QWidget also clips its backing-store paint using the logical mask. An
+    // integer rounded polygon cuts through fractional-DPR alpha coverage even
+    // when the native X11 shape below includes those pixels. Keep every logical
+    // cell touched by the rendered surface; alpha defines the visible curve.
+    QRegion logical;
+    const qreal dpr=coverage.devicePixelRatio();
+    for(int y=0;y<coverage.height();++y) {
+        const auto *pixels=reinterpret_cast<const QRgb *>(coverage.constScanLine(y));
+        int first=0,last=coverage.width()-1;
+        while(first<=last && qAlpha(pixels[first])==0)++first;
+        while(last>=first && qAlpha(pixels[last])==0)--last;
+        if(first>last)continue;
+        const int left=qFloor(first/dpr),top=qFloor(y/dpr);
+        logical+=QRect(left,top,qCeil((last+1)/dpr)-left,qCeil((y+1)/dpr)-top);
+    }
+    logical &= panel->rect();
+    if(panel->mask()!=logical)panel->setMask(logical);
+    panel->setProperty("liquidNativeOutlineKey",coverage.cacheKey());
+    if(QGuiApplication::platformName()!=QStringLiteral("xcb")
        || !panel->testAttribute(Qt::WA_WState_Created))return;
     using Combine = void (*)(Display *, Window, int, int, int, XRectangle *, int, int, int);
     static QLibrary library(QStringLiteral("libXext.so.6"));
@@ -81,5 +101,4 @@ void setPanelNativeOutline(QWidget *panel, const QImage &coverage)
     // ShapeBounding=0, ShapeSet=0, YXBanded=3; input is bounded by this too.
     combine(display,panel->winId(),0,0,0,spans.data(),spans.size(),0,3);
     XFlush(display);
-    panel->setProperty("liquidNativeOutlineKey",coverage.cacheKey());
 }
