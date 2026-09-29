@@ -118,6 +118,7 @@ int main(int argc, char *argv[])
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
 
     QApplication app(argc, argv);
+    LiquidPopup::installMenuGlyphStyle(app);
     LiquidPopup::install(app);
     QApplication::setQuitOnLastWindowClosed(false);
     app.setApplicationName("ukui-fences");

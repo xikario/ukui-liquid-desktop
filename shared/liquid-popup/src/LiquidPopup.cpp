@@ -6,6 +6,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPainter>
+#include <QProxyStyle>
 #include <QScreen>
 #include <QStyle>
 #include <QStyleOption>
@@ -24,6 +25,18 @@ QPointer<QWidget> tipOwner;
 QRect tipOwnerRect;
 QString tipText;
 QTimer *tipTimeout = nullptr;
+
+class MenuGlyphStyle final : public QProxyStyle {
+public:
+    void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
+                       QPainter *painter, const QWidget *widget = nullptr) const override {
+        if (isEnabled() && qobject_cast<const QMenu *>(widget) &&
+            widget->property("liquidPopupSkin").toBool() &&
+            drawMenuGlyph(element, option, painter))
+            return;
+        QProxyStyle::drawPrimitive(element, option, painter, widget);
+    }
+};
 
 QImage capture(const QRect &area, qreal dpr) {
     if (provider) return provider(area, dpr);
@@ -80,6 +93,14 @@ public:
             originalTranslucent = menu->testAttribute(Qt::WA_TranslucentBackground);
             originalAutoFill = menu->autoFillBackground();
             styled = true;
+            // Qt shares one column between an action icon and its check mark.
+            // State must remain visible for toggles even when they have icons.
+            for (QAction *action : menu->actions()) {
+                if (action->isCheckable() && action->isIconVisibleInMenu() && !action->icon().isNull()) {
+                    indicatorIcons.append(action);
+                    action->setIconVisibleInMenu(false);
+                }
+            }
             menu->setAttribute(Qt::WA_TranslucentBackground);
             menu->setAutoFillBackground(false);
             // Explicit item padding reserves the indicator/arrow columns when
@@ -139,6 +160,9 @@ protected:
         menu->setMask(originalMask);
         menu->setAutoFillBackground(originalAutoFill);
         menu->setAttribute(Qt::WA_TranslucentBackground, originalTranslucent);
+        for (const auto &action : indicatorIcons)
+            if (action) action->setIconVisibleInMenu(true);
+        indicatorIcons.clear();
     }
 private:
     QString originalStyle;
@@ -146,6 +170,7 @@ private:
     bool styled = false, originalTranslucent = false, originalAutoFill = false;
     QMenu *menu;
     QImage material;
+    QList<QPointer<QAction>> indicatorIcons;
     QVariantAnimation fade;
 };
 class Filter final : public QObject {
@@ -501,5 +526,10 @@ void install(QApplication &app) {
     app.setProperty("liquidPopupsInstalled",true);
     app.installEventFilter(new Filter(&app));
     qInfo()<<"[LiquidPopup] shared popup v0.2 enabled: menus, widget and item-view tooltips";
+}
+void installMenuGlyphStyle(QApplication &app) {
+    if (app.property("liquidMenuGlyphStyleInstalled").toBool()) return;
+    app.setProperty("liquidMenuGlyphStyleInstalled", true);
+    app.setStyle(new MenuGlyphStyle);
 }
 }

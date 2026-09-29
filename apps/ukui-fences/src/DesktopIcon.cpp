@@ -707,8 +707,10 @@ void DesktopIcon::paintEvent(QPaintEvent *)
         ? QColor(210, 210, 210, 155)
         : m_fontColor;
 
-    // 阴影（增强可读性）
-    p.setPen(m_cut ? QColor(0, 0, 0, 80) : QColor(0, 0, 0, 160));
+    // Use a contrasting halo: black shadows make dark text look doubled.
+    const int luminance = (textColor.red()*299 + textColor.green()*587 + textColor.blue()*114)/1000;
+    p.setPen(m_cut ? QColor(0, 0, 0, 80)
+                  : luminance < 128 ? QColor(255, 255, 255, 150) : QColor(0, 0, 0, 160));
     p.drawText(textRect.adjusted(1, 1, 1, 1), flags, m_item.displayName);
     // 正文 — 使用配置颜色
     p.setPen(textColor);

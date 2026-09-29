@@ -9,11 +9,12 @@
 #include <QKeyEvent>
 #include <QDebug>
 #include <QDir>
+#include <QStyleOption>
 #include <cstdlib>
 using namespace LiquidPopup;
 void check(bool ok,const char *message){if(!ok){qCritical()<<message;std::exit(1);}}
 int main(int argc,char **argv){
- QApplication app(argc,argv);install(app);install(app);theme().reducedMotion=true;
+ QApplication app(argc,argv);installMenuGlyphStyle(app);install(app);install(app);theme().reducedMotion=true;
  const QRect screen(-1280,0,1280,800);
  for(QPoint pt:{QPoint(-1270,8),QPoint(-5,795),QPoint(-600,350)})
    check(screen.contains(place(QSize(260,150),QRect(pt,QSize(1,1)),screen)),"popup must stay within negative-origin screen");
@@ -51,9 +52,28 @@ int main(int argc,char **argv){
  QRect lastCapture;int captures=0;setBackdropProvider([&](const QRect &r,qreal d){lastCapture=r;++captures;QImage b(r.size(),QImage::Format_RGB32);b.fill(QColor(40,70,110));b.setDevicePixelRatio(d);return b;});
  QMenu menu;menu.setStyleSheet("QMenu { background:#202020;color:white;padding:8px; } QMenu::item {padding:7px 20px;} QMenu::item:selected{background:#406080;}");
  auto *action=menu.addAction("toggle");action->setCheckable(true);
+ QPixmap actionPixmap(16,16);actionPixmap.fill(Qt::red);
+ action->setIcon(QIcon(actionPixmap));
  auto *sub=menu.addMenu("submenu");sub->addAction("child");menu.addAction("disabled")->setEnabled(false);
  menu.popup(QPoint(50,50));app.processEvents();
  check(menu.property("liquidPopupSkin").toBool(),"menu is adapted");
+ check(!action->isIconVisibleInMenu(),"toggle icon cannot obscure its checkmark");
+ for(qreal d:{1.,1.5,2.}) {
+   QImage glyph(QSize(qRound(18*d),qRound(18*d)),QImage::Format_ARGB32_Premultiplied);
+   glyph.setDevicePixelRatio(d);glyph.fill(Qt::transparent);
+   QStyleOption option;option.rect=QRect(2,2,14,14);
+   option.state=QStyle::State_Enabled|QStyle::State_On;
+   option.palette.setColor(QPalette::Text,Qt::white);
+   {QPainter painter(&glyph);menu.style()->drawPrimitive(QStyle::PE_IndicatorMenuCheckMark,&option,&painter,&menu);}
+   int partial=0,painted=0;
+   for(int y=0;y<glyph.height();++y)for(int x=0;x<glyph.width();++x){
+     const int alpha=glyph.pixelColor(x,y).alpha();
+     if(alpha>0)++painted;
+     if(alpha>0 && alpha<255)++partial;
+   }
+   check(painted>10 && partial>=5,"host style draws antialiased menu check at each DPR");
+   QDir().mkpath("artifacts");glyph.save(QString("artifacts/check-%1.png").arg(d));
+ }
  check(captures==1,"capture once per opening");
  check(lastCapture.size()==menu.size(),"capture is bounded to popup instead of full monitor");
  QImage painted(menu.size(),QImage::Format_ARGB32_Premultiplied);painted.fill(Qt::transparent);menu.render(&painted);
@@ -62,6 +82,7 @@ int main(int argc,char **argv){
  bool triggered=false;QObject::connect(action,&QAction::triggered,[&]{triggered=true;});menu.setActiveAction(action);
  QKeyEvent enter(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);QApplication::sendEvent(&menu,&enter);
  check(triggered&&action->isChecked(),"native keyboard action/check semantics retained");
+ check(action->isIconVisibleInMenu(),"closing a menu restores the action icon preference");
  sub->popup(QPoint(300,50));app.processEvents();check(sub->property("liquidPopupSkin").toBool(),"native submenu adapted");sub->hide();
  // Exercise the actual nested QMenu::exec path, not just geometry math.
  const QRect anchor(250,80,200,35);

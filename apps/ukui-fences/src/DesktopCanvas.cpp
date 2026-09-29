@@ -1,3 +1,5 @@
+#include "WallpaperImage.h"
+#include <QTextBrowser>
 #include "DesktopWidgets.h"
 #include "MusicDesklet.h"
 #include "CalendarDesklet.h"
@@ -378,7 +380,7 @@ QPixmap loadSystemWallpaperPixmap()
         if (path.isEmpty() || !QFile::exists(path))
             continue;
 
-        QPixmap pix(path);
+        QPixmap pix = readWallpaperPixmap(path);
         if (!pix.isNull())
             return pix;
     }
@@ -572,13 +574,6 @@ void lowerPeonyDesktopWindows(Display *display, Window ownWindow)
 
     if (children)
         XFree(children);
-}
-
-QColor textColorForAccent(const QColor &accent)
-{
-    const int luminance =
-        (accent.red() * 299 + accent.green() * 587 + accent.blue() * 114) / 1000;
-    return luminance > 155 ? QColor("#202124") : QColor(Qt::white);
 }
 
 QColor accentColorFromWallpaper(const QPixmap &wallpaper)
@@ -1332,7 +1327,7 @@ void DesktopCanvas::lockToDesktopGeometry()
 void DesktopCanvas::loadWallpaper()
 {
     if (m_wallpaperMode != WallpaperMode::System && !m_wallpaperPath.isEmpty()) {
-        QPixmap pix(m_wallpaperPath);
+        QPixmap pix = readWallpaperPixmap(m_wallpaperPath);
         if (!pix.isNull()) {
             m_wallpaper = pix;
             m_wallpaperUsingCustom = true;
@@ -1572,7 +1567,9 @@ bool DesktopCanvas::applyWallpaperThemeToFences()
     if (!accent.isValid())
         return false;
 
-    applyThemeToFences(accent, textColorForAccent(accent));
+    // A wallpaper accent is translucent, not the actual background under every
+    // label. Keep the user's readable font colour when changing the tint.
+    applyThemeToFences(accent, m_fontColor);
     return true;
 }
 
@@ -2056,7 +2053,7 @@ void DesktopCanvas::showWallpaperDialog()
         bool customMode = false;
         QPixmap source;
         if (mode != WallpaperMode::System && !chosenPath.isEmpty()) {
-            source = QPixmap(chosenPath);
+            source = readWallpaperPixmap(chosenPath);
             customMode = !source.isNull();
         }
         if (!customMode)
@@ -2090,10 +2087,11 @@ void DesktopCanvas::showWallpaperDialog()
         if (path.isEmpty())
             return;
 
-        QPixmap test(path);
+        QString imageError;
+        const QPixmap test = readWallpaperPixmap(path, &imageError);
         if (test.isNull()) {
             QMessageBox::warning(&dlg, "Fences 壁纸",
-                                 "这张图片无法读取，请换一张图片。");
+                QStringLiteral("无法读取这张图片：%1\n%2").arg(path, imageError));
             return;
         }
 
@@ -4826,19 +4824,15 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     connect(actDesktopGrid, &QAction::triggered,
             [this] { showGridDialog(); });
 
-    auto *actDesklet = widgetsMenu->addAction(
-        menuIcon(QStringList() << "utilities-system-monitor" << "system-run",
-                 "CPU", QColor("#dc2626")),
-        "显示系统监视");
+    auto *actDesklet = widgetsMenu->addAction("显示系统监视");
+    actDesklet->setObjectName("monitorWidgetAction");
     actDesklet->setCheckable(true);
     actDesklet->setChecked(m_monitor != nullptr);
     connect(actDesklet, &QAction::triggered,
             [this](bool visible) { setSystemMonitorVisible(visible); });
 
-    auto *actSmartSpace = widgetsMenu->addAction(
-        menuIcon(QStringList() << "folder-saved-search" << "system-search",
-                 "✦", QColor("#6366f1")),
-        "显示智能空间");
+    auto *actSmartSpace = widgetsMenu->addAction("显示智能空间");
+    actSmartSpace->setObjectName("smartSpaceWidgetAction");
     actSmartSpace->setCheckable(true);
     actSmartSpace->setChecked(m_smartSpace != nullptr);
     connect(actSmartSpace, &QAction::triggered,
@@ -4908,6 +4902,7 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
         menuIcon(QStringList() << "color-picker" << "preferences-color",
                  "◎", QColor("#7c3aed")),
         "从当前壁纸取色");
+    actWallpaperTheme->setObjectName("wallpaperThemeAction");
     connect(actWallpaperTheme, &QAction::triggered, [this] {
         if (!applyWallpaperThemeToFences()) {
             QMessageBox::warning(this, "主题颜色",
@@ -5106,60 +5101,67 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
         menuIcon(QStringList() << "help-contents" << "help-browser",
                  "?", QColor("#475569")),
         "使用说明");
+    actHelp->setObjectName("desktopHelpAction");
     connect(actHelp, &QAction::triggered, [this] {
-        QMessageBox helpBox(this);
-        helpBox.setWindowTitle("ukui-fences 使用说明");
-        helpBox.setIcon(QMessageBox::Information);
-        helpBox.setText(
-            "<h3>ukui-fences 桌面分区工具</h3>"
-            "<p>将桌面文件分组整理到半透明分区中，让桌面井然有序。</p>");
-        helpBox.setInformativeText(
-            "<b>基本操作</b><br>"
-            "• <b>新建分区</b>：右键桌面空白处 → 新建 → 普通分区<br>"
-            "• <b>拖入文件</b>：直接将桌面文件拖入分区<br>"
-            "• <b>拖出文件</b>：从分区拖到桌面空白处<br>"
-            "• <b>折叠/展开</b>：单击分区标题栏<br>"
-            "• <b>删除文件</b>：选中后按 Delete 键，或拖到回收站图标<br><br>"
-            "<b>复制与剪切</b><br>"
-            "• 剪切后的文件会暂时置灰，表示正在等待移动<br>"
-            "• 在文件管理器等位置粘贴完成后，图标会自动消失或恢复<br><br>"
-            "<b>编辑模式</b>（右键桌面 → 编辑分区布局）<br>"
-            "• 拖动分区标题栏可 <b>移动位置</b><br>"
-            "• 拖动分区边缘可 <b>调整大小</b><br>"
-            "• 靠近其他分区时会自动 <b>吸附对齐</b><br>"
-            "• 双击标题栏可 <b>重命名</b> 分区<br><br>"
-            "<b>快捷键</b><br>"
-            "• Ctrl+A 全选 &nbsp;| Ctrl+C 复制 &nbsp;| Ctrl+X 剪切<br>"
-            "• Ctrl+V 粘贴 &nbsp;| Delete 删除 &nbsp;| F2 重命名<br>"
-            "• Enter 打开 &nbsp;| Ctrl+滚轮 缩放图标<br><br>"
-            "<b>分区菜单</b>（右键分区标题栏）<br>"
-            "• 重命名、折叠/展开、锁定分区<br>"
-            "• 排序、透明度、颜色、图标自定义<br>"
-            "• 标题字体 / 内部图标字体独立设置<br><br>"
-            "<b>其他功能</b><br>"
-            "• 右键桌面可新建文件夹/文本文件<br>"
-            "• 布局备份：可导出/导入分区配置<br>"
-            "• 系统图标（计算机、回收站）可自由拖放"
-        );
-        helpBox.exec();
+        QDialog dialog(this);
+        dialog.setWindowTitle("ukui-fences 使用说明");
+        dialog.resize(660, 540);
+        auto *layout = new QVBoxLayout(&dialog);
+        auto *text = new QTextBrowser(&dialog);
+        text->setOpenExternalLinks(true);
+        text->setHtml(QStringLiteral(
+            "<h2>UKUI Liquid Desktop · 桌面分区与小组件</h2>"
+            "<h3>分区与文件</h3>"
+            "<p>右键桌面 → 新建 → 普通分区。文件可拖入或拖出分区；单击标题栏折叠或展开。"
+            "Delete 移到回收站；剪切后的图标暂时置灰，粘贴完成后自动更新。</p>"
+            "<h3>布局编辑</h3>"
+            "<p>右键 → 编辑分区布局，开启后移动、缩放分区和桌面小组件，支持边缘吸附和图标避让。"
+            "完成后选择“退出布局编辑”。分区标题栏右键可重命名、锁定并单独设置字体。</p>"
+            "<h3>六类桌面小组件</h3>"
+            "<p>右键 → 桌面小组件，可切换智能空间、系统监视、时钟与倒计时、活动统计、"
+            "Strawberry 音乐、日历与系统待办。对号表示已启用；智能空间可收起成贴边星标。</p>"
+            "<p>活动统计记录前台应用停留时间；音乐组件通过 MPRIS 控制 Strawberry。"
+            "日历支持农历、节假日、年月滚轮和待办折叠；内置中国调休数据为 2026 年，系统待办只读。</p>"
+            "<h3>自启动与外观</h3>"
+            "<p>右键 → 设置与帮助 → 启动设置，独立设置各组件随 Fences 启动。"
+            "“显示”与“自启动”是两个独立选项。</p>"
+            "<p>右键 → 外观与特效，可设置液态材质、主题配色和字体。"
+            "“从当前壁纸取色”调整分区底色并保留字体颜色。液态材质使用缓存壁纸，GPU 不可用时降级渲染。</p>"
+            "<p>“Fences 壁纸”只修改 Fences 桌面层；选择“系统默认（跟随桌面）”恢复跟随系统壁纸。"
+            "自定义壁纸按文件内容识别格式。</p>"
+            "<h3>快捷键与备份</h3>"
+            "<p>Ctrl+A 全选，Ctrl+C/X/V 复制/剪切/粘贴，F2 重命名，Enter 打开，"
+            "Ctrl+滚轮缩放图标。右键 → 排列与布局，可导出和导入布局。</p>"
+            "<h3>系统监视与诊断</h3>"
+            "<p>系统监视的 API 密钥保存在系统密钥环，需要解锁后使用；只有主动执行 AI 诊断时才发送诊断数据。</p>"
+            "<p><a href=\"https://github.com/xikario/ukui-liquid-desktop\">项目源码与完整文档</a> · "
+            "<a href=\"https://github.com/SuceV587/NextKde\">NextKde 上游项目</a></p>"));
+        layout->addWidget(text);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        dialog.exec();
     });
 
     auto *actAbout = fencesMenu->addAction(
         menuIcon(QStringList() << "help-about" << "dialog-information",
                  "i", QColor("#0ea5e9")),
         "关于 ukui-fences");
+    actAbout->setObjectName("desktopAboutAction");
     connect(actAbout, &QAction::triggered, [this] {
-        const QString version = QCoreApplication::applicationVersion();
         QMessageBox::about(this, "关于 ukui-fences",
             QStringLiteral(
-                "ukui-fences\n\n"
-                "一个面向 UKUI 桌面的 Fences 风格桌面分区工具。\n"
-                "版本：%1\n\n"
-                "简要使用：右键桌面 → 新建 → 普通分区，将桌面文件拖入分区整理；"
-                "右键桌面开启编辑分区布局可移动或缩放分区；"
-                "拖到回收站或按 Delete 可移到回收站；"
-                "剪切后置灰，移动完成后会自动恢复或移除。")
-                .arg(version));
+                "<h3>ukui-fences · UKUI Liquid Desktop</h3>"
+                "<p>核心版本：%1 · Qt 5 / UKUI X11</p>"
+                "<p>桌面分区、智能空间、系统监视，以及时钟/倒计时、活动统计、Strawberry 音乐、"
+                "日历与系统待办，共享液态材质与弹出菜单模块。</p>"
+                "<p>部分液态玻璃代码沿用并适配 NextKde 相关代码，直接 shader 来源为 NextKde-kylinos；"
+                "时钟、活动和日历参考 NextKde DeskCenter 设计，以 Qt 5 重新实现。感谢上游作者与贡献者。</p>"
+                "<p>项目以 GPL-3.0-or-later 发布，第三方文件保留原始署名及许可证。</p>"
+                "<p><a href=\"https://github.com/xikario/ukui-liquid-desktop\">项目仓库</a> · "
+                "<a href=\"https://github.com/SuceV587/NextKde\">NextKde</a> · "
+                "<a href=\"https://github.com/xikario/ukui-liquid-desktop/blob/main/THIRD_PARTY_NOTICES.md\">第三方来源与许可</a></p>")
+                .arg(QCoreApplication::applicationVersion().toHtmlEscaped()));
     });
 
     fencesMenu->addSeparator();

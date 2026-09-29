@@ -38,6 +38,8 @@ QPainterPath bubblePath(QRectF body, qreal radius, qreal connector,
 // Install once per application: native QMenu behaviour remains owned by Qt.
 // Context menus receive material + fade, tooltips receive the bubble shell.
 void install(QApplication &app);
+// Standalone Qt hosts opt into the same vector menu glyphs as the panel style.
+void installMenuGlyphStyle(QApplication &app);
 // Per-process runtime switch. Restores native menu styling when disabled.
 void setEnabled(bool enabled);
 bool isEnabled();

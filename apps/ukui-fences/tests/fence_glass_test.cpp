@@ -56,6 +56,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "desklet_test.h"
 #include "music_test.h"
 #include "calendar_test.h"
+#include "appearance_test.h"
 
 int main(int argc, char **argv)
 {
@@ -69,9 +70,20 @@ int main(int argc, char **argv)
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
     QApplication app(argc, argv);
+    LiquidPopup::installMenuGlyphStyle(app);
     LiquidPopup::install(app);
     app.setOrganizationName("kylin");
     app.setApplicationName("ukui-fences");
+    if (app.arguments().contains("--appearance-only"))
+        return runAppearanceTest(isolated.path());
+    if (app.arguments().contains("--read-wallpaper")) {
+        const int index = app.arguments().indexOf("--read-wallpaper") + 1;
+        if (index >= app.arguments().size()) return 2;
+        const QPixmap decoded = readWallpaperPixmap(app.arguments()[index]);
+        check(!decoded.isNull(), "provided wallpaper decodes successfully");
+        qInfo() << "Decoded size:" << decoded.size();
+        return failures ? 1 : 0;
+    }
     if (app.arguments().contains("--calendar-only"))
         return runCalendarTest(isolated.path());
     if (app.arguments().contains("--music-only"))
