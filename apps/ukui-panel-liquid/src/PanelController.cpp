@@ -127,8 +127,6 @@ void PanelController::settingsDialog(QWidget *owner) {
     auto *form=new QFormLayout(dialog);
     auto *intro=new QLabel("以桌面壁纸生成液态材质。清晰度调节磨砂，液态强度调节弯折；修改后立即保存。",dialog);
     intro->setWordWrap(true);form->addRow(intro);
-    auto *enabled=new QCheckBox("启用液态主题",dialog);enabled->setChecked(m_enabled);form->addRow(enabled);
-    connect(enabled,&QCheckBox::toggled,this,[this](bool on){m_enabled=on;apply();});
     auto *follow=new QCheckBox("自适应壁纸（更换壁纸后自动更新材质）",dialog);
     follow->setObjectName("liquidPanelFollowWallpaper");follow->setChecked(m_followWallpaper);form->addRow(follow);
     connect(follow,&QCheckBox::toggled,this,[this](bool on){
