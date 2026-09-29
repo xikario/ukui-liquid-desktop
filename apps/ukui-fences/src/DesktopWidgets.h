@@ -65,6 +65,8 @@ public:
     explicit ClockDesklet(DesktopCanvas *canvas);
     ~ClockDesklet() override;
     const CountdownState &countdown() const { return m_countdown; }
+    int faceMaterialBuilds() const { return m_faceBuilds; }
+    QImage faceMaterial() const { return m_faceMaterial; }
 public slots:
     void tick();
 protected:
@@ -73,6 +75,12 @@ protected:
 private:
     void persist();
     void updateControls();
+    void paintGlassFace(QPainter &p, const QPointF &center, qreal radius);
+    std::unique_ptr<LiquidOpticsRenderer> m_faceOptics;
+    QImage m_faceMaterial;
+    QRect m_faceRect;
+    qint64 m_faceSourceKey = 0;
+    int m_faceBuilds = 0;
     bool m_timerPage = false;
     CountdownState m_countdown;
     QTimer m_tick;

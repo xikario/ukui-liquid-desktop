@@ -52,8 +52,16 @@ static int runDeskletTest(const QString &root)
         check(clock->isVisible() && activity->isVisible(),"both display actions reveal their widgets");
         check(!clock->geometry().intersects(activity->geometry()),"first-use placement does not overlap the other desklet");
         check(!clock->material().isNull() && clock->material().pixelColor(0,0).alpha()==0,"shared material retains transparent antialiased corners");
-        const int builds=clock->materialBuilds();for(int i=0;i<10;++i)clock->tick();settle(150);
+        clock->grab();
+        const QImage face=clock->faceMaterial();
+        check(!face.isNull() && face.pixelColor(0,0).alpha()==0
+              && face.pixelColor(face.width()/2,face.height()/2).alpha()==255,
+              "clock lens has transparent corners and an opaque readable body");
+        check(face.devicePixelRatio()==clock->devicePixelRatioF(),"clock lens preserves display DPR");
+        const int faceBuilds=clock->faceMaterialBuilds();
+        const int builds=clock->materialBuilds();for(int i=0;i<10;++i){clock->tick();clock->grab();}settle(150);
         check(clock->materialBuilds()==builds,"clock tick reuses cached optics");
+        check(clock->faceMaterialBuilds()==faceBuilds,"clock ticks reuse the lens without GPU rebuilds");
         auto mouse=[](QWidget *widget,QEvent::Type type,QPoint local,QPoint global){
             QMouseEvent event(type,local,global,type==QEvent::MouseMove?Qt::NoButton:Qt::LeftButton,
                 type==QEvent::MouseButtonRelease?Qt::NoButton:Qt::LeftButton,Qt::NoModifier);
@@ -183,8 +191,10 @@ static int runDeskletTest(const QString &root)
         start->click();check(clock->countdown().state==CountdownState::Running,"UI resumes countdown");
         clock->findChild<QPushButton *>("countdownCancel")->click();check(clock->countdown().state==CountdownState::Ready,"UI cancels countdown");
         auto *pause=activity->findChild<QPushButton *>("activityRecording");pause->click();check(!recorder->isRecording(),"recording can be paused explicitly");pause->click();
-        const auto before=clock->material();setWallpaper(bluePath);canvas.loadLayout();canvas.refreshAll();settle(700);
+        const auto before=clock->material();clock->grab();const auto faceBefore=clock->faceMaterial();
+        setWallpaper(bluePath);canvas.loadLayout();canvas.refreshAll();settle(700);clock->grab();
         check(before!=clock->material(),"wallpaper refresh reaches new clock material");
+        check(faceBefore!=clock->faceMaterial(),"wallpaper refresh also invalidates the cached clock lens");
         canvas.setActivityWidgetVisible(false);setWallpaper(redPath);canvas.loadLayout();canvas.refreshAll();settle(300);canvas.setActivityWidgetVisible(true);settle(200);
         const QImage material=activity->material();const QColor sample=material.pixelColor(material.width()/2,material.height()/2);
         check(sample.red()>sample.blue()+40,"hidden activity widget refreshes wallpaper on reveal");

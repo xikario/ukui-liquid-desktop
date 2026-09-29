@@ -250,11 +250,31 @@ void ClockDesklet::arrangeControls(){
     const int bw=(width()-130)/3;for(int i=0;i<m_presets.size();++i)m_presets[i]->setGeometry(112+i*(bw+3),y,bw,25);
     m_start->setGeometry(16,height()-37,half,26);m_cancel->setGeometry(24+half,height()-37,half,26);
 }
+void ClockDesklet::paintGlassFace(QPainter &p,const QPointF &center,qreal radius) {
+    // Sample only the cached card material, never the numbers or hands. Keep
+    // the expensive lens render outside the one-second clock paint cycle.
+    const QImage backdrop=material();
+    const QRect face(qRound(center.x()-radius),qRound(center.y()-radius),
+                     qRound(radius*2),qRound(radius*2));
+    if(backdrop.isNull() || face.isEmpty())return;
+    if(m_faceMaterial.isNull() || m_faceSourceKey!=backdrop.cacheKey() || m_faceRect!=face) {
+        if(!m_faceOptics)m_faceOptics=std::make_unique<LiquidOpticsRenderer>();
+        const auto &theme=LiquidPopup::theme();
+        m_faceOptics->setOptics(theme.refraction,theme.tint,theme.highlight,1.0);
+        m_faceOptics->setWallpaper(backdrop);
+        // The shared control mode adds clear refraction/highlights without
+        // applying the card's dark tint a second time.
+        m_faceMaterial=m_faceOptics->renderControl(face,face.width()/2.);
+        m_faceSourceKey=backdrop.cacheKey();m_faceRect=face;++m_faceBuilds;
+        setProperty("clockFaceOpticalGpu",m_faceOptics->usedGpu());
+    }
+    p.drawImage(QRectF(face),m_faceMaterial,QRectF(m_faceMaterial.rect()));
+}
 void ClockDesklet::paintContent(QPainter &p){
     const QDateTime now=QDateTime::currentDateTime();
     if(!m_timerPage){
         const qreal r=qMin(width()-54,height()-96)/2.;const QPointF c(width()/2.,50+r);
-        p.setPen(QPen(QColor(219,244,255,34),1));p.setBrush(QColor(10,22,41,24));p.drawEllipse(c,r,r);
+        paintGlassFace(p,c,r);
         for(int i=0;i<60;++i){const qreal a=qDegreesToRadians(i*6.-90);const bool major=i%5==0;
             p.setPen(QPen(major?QColor(235,250,255,150):QColor(210,237,252,48),major?1.7:1.,Qt::SolidLine,Qt::RoundCap));
             p.drawLine(c+QPointF(qCos(a)*(r-5),qSin(a)*(r-5)),c+QPointF(qCos(a)*(r-(major?12:8)),qSin(a)*(r-(major?12:8))));
@@ -267,7 +287,8 @@ void ClockDesklet::paintContent(QPainter &p){
         text(p,QRectF(20,height()-23,width()-40,18),QLocale(QLocale::Chinese).toString(now.date(),"M月d日 dddd"),11,muted);
     }else{
         const qreal r=qMin(width()-90,height()-130)/2.;const QPointF c(width()/2.,50+r);
-        const QRectF ring(c-QPointF(r,r),QSizeF(r*2,r*2));p.setBrush(Qt::NoBrush);p.setPen(QPen(QColor(224,244,255,27),5));p.drawEllipse(ring);
+        paintGlassFace(p,c,r);
+        const QRectF ring(c-QPointF(r-3,r-3),QSizeF((r-3)*2,(r-3)*2));p.setBrush(Qt::NoBrush);p.setPen(QPen(QColor(224,244,255,27),5));p.drawEllipse(ring);
         const qint64 left=m_countdown.remaining(now.toMSecsSinceEpoch());
         const qreal progress=qBound(0.,double(left)/m_countdown.durationMs,1.);
         p.setPen(QPen(accent,5,Qt::SolidLine,Qt::RoundCap));p.drawArc(ring,90*16,-qRound(360*16*progress));

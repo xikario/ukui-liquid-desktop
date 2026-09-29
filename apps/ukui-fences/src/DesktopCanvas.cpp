@@ -2431,9 +2431,14 @@ QString DesktopCanvas::desktopWidgetsStatus() const
     QJsonObject result;
     for (auto *w : {static_cast<LiquidDesklet *>(m_clockWidget), static_cast<LiquidDesklet *>(m_activityWidget), static_cast<LiquidDesklet *>(m_musicWidget), static_cast<LiquidDesklet *>(m_calendarWidget)}) {
         if (!w) continue;
-        result.insert(w->objectName(), QJsonObject{{"visible",w->isVisible()}, {"x",w->x()}, {"y",w->y()},
+        QJsonObject status{{"visible",w->isVisible()}, {"x",w->x()}, {"y",w->y()},
             {"width",w->width()}, {"height",w->height()}, {"materialBuilds",w->materialBuilds()},
-            {"gpu",w->property("liquidOpticalGpu").toBool()}});
+            {"gpu",w->property("liquidOpticalGpu").toBool()}};
+        if(auto *clock=qobject_cast<ClockDesklet *>(w)) {
+            status.insert("faceMaterialBuilds",clock->faceMaterialBuilds());
+            status.insert("faceGpu",clock->property("clockFaceOpticalGpu").toBool());
+        }
+        result.insert(w->objectName(),status);
     }
     return QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact));
 }
