@@ -98,6 +98,13 @@ endif()
 set(UKUI_LIQUID_POPUP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/liquid-popup" CACHE PATH "Shared liquid popup source")
 add_subdirectory("${UKUI_LIQUID_POPUP_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/liquid-popup")
 target_link_libraries(ukui-kaishicaidan-v2 PRIVATE ukui-liquid-popup)
+set(UKUI_LIQUID_GL_INCLUDE_DIR "${KAISHICAIDAN_GL_INCLUDE_DIR}")
+add_subdirectory(../../shared/liquid-glass liquid-glass)
+target_link_libraries(ukui-kaishicaidan-v2 PRIVATE ukui-liquid-optics)
+if(TARGET glass-render-test)
+    target_link_libraries(glass-render-test PRIVATE ukui-liquid-optics)
+endif()
+
 
 install(TARGETS ukui-kaishicaidan-v2 RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS packaging/ukui-kaishicaidan-launcher DESTINATION ${CMAKE_INSTALL_BINDIR})

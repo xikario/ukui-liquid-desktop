@@ -29,6 +29,8 @@ private:
     bool m_enabled=true, m_reducedMotion=false, m_followWallpaper=true;
     LiquidPopup::SurfaceStyle m_surface;
     qreal m_refraction=3.5;
+    qreal m_clarity=0, m_liquidStrength=1, m_transparency=.35;
+    bool m_seeThrough=false;
     qreal m_chroma=.48;
     WallpaperBackdrop m_wallpaper;
     bool m_wallpaperLoading = false, m_wallpaperPending = false, m_wallpaperForce = false;

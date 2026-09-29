@@ -4,6 +4,7 @@
 #include <QRectF>
 #include <memory>
 #include <QCache>
+#include "LiquidOpticsRenderer.h"
 
 // Cached full-panel renderer, painted below BOTH the rail and content.
 class NextKdeGlassView final : public QObject
@@ -11,9 +12,10 @@ class NextKdeGlassView final : public QObject
 public:
     explicit NextKdeGlassView(QObject *parent = nullptr);
     ~NextKdeGlassView() override;
+    // One-shot synthetic warmup: no desktop capture and no visible material.
+    void prepareGpu();
     void setBackdrop(const QImage &image);
-    // Low-latency material path used by the resident start menu. It keeps the
-    // same backdrop diffusion/rim treatment but skips shader/FBO startup.
+    // Explicit low-cost fallback, without shader/FBO resources.
     void setBackdropFast(const QImage &image);
     void setRadius(float radius) { m_radius = radius; }
     const QImage &image() const { return m_image; }
@@ -24,8 +26,8 @@ public:
     QImage controlImage(const QRectF &logicalRect, qreal radius, bool pressed=false);
     int controlRenderCount() const { return m_controlRenderCount; }
 private:
-    class Backend;
-    std::unique_ptr<Backend> m_backend;
+    std::unique_ptr<LiquidOpticsRenderer> m_optics;
+    LiquidOpticsRenderer m_controlOptics;
     int m_gpuInitializationCount = 0;
     qint64 m_lastRenderMs = 0;
     QImage m_image;

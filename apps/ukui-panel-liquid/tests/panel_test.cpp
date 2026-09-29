@@ -139,11 +139,35 @@ int main(int argc,char **argv) {
         follow->setChecked(true);app.processEvents();
         check(panel.grab().toImage()!=before,"reenabling adaptation immediately loads latest wallpaper");
         auto sliders=dialogs.first()->findChildren<QSlider *>();
-        check(sliders.size()==5,"shade radius highlight refraction and chroma controls exist");
-        sliders.first()->setValue(72);app.processEvents();saved.sync();
+        check(sliders.size()==7,"material and see-through sliders exist");
+        dialogs.first()->findChild<QSlider *>("liquidPanelShade")->setValue(72);app.processEvents();saved.sync();
         check(qAbs(saved.value("appearance/opacity").toDouble()-.72)<.001,"slider changes persist immediately");
-        sliders.last()->setValue(35);app.processEvents();saved.sync();
+        dialogs.first()->findChild<QSlider *>("liquidPanelChroma")->setValue(35);app.processEvents();saved.sync();
         check(qAbs(saved.value("appearance/chroma").toDouble()-.35)<.001,"chroma setting persists immediately");
+        auto *clarity=dialogs.first()->findChild<QSlider *>("liquidPanelClarity");
+        auto *strength=dialogs.first()->findChild<QSlider *>("liquidPanelStrength");
+        auto *through=dialogs.first()->findChild<QCheckBox *>("liquidPanelSeeThrough");
+        auto *transparency=dialogs.first()->findChild<QSlider *>("liquidPanelTransparency");
+        check(clarity && strength && through && transparency,"clarity, liquid strength and window see-through available");
+        check(clarity->value()==0 && strength->value()==100 && !through->isChecked() && !transparency->isEnabled(),
+              "new settings preserve existing defaults");
+        clarity->setValue(60);strength->setValue(170);app.processEvents();saved.sync();
+        check(qAbs(saved.value("appearance/clarity").toDouble()-.6)<.001 &&
+              qAbs(saved.value("appearance/liquidStrength").toDouble()-1.7)<.001,"new material settings persist");
+        const auto opaque=panel.grab().toImage();
+        through->setChecked(true);transparency->setValue(50);settle();saved.sync();
+        const auto transparent=panel.grab().toImage();
+        const qreal dpr=panel.devicePixelRatioF();
+        check(qAlpha(opaque.pixel(qRound(400*dpr),qRound(30*dpr)))==255 &&
+              qAlpha(transparent.pixel(qRound(400*dpr),qRound(30*dpr)))>=125 &&
+              qAlpha(transparent.pixel(qRound(400*dpr),qRound(30*dpr)))<=129,
+              "see-through changes actual premultiplied surface alpha");
+        check(label.isVisible() && qFuzzyCompare(label.windowOpacity(),1.),"see-through does not fade original child widgets");
+        check(saved.value("appearance/seeThrough").toBool() && qAbs(saved.value("appearance/transparency").toDouble()-.5)<.001,
+              "see-through enabled and amount persist");
+        if(x11)check(!blurProperty().contains(" = "),"see-through never reintroduces native rectangular blur");
+        through->setChecked(false);settle();
+        check(panel.grab().toImage()==opaque,"disabling see-through restores exact material");
         dialogs.first()->close();
         panel.resize(860,60);settle();
         check(!panel.mask().contains(QPoint(859,0)) && panel.mask().contains(QPoint(858,30)),"resize retains rounded ends");

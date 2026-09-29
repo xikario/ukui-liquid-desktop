@@ -1449,6 +1449,9 @@ StartMenu::StartMenu(QWidget *parent)
     setupUi();
     m_nextKdeGlassView = new NextKdeGlassView(this);
     m_nextKdeGlassView->setRadius(26);
+    QTimer::singleShot(0, this, [this] {
+        if (m_skin == Skin::EcoLiquid) m_nextKdeGlassView->prepareGpu();
+    });
     m_glassLightTimer = new QTimer(this);
     m_glassLightTimer->setInterval(33);
     connect(m_glassLightTimer, &QTimer::timeout, this, [this] {
@@ -1720,13 +1723,13 @@ void StartMenu::captureNextKdeBackdrop()
         && backdrop.devicePixelRatio() == m_lastBackdrop.devicePixelRatio()
         && backdrop == m_lastBackdrop)
         return;
-    if (qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_HQ"))
+    if (!qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_FAST"))
         m_nextKdeGlassView->setBackdrop(backdrop);
     else
         m_nextKdeGlassView->setBackdropFast(backdrop);
     m_lastBackdrop = backdrop;
     qDebug() << "[NextKdeGlass] captured backdrop" << snapshot.size()
-             << "mode" << (qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_HQ") ? "hq" : "fast")
+             << "mode" << (qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_FAST") ? "fast" : "shared-optics")
              << "for menu" << size();
 }
 

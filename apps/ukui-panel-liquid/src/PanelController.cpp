@@ -29,6 +29,10 @@ QString PanelController::configFile() const {
 PanelController::PanelController(QObject *parent):QObject(parent) {
     QSettings s(configFile(),QSettings::IniFormat);
     m_refraction=qBound(0.,s.value("appearance/refraction",3.5).toDouble(),8.);
+    m_clarity=qBound(0.,s.value("appearance/clarity",0.).toDouble(),1.);
+    m_liquidStrength=qBound(0.,s.value("appearance/liquidStrength",1.).toDouble(),2.);
+    m_transparency=qBound(0.,s.value("appearance/transparency",.35).toDouble(),.65);
+    m_seeThrough=s.value("appearance/seeThrough",false).toBool();
     m_chroma=qBound(0.,s.value("appearance/chroma",.48).toDouble(),1.3);
     m_enabled=s.value("appearance/enabled",true).toBool();
     m_followWallpaper=s.value("appearance/followWallpaper",true).toBool();
@@ -81,6 +85,10 @@ void PanelController::apply() {
     QSettings s(configFile(),QSettings::IniFormat);
     s.setValue("appearance/refraction",m_refraction);
     s.setValue("appearance/chroma",m_chroma);
+    s.setValue("appearance/clarity",m_clarity);
+    s.setValue("appearance/liquidStrength",m_liquidStrength);
+    s.setValue("appearance/transparency",m_transparency);
+    s.setValue("appearance/seeThrough",m_seeThrough);
     s.setValue("appearance/enabled",m_enabled);
     s.setValue("appearance/followWallpaper",m_followWallpaper);
     s.setValue("appearance/opacity",m_surface.opacity);
@@ -117,7 +125,7 @@ void PanelController::settingsDialog(QWidget *owner) {
     dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->setWindowTitle("面板 · 液态外观");
     dialog->setMinimumWidth(400);
     auto *form=new QFormLayout(dialog);
-    auto *intro=new QLabel("采用与开始菜单同源的折射材质，以桌面壁纸为背景。修改后立即保存。",dialog);
+    auto *intro=new QLabel("以桌面壁纸生成液态材质。清晰度调节磨砂，液态强度调节弯折；修改后立即保存。",dialog);
     intro->setWordWrap(true);form->addRow(intro);
     auto *enabled=new QCheckBox("启用液态主题",dialog);enabled->setChecked(m_enabled);form->addRow(enabled);
     connect(enabled,&QCheckBox::toggled,this,[this](bool on){m_enabled=on;apply();});
@@ -128,18 +136,27 @@ void PanelController::settingsDialog(QWidget *owner) {
     });
     auto *refresh=new QPushButton("立即刷新背景材质",dialog);form->addRow(refresh);
     connect(refresh,&QPushButton::clicked,this,[this]{refreshBackdrop();});
-    auto slider=[&](const QString &name,int low,int high,int value,auto change){
+    auto slider=[&](const QString &name,const QString &id,int low,int high,int value,auto change){
         auto *row=new QWidget(dialog);auto *layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
-        auto *bar=new QSlider(Qt::Horizontal,row);bar->setRange(low,high);bar->setValue(value);
+        auto *bar=new QSlider(Qt::Horizontal,row);bar->setObjectName(id);bar->setRange(low,high);bar->setValue(value);
         auto *number=new QLabel(QString::number(value),row);number->setMinimumWidth(32);
         layout->addWidget(bar);layout->addWidget(number);form->addRow(name,row);
         connect(bar,&QSlider::valueChanged,this,[this,number,change](int v){number->setText(QString::number(v));change(v);apply();});
+        return bar;
     };
-    slider("背景压暗（%）",15,95,qRound(m_surface.opacity*100),[this](int v){m_surface.opacity=v/100.;});
-    slider("底板圆角",0,24,qRound(m_surface.radius),[this](int v){m_surface.radius=v;});
-    slider("边缘高光（%）",0,100,qRound(m_surface.highlight*100),[this](int v){m_surface.highlight=v/100.;});
-    slider("折射强度（0–80）",0,80,qRound(m_refraction*10),[this](int v){m_refraction=v/10.;});
-    slider("背景色彩（%）",0,130,qRound(m_chroma*100),[this](int v){m_chroma=v/100.;});
+    slider("背景压暗（%）","liquidPanelShade",15,95,qRound(m_surface.opacity*100),[this](int v){m_surface.opacity=v/100.;});
+    slider("底板圆角","liquidPanelRadius",0,24,qRound(m_surface.radius),[this](int v){m_surface.radius=v;});
+    slider("边缘高光（%）","liquidPanelHighlight",0,100,qRound(m_surface.highlight*100),[this](int v){m_surface.highlight=v/100.;});
+    slider("液态强度（%）","liquidPanelStrength",0,200,qRound(m_liquidStrength*100),[this](int v){m_liquidStrength=v/100.;});
+    slider("背景清晰度（%）","liquidPanelClarity",0,100,qRound(m_clarity*100),[this](int v){m_clarity=v/100.;});
+    slider("背景色彩（%）","liquidPanelChroma",0,130,qRound(m_chroma*100),[this](int v){m_chroma=v/100.;});
+    auto *seeThrough=new QCheckBox("透视后方窗口",dialog);
+    seeThrough->setObjectName("liquidPanelSeeThrough");seeThrough->setChecked(m_seeThrough);form->addRow(seeThrough);
+    auto *transparency=slider("窗口透视程度（%）","liquidPanelTransparency",0,65,qRound(m_transparency*100),[this](int v){m_transparency=v/100.;});
+    transparency->setEnabled(m_seeThrough);
+    connect(seeThrough,&QCheckBox::toggled,this,[this,transparency](bool on){m_seeThrough=on;transparency->setEnabled(on);apply();});
+    auto *hint=new QLabel("透视只影响底板，图标和文字保持清晰；后方窗口自然透出，不做实时折射。",dialog);
+    hint->setWordWrap(true);form->addRow(hint);
     auto *reduced=new QCheckBox("减弱菜单动画",dialog);reduced->setChecked(m_reducedMotion);form->addRow(reduced);
     connect(reduced,&QCheckBox::toggled,this,[this](bool on){m_reducedMotion=on;apply();});
     auto *buttons=new QDialogButtonBox(QDialogButtonBox::Close,dialog);form->addRow(buttons);
@@ -176,6 +193,7 @@ bool PanelController::eventFilter(QObject *obj,QEvent *e) {
             const QImage source=screen?m_wallpaper.sample(QRect(w->mapToGlobal(QPoint()),w->size()),screen->geometry(),w->devicePixelRatioF()):QImage();
             if(!source.isNull()) {
                 m_optics.setOptics(m_refraction,m_surface.opacity,m_surface.highlight,m_chroma);
+                m_optics.setMaterial(m_clarity,m_liquidStrength);
                 m_optics.setWallpaper(source);
                 image=m_optics.renderPanel(QRect(QPoint(),w->size()),m_surface.radius);
                 w->setProperty("liquidOpticalGpu",m_optics.usedGpu());
@@ -191,6 +209,9 @@ bool PanelController::eventFilter(QObject *obj,QEvent *e) {
             setPanelNativeOutline(w,image);
         QPainter p(w);p.setRenderHint(QPainter::Antialiasing);p.setClipRegion(region);p.setCompositionMode(QPainter::CompositionMode_Source);
         p.fillRect(w->rect(),Qt::transparent);p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        // Fade the premultiplied material only; child icons/text paint normally.
+        // KWin composites windows behind us, with no screenshots or blur request.
+        p.setOpacity(m_seeThrough?1.-m_transparency:1.);
         p.drawImage(QPoint(),image);
         if(m_pointers.contains(w)) {
             const QPointF pos=m_pointers.value(w);

@@ -25,6 +25,17 @@ int main(int argc,char **argv){
   optics.setOptics(3.5,.58,.55,.48);
   const QImage restrained=optics.renderPanel(QRect(QPoint(),logical),18);
   if(gpu)check(restrained!=refracted,"chroma setting changes optical content");
+  optics.setMaterial(0,1);
+  check(optics.renderPanel(QRect(QPoint(),logical),18)==restrained,"default new material parameters preserve original rendering");
+  const int prepared=optics.preparationCount();
+  optics.setMaterial(1,1);const QImage crisp=optics.renderPanel(QRect(QPoint(),logical),18);
+  check(crisp!=restrained,"clarity changes wallpaper detail on this backend");
+  optics.setMaterial(1,1.9);const QImage strong=optics.renderPanel(QRect(QPoint(),logical),18);
+  check(strong!=crisp,"liquid strength changes material on this backend");
+  check(optics.preparationCount()==prepared,"material controls reuse prepared diffusion");
+  check(strong.pixelColor(0,0).alpha()<5 && strong.size()==restrained.size(),"material controls preserve shape and physical size");
+  optics.setMaterial(0,1);
+  check(optics.renderPanel(QRect(QPoint(),logical),18)==restrained,"returning settings restores exact baseline");
   const int count=optics.preparationCount();optics.renderPanel(QRect(QPoint(),logical),18);
   check(optics.preparationCount()==count,"background diffusion cached");
   refracted.save(output+QString("/optics-%1.png").arg(d));

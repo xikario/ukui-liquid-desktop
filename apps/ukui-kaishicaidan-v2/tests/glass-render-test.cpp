@@ -76,6 +76,13 @@ int main(int argc,char **argv) {
     const QString out=argc>1 ? QString::fromLocal8Bit(argv[1]) : QDir::tempPath();
     QDir().mkpath(out);
     NextKdeGlassView renderer;
+    qunsetenv("KAISHICAIDAN_GLASS_NO_GL");
+    qunsetenv("KAISHICAIDAN_GLASS_FAST");
+    renderer.prepareGpu();
+    renderer.prepareGpu();
+    check(renderer.image().isNull() && renderer.controlRenderCount()==0,
+          "warmup never exposes synthetic backdrop or control cache");
+    check(renderer.gpuInitializationCount()==1,"warmup is idempotent");
     for (double dpr : {1.0,1.5,2.0}) {
         QImage src(QSize(qRound(400*dpr),qRound(300*dpr)),QImage::Format_RGB32);
         src.setDevicePixelRatio(dpr);
@@ -159,6 +166,10 @@ int main(int argc,char **argv) {
     check(renderer.usedGpu() && renderer.gpuInitializationCount()==1,"GPU resumes after CPU fallback without recompilation");
     check(renderer.luminanceAt(QRectF(100,100,100,20))<0.15,"dark backdrop avoids label scrim");
     NextKdeGlassView fast;
+    qputenv("KAISHICAIDAN_GLASS_FAST","1");
+    fast.prepareGpu();
+    check(fast.gpuInitializationCount()==0,"fast mode skips GPU warmup");
+    qunsetenv("KAISHICAIDAN_GLASS_FAST");
     for (double dpr : {1.0,1.5,2.0}) {
         QImage input(QSize(qRound(400*dpr),qRound(300*dpr)),QImage::Format_RGB32);
         input.setDevicePixelRatio(dpr);

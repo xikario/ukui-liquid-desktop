@@ -81,10 +81,10 @@ public:
         if (current) context.doneCurrent();
     }
 
-    QImage render(const QImage &body, const QImage &clear, QSize logical, float radius, const QImage &shape, float refraction, float shade, float highlight, float chroma) {
+    QImage render(const QImage &body, const QImage &clear, QSize logical, float radius, const QImage &shape, float refraction, float shade, float highlight, float chroma, float liquidStrength, int control) {
         if (!attempted) { attempted=true; ready=initialize(); }
         if (!ready || !context.makeCurrent(&surface)) return {};
-        const QImage result=draw(body,clear,logical,radius,shape,refraction,shade,highlight,chroma);
+        const QImage result=draw(body,clear,logical,radius,shape,refraction,shade,highlight,chroma,liquidStrength,control);
         context.doneCurrent(); // textures were released by draw() before this
         return result;
     }
@@ -119,7 +119,7 @@ private:
         "uniform sampler2D texUnit; uniform sampler2D bodyUnit; varying vec2 uv;\n"
         "uniform vec2 halfpixel; uniform float viewportScale;\n"
         "uniform vec2 panelSize; uniform float panelRadius; uniform int controlMode;\n"
-        "uniform float shadeStrength; uniform float highlightStrength; uniform float chromaStrength;\n"
+        "uniform float shadeStrength; uniform float highlightStrength; uniform float chromaStrength; uniform float liquidStrength;\n"
         "uniform sampler2D shapeUnit; uniform int shaped;\n"
         "float roundedRectangleDist(vec2 p,vec2 b,vec4 r);\n"
         "vec2 gradSdRoundedBox(vec2 p,vec2 b,float r);\n") + upstream + R"GLSL(
@@ -151,6 +151,11 @@ void main() {
     vec3 optical=snellsRefraction(position,halfSize,normalRadii,
         min(halfSize.x,halfSize.y),d,concave).color.rgb;
     float clearRim=1.0-smoothstep(3.0,min(40.0,min(halfSize.x,halfSize.y)*0.8),inside);
+    if(liquidStrength!=1.0) {
+        float width=mix(0.35,1.65,clamp(liquidStrength/2.0,0.0,1.0));
+        clearRim=(1.0-smoothstep(3.0*width,min(40.0,min(halfSize.x,halfSize.y)*0.8)*width,inside))
+                 *min(liquidStrength,1.0);
+    }
     vec3 rgb=mix(texture2D(bodyUnit,uv).rgb,optical,clearRim);
     float lum=dot(rgb,vec3(0.299,0.587,0.114));
     // Neutral adaptive scrim: no blue pigment or near-opaque graphite fill.
@@ -189,8 +194,7 @@ void main() {
     return true;
     }
 
-    QImage draw(const QImage &body,const QImage &clear,QSize logical,float radius,const QImage &shape, float refraction, float shade, float highlight, float chroma) {
-    const int control=0;
+    QImage draw(const QImage &body,const QImage &clear,QSize logical,float radius,const QImage &shape, float refraction, float shade, float highlight, float chroma, float liquidStrength, int control) {
     auto *gl=context.functions();
     auto &program=*programStorage;
     if (!framebuffer || framebuffer->size()!=body.size())
@@ -225,11 +229,12 @@ void main() {
     program.setUniformValue("viewportScale",1.f);
     program.setUniformValue("panelRadius",radius);
     program.setUniformValue("controlMode",control);
-    program.setUniformValue("edgeSizePixels",qMin(22.f,qMin(logical.width(),logical.height())*.24f));
+    program.setUniformValue("edgeSizePixels",control ? 5.5f : qMin(22.f,qMin(logical.width(),logical.height())*.24f));
     program.setUniformValue("refractionStrength",1.f);
     program.setUniformValue("refractionNormalPow",2.f);
     program.setUniformValue("refractionRGBFringing",control ? 0.35f : 0.65f);
-    program.setUniformValue("refractionOffsetStrength",refraction);
+    program.setUniformValue("refractionOffsetStrength",control ? 0.55f : refraction*liquidStrength);
+    program.setUniformValue("liquidStrength",liquidStrength);
     program.setUniformValue("materialSoftness",0.f);
     program.setUniformValue("materialReflectionStrength",control ? 0.28f : 0.14f);
     program.setUniformValue("cornerExponent",2.f);
@@ -262,6 +267,10 @@ void LiquidOpticsRenderer::setOptics(qreal refraction,qreal shade,qreal highligh
     m_refraction=qBound(0.,refraction,8.);m_shade=qBound(.15,shade,.95);m_highlight=qBound(0.,highlight,1.);
     m_chroma=qBound(0.,chroma,1.3);
 }
+void LiquidOpticsRenderer::setMaterial(qreal clarity, qreal liquidStrength) {
+    m_clarity=qBound(0.,clarity,1.);
+    m_liquidStrength=qBound(0.,liquidStrength,2.);
+}
 LiquidOpticsRenderer::~LiquidOpticsRenderer() = default;
 
 void LiquidOpticsRenderer::setWallpaper(const QImage &source)
@@ -275,10 +284,18 @@ void LiquidOpticsRenderer::setWallpaper(const QImage &source)
 
 QImage LiquidOpticsRenderer::renderPanel(const QRect &logicalRect, qreal radius, const QPainterPath &shape)
 {
+    return renderSurface(logicalRect,radius,shape,0);
+}
+QImage LiquidOpticsRenderer::renderControl(const QRect &logicalRect, qreal radius, bool pressed)
+{
+    return renderSurface(logicalRect,radius,{},pressed?2:1);
+}
+QImage LiquidOpticsRenderer::renderSurface(const QRect &logicalRect, qreal radius, const QPainterPath &shape, int control)
+{
     m_usedGpu = false;
     if (m_source.isNull() || logicalRect.isEmpty()) return {};
     const qreal dpr = m_source.devicePixelRatio();
-    if (m_body.isNull()) {
+    if (m_body.isNull() && !control) {
         const QSize logical(qMax(1, qRound(m_source.width()/dpr)),
                             qMax(1, qRound(m_source.height()/dpr)));
         m_body = diffuse(m_source, logical);
@@ -290,8 +307,14 @@ QImage LiquidOpticsRenderer::renderPanel(const QRect &logicalRect, qreal radius,
     const QRect pixels(qRound(logicalRect.x()*dpr), qRound(logicalRect.y()*dpr),
                        qMax(1, qRound(logicalRect.width()*dpr)),
                        qMax(1, qRound(logicalRect.height()*dpr)));
-    QImage body = m_body.copy(pixels);
-    QImage clear = m_clear.copy(pixels);
+    QImage body = (control?m_source:m_body).copy(pixels);
+    QImage clear = (control?m_source:m_clear).copy(pixels);
+    body.setDevicePixelRatio(1);clear.setDevicePixelRatio(1);
+    if(m_clarity>0) {
+        QImage raw=m_source.copy(pixels);raw.setDevicePixelRatio(1);
+        { QPainter p(&body);p.setOpacity(m_clarity);p.drawImage(0,0,raw); }
+        { QPainter p(&clear);p.setOpacity(m_clarity);p.drawImage(0,0,raw); }
+    }
     // Radius must fit collapsed title-only fences too.
     radius = qMin(radius, qMin(logicalRect.width(), logicalRect.height())/2.0);
     QImage result;
@@ -305,7 +328,7 @@ QImage LiquidOpticsRenderer::renderPanel(const QRect &logicalRect, qreal radius,
             m_shapeDpr = dpr;
         }
         result = m_backend->render(body, clear, logicalRect.size(), radius,
-                                  shape.isEmpty() ? QImage() : m_shapeField, m_refraction, m_shade, m_highlight, m_chroma);
+                                  shape.isEmpty() ? QImage() : m_shapeField, m_refraction, m_shade, m_highlight, m_chroma, m_liquidStrength, control);
     }
     m_usedGpu = !result.isNull();
     if (!m_usedGpu) {
@@ -319,8 +342,24 @@ QImage LiquidOpticsRenderer::renderPanel(const QRect &logicalRect, qreal radius,
             path.addRoundedRect(QRectF(QPointF(), QSizeF(result.size())), radius*dpr, radius*dpr);
         else
             path=QTransform::fromScale(dpr,dpr).map(shape);
+        if(!qFuzzyCompare(m_liquidStrength,1.0)) {
+            // Bounded row sampling, only on cache rebuild. CPU mode still gives
+            // the strength control visible curvature, without a render loop.
+            const QImage input=body;
+            const qreal band=qMax(1.,qMin(22.,qMin(logicalRect.width(),logicalRect.height())*.24)*dpr);
+            for(int y=0;y<body.height();++y) {
+                auto *out=reinterpret_cast<QRgb *>(body.scanLine(y));
+                for(int x=0;x<body.width();++x) {
+                    const qreal edge=qBound(0.,1.-qMin(qMin(x,body.width()-1-x),qMin(y,body.height()-1-y))/band,1.);
+                    const qreal bend=m_refraction*(m_liquidStrength-1.)*dpr*edge*edge;
+                    const int sx=qBound(0,qRound(x+(x<body.width()/2?bend:-bend)),body.width()-1);
+                    const int sy=qBound(0,qRound(y+(y<body.height()/2?bend:-bend)),body.height()-1);
+                    out[x]=input.pixel(sx,sy);
+                }
+            }
+        }
         p.drawImage(0, 0, body);
-        p.fillRect(result.rect(), QColor(0, 0, 0, qRound(180*m_shade)));
+        p.fillRect(result.rect(), control ? (control==2?QColor(0,0,0,20):QColor(255,255,255,20)) : QColor(0, 0, 0, qRound(180*m_shade)));
         QImage mask(result.size(), QImage::Format_ARGB32_Premultiplied);
         mask.fill(Qt::transparent);
         { QPainter mp(&mask); mp.setRenderHint(QPainter::Antialiasing); mp.fillPath(path, Qt::white); }
