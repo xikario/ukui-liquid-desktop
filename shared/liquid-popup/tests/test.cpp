@@ -14,6 +14,15 @@
 #include <cstdlib>
 using namespace LiquidPopup;
 void check(bool ok,const char *message){if(!ok){qCritical()<<message;std::exit(1);}}
+class GeometryChanges final : public QObject {
+public:
+ int count=0;
+protected:
+ bool eventFilter(QObject *,QEvent *event) override {
+   if(event->type()==QEvent::Resize || event->type()==QEvent::Move) ++count;
+   return false;
+ }
+};
 int main(int argc,char **argv){
  QApplication app(argc,argv);auto *originalAppStyle=app.style();
  installMenuGlyphStyle(app);install(app);install(app);
@@ -170,6 +179,56 @@ int main(int argc,char **argv){
  qInfo()<<"resized edge menu"<<changing.geometry()<<"available"<<available;
  check(available.contains(changing.geometry()),"async resized popup remains inside the screen");
  changing.hide();
+ // Unlike general dynamic menus above, an async status menu reserves all
+ // result labels while hidden: neither its first nor any later frame resizes.
+ QMenu stable;
+ stable.setStyleSheet("QMenu {color:white;padding:6px;} QMenu::item {min-height:18px;}");
+ stable.addAction(QString::fromUtf8("从已固定取消"));
+ stable.addAction(QString::fromUtf8("打开"));
+ stable.addAction(QString::fromUtf8("打开目录"));
+ stable.addAction(QString::fromUtf8("修改图标"));
+ stable.addSeparator();
+ const QString pendingText=QString::fromUtf8("正在检查安装来源…");
+ auto *status=stable.addAction(pendingText);status->setEnabled(false);
+ const QStringList results={QString::fromUtf8("移到回收站（文件夹版）"),
+   QString::fromUtf8("系统组件，无法卸载"),QString::fromUtf8("卸载 deb 软件包"),
+   QString::fromUtf8("移除快捷方式"),QString::fromUtf8("请在软件商店卸载（Flatpak）"),
+   QString::fromUtf8("请在软件商店卸载（Snap）"),QString::fromUtf8("无法判断安装来源")};
+ bool statusTriggered=false;
+ QObject::connect(status,&QAction::triggered,[&]{statusTriggered=true;});
+ reserveActionTextWidth(stable,*status,results);
+ check(!stable.isVisible() && status->text()==pendingText && !status->isEnabled() && !statusTriggered,
+       "reserving status width preserves pending text, disabled state and actions");
+ GeometryChanges geometryChanges;
+ for(int opening=0;opening<3;++opening) {
+   status->setText(pendingText);status->setEnabled(false);
+   const int beforeCapture=captures;
+   stable.popup(opening==2?available.bottomRight()-QPoint(8,8):QPoint(80,80));app.processEvents();
+   const QRect initialGeometry=stable.geometry();
+   check(available.contains(initialGeometry),"reserved popup initially fits the screen including at its edge");
+   geometryChanges.count=0;stable.installEventFilter(&geometryChanges);
+   QEventLoop lookupWait;
+   for(int i=0;i<results.size();++i)
+     QTimer::singleShot(10+i*15,&stable,[&,i]{
+       status->setText(results[i]);status->setEnabled(i%2==0);
+       check(stable.geometry()==initialGeometry,"async result keeps initial popup position and size");
+     });
+   QTimer::singleShot(130,&lookupWait,&QEventLoop::quit);lookupWait.exec();
+   check(geometryChanges.count==0,"no resize or move event occurs between pending and final labels");
+   check(captures==beforeCapture+1,"stable status menu samples only its initial opening");
+   stable.removeEventFilter(&geometryChanges);
+   QImage frame(stable.size()*stable.devicePixelRatioF(),QImage::Format_ARGB32_Premultiplied);
+   frame.setDevicePixelRatio(stable.devicePixelRatioF());frame.fill(Qt::transparent);
+   stable.render(&frame,QPoint(),QRegion(),QWidget::DrawChildren);
+   frame.save(QString("artifacts/menu-stable-%1.png").arg(opening));
+   qInfo()<<"stable async menu geometry"<<initialGeometry<<"layout events"<<geometryChanges.count;
+   stable.hide();
+ }
+ check(!statusTriggered,"lookup updates never trigger a menu command");
+ stable.popup(QPoint(80,80));app.processEvents();status->setEnabled(true);stable.setActiveAction(status);
+ QKeyEvent confirmStatus(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);
+ QApplication::sendEvent(&stable,&confirmStatus);
+ check(statusTriggered && !stable.isVisible(),"reserved menu retains native keyboard activation");
  // Exercise the actual nested QMenu::exec path, not just geometry math.
  const QRect anchor(250,80,200,35);
  QTimer::singleShot(0,&menu,[&]{

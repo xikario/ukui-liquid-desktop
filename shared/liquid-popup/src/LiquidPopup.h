@@ -46,6 +46,9 @@ bool isEnabled();
 // Used by host styles for crisp menu symbols at fractional display scales.
 bool drawMenuGlyph(QStyle::PrimitiveElement element, const QStyleOption *option,
                    QPainter *painter);
+// Reserve an async action's possible labels before opening, using the final
+// menu style. Text updates then keep the native popup geometry unchanged.
+void reserveActionTextWidth(QMenu &menu, QAction &action, const QStringList &texts);
 // Center button menus on the trigger and flip upward when space is short.
 QAction *execAt(QMenu &menu, const QRect &globalAnchor);
 QAction *execAt(QMenu &menu, QWidget *anchor);

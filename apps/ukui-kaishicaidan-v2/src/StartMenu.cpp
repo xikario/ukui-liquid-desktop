@@ -67,6 +67,13 @@
 #include <QtDBus/QDBusVariant>
 
 namespace {
+const QString kRemoveFolderText=QStringLiteral("移到回收站（文件夹版）");
+const QString kRemoveProtectedText=QStringLiteral("系统组件，无法卸载");
+const QString kRemoveDebText=QStringLiteral("卸载 deb 软件包");
+const QString kRemoveShortcutText=QStringLiteral("移除快捷方式");
+const QString kRemoveFlatpakText=QStringLiteral("请在软件商店卸载（Flatpak）");
+const QString kRemoveSnapText=QStringLiteral("请在软件商店卸载（Snap）");
+const QString kRemoveUnknownText=QStringLiteral("无法判断安装来源");
     bool isX11Platform() {
         return QApplication::platformName().toLower().contains(QLatin1String("xcb"));
     }
@@ -3386,7 +3393,7 @@ StartMenu::AppRemovalTarget StartMenu::detectAppRemovalTarget(const AppEntry &ap
     if (!bundleRoot.isEmpty() && isSafeFolderBundle(bundleRoot)) {
         result.kind = AppRemovalTarget::Kind::FolderBundle;
         result.target = bundleRoot;
-        result.actionText = QString::fromUtf8("移到回收站（文件夹版）");
+        result.actionText = kRemoveFolderText;
         result.detail = bundleRoot;
         return result;
     }
@@ -3411,10 +3418,10 @@ StartMenu::AppRemovalTarget StartMenu::detectAppRemovalTarget(const AppEntry &ap
         result.detail = QString::fromUtf8("deb 软件包：%1").arg(package);
         if (isProtectedDebPackage(package)) {
             result.kind = AppRemovalTarget::Kind::ProtectedPackage;
-            result.actionText = QString::fromUtf8("系统组件，无法卸载");
+            result.actionText = kRemoveProtectedText;
         } else {
             result.kind = AppRemovalTarget::Kind::DebPackage;
-            result.actionText = QString::fromUtf8("卸载 deb 软件包");
+            result.actionText = kRemoveDebText;
         }
         return result;
     }
@@ -3422,20 +3429,20 @@ StartMenu::AppRemovalTarget StartMenu::detectAppRemovalTarget(const AppEntry &ap
     if (isUserDesktopShortcut(desktopPath)) {
         result.kind = AppRemovalTarget::Kind::DesktopShortcut;
         result.target = desktopPath;
-        result.actionText = QString::fromUtf8("移除快捷方式");
+        result.actionText = kRemoveShortcutText;
         result.detail = QString::fromUtf8("只移除菜单入口，不删除程序文件");
         return result;
     }
 
     result.kind = AppRemovalTarget::Kind::Unsupported;
     if (desktopPath.contains(QStringLiteral("/flatpak/"))) {
-        result.actionText = QString::fromUtf8("请在软件商店卸载（Flatpak）");
+        result.actionText = kRemoveFlatpakText;
         result.detail = QString::fromUtf8("第一版暂不自动卸载 Flatpak 应用");
     } else if (desktopPath.contains(QStringLiteral("/snapd/"))) {
-        result.actionText = QString::fromUtf8("请在软件商店卸载（Snap）");
+        result.actionText = kRemoveSnapText;
         result.detail = QString::fromUtf8("第一版暂不自动卸载 Snap 应用");
     } else {
-        result.actionText = QString::fromUtf8("无法判断安装来源");
+        result.actionText = kRemoveUnknownText;
         result.detail = desktopPath;
     }
     return result;
@@ -3636,6 +3643,14 @@ void StartMenu::showAppContextMenu(const AppEntry &app, const QPoint &globalPos)
             });
     } else actUninstall->setText("正在检查其他应用，请稍后重开菜单");
 
+    // Measure every possible lookup result before Show, after liquid metrics
+    // are installed. Async status changes must not visibly stretch the menu.
+    QStringList removalTexts={kRemoveFolderText,kRemoveProtectedText,kRemoveDebText,
+                              kRemoveShortcutText,kRemoveUnknownText};
+    const QString desktopPath=QFileInfo(app.desktopPath).absoluteFilePath();
+    if(desktopPath.contains(QStringLiteral("/flatpak/"))) removalTexts << kRemoveFlatpakText;
+    else if(desktopPath.contains(QStringLiteral("/snapd/"))) removalTexts << kRemoveSnapText;
+    LiquidPopup::reserveActionTextWidth(menu,*actUninstall,removalTexts);
     QAction *chosen = menu.exec(globalPos);
     if (chosen == actPin) {
         if (app.pinned)

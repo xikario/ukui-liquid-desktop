@@ -283,6 +283,20 @@ public:
     }
 };
 }
+void reserveActionTextWidth(QMenu &menu,QAction &action,const QStringList &texts) {
+    // This must run while hidden; measuring must never flash intermediate text.
+    if(menu.isVisible() || !menu.actions().contains(&action)) return;
+    menu.ensurePolished();
+    for(QObject *child:menu.children())if(auto *skin=dynamic_cast<MenuSkin *>(child))skin->prepare();
+    const QString original=action.text();
+    int width=menu.sizeHint().width();
+    for(const QString &text:texts) {
+        action.setText(text);
+        width=qMax(width,menu.sizeHint().width());
+    }
+    action.setText(original);
+    menu.setMinimumWidth(qMax(menu.minimumWidth(),width));
+}
 QAction *execAt(QMenu &menu,const QRect &anchor) {
     if(tip) tip->hide();
     QToolTip::hideText();
