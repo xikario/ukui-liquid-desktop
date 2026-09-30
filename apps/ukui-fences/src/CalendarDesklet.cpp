@@ -1,6 +1,7 @@
 #include "CalendarDesklet.h"
 #include "DesktopCanvas.h"
 #include "LiquidPopup.h"
+#include "LiquidWheelPicker.h"
 #include <QSettings>
 #include <QMessageBox>
 #include <QPushButton>
@@ -31,80 +32,8 @@
 #include <QLocale>
 
 namespace {
-// A bounded five-row picker; it uses the shared menu material and placement.
-class DateWheel final : public QWidget {
-public:
-    DateWheel(int current,int minimum,int maximum,const QString &suffix,QMenu *menu)
-        :QWidget(menu),m_value(qBound(minimum,current,maximum)),m_min(minimum),m_max(maximum),m_suffix(suffix),m_menu(menu){
-        setFixedSize(146,180);setFocusPolicy(Qt::StrongFocus);setCursor(Qt::PointingHandCursor);
-        setAccessibleName(suffix=="年"?"年份选择":"月份选择");
-        setToolTip("滚轮或上下拖动选择，点击确认；Esc 取消");sync();
-    }
-    int value() const{return m_value;}
-    bool cancelled=false;
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter p(this);p.setRenderHint(QPainter::Antialiasing);
-        p.setPen(Qt::NoPen);p.setBrush(QColor(154,232,219,40));p.drawRoundedRect(QRectF(8,73,width()-16,34),9,9);
-        const QColor ink=m_menu->palette().color(QPalette::WindowText);
-        for(int offset=-2;offset<=2;++offset){
-            const int value=m_value+offset;if(value<m_min || value>m_max)continue;
-            QFont f=font();f.setPixelSize(offset==0?19:qAbs(offset)==1?16:13);f.setBold(offset==0);p.setFont(f);
-            QColor color=ink;color.setAlphaF(offset==0?1.:qAbs(offset)==1?.65:.32);p.setPen(color);
-            p.drawText(QRectF(8,73+offset*34,width()-16,34),Qt::AlignCenter,QString::number(value)+" "+m_suffix);
-        }
-    }
-    void wheelEvent(QWheelEvent *e) override {
-        if(!e->pixelDelta().isNull()){
-            m_pixels+=e->pixelDelta().y();const int steps=m_pixels/34;m_pixels-=steps*34;step(-steps);
-        }else{
-            m_angle+=e->angleDelta().y();const int steps=m_angle/120;m_angle-=steps*120;step(-steps);
-        }
-        e->accept();
-    }
-    void mousePressEvent(QMouseEvent *e) override {
-        if(e->button()!=Qt::LeftButton)return;
-        m_startY=e->y();m_startValue=m_value;m_drag=false;e->accept();
-    }
-    void mouseMoveEvent(QMouseEvent *e) override {
-        if(!(e->buttons()&Qt::LeftButton))return;
-        const int dy=e->y()-m_startY;if(qAbs(dy)>6)m_drag=true;
-        if(m_drag){m_value=qBound(m_min,m_startValue-qRound(dy/34.),m_max);sync();}
-        e->accept();
-    }
-    void mouseReleaseEvent(QMouseEvent *e) override {
-        if(e->button()!=Qt::LeftButton)return;
-        if(!m_drag){step(qBound(-2,(e->y()-5)/34-2,2));m_menu->close();}
-        e->accept();
-    }
-    void keyPressEvent(QKeyEvent *e) override {
-        switch(e->key()){
-        case Qt::Key_Up:step(-1);break;
-        case Qt::Key_Down:step(1);break;
-        case Qt::Key_PageUp:step(-5);break;
-        case Qt::Key_PageDown:step(5);break;
-        case Qt::Key_Home:m_value=m_min;sync();break;
-        case Qt::Key_End:m_value=m_max;sync();break;
-        case Qt::Key_Return:case Qt::Key_Enter:m_menu->close();break;
-        case Qt::Key_Escape:cancelled=true;m_menu->close();break;
-        default:QWidget::keyPressEvent(e);return;
-        }
-        e->accept();
-    }
-private:
-    void step(int delta){if(!delta)return;m_value=qBound(m_min,m_value+delta,m_max);sync();}
-    void sync(){setProperty("selectedValue",m_value);setAccessibleDescription(QString::number(m_value)+m_suffix);update();}
-    int m_value,m_min,m_max,m_angle=0,m_pixels=0,m_startY=0,m_startValue=0;
-    bool m_drag=false;
-    QString m_suffix;QMenu *m_menu;
-};
-int pickDateValue(QWidget *owner,QPushButton *anchor,const QString &name,int current,int minimum,int maximum,const QString &suffix){
-    QMenu menu(owner);menu.setObjectName(name+"Menu");menu.setStyleSheet("QMenu{padding:0px;margin:0px;}");
-    auto *wheel=new DateWheel(current,minimum,maximum,suffix,&menu);wheel->setObjectName(name+"Wheel");
-    auto *action=new QWidgetAction(&menu);action->setDefaultWidget(wheel);menu.addAction(action);
-    QObject::connect(&menu,&QMenu::aboutToShow,wheel,[wheel]{QTimer::singleShot(0,wheel,[wheel]{wheel->setFocus(Qt::PopupFocusReason);});});
-    LiquidPopup::execAt(menu,anchor);
-    return wheel->cancelled?current:wheel->value();
+int pickDateValue(QWidget *,QPushButton *anchor,const QString &name,int current,int minimum,int maximum,const QString &suffix){
+    return LiquidWheelPicker::pick(anchor,name,current,minimum,maximum,[suffix](int n){return QString::number(n)+" "+suffix;});
 }
 class AgendaDelegate final : public QStyledItemDelegate {
 public:

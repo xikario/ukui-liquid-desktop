@@ -58,6 +58,26 @@ static int runSmartInteractionTest(const QString &root)
     auto *smart=canvas.findChild<SmartSpaceWidget *>();
     check(smart!=nullptr,"Smart Space exists");
     if (!smart) return 1;
+    // Send real grip events for both desktop-child and pinned native-window modes.
+    auto *resizePeer=canvas.createFence("resize peer",QRect(910,100,200,400));
+    for (bool pinned : {false,true}) {
+        canvas.setSmartSpaceAlwaysOnTop(pinned);settle(100);
+        canvas.moveSmartSpace(100,100);canvas.resizeSmartSpace(800,500);settle(100);
+        auto *grip=smart->findChild<QWidget *>("smartSpaceResizeGrip");
+        check(grip!=nullptr,"smart space exposes its resize grip");
+        if (grip) {
+            const QPoint local=grip->rect().center(),global=grip->mapToGlobal(local);
+            QMouseEvent press(QEvent::MouseButtonPress,local,global,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+            QApplication::sendEvent(grip,&press);
+            QMouseEvent move(QEvent::MouseMove,local+QPoint(4,0),global+QPoint(4,0),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+            QApplication::sendEvent(grip,&move);
+            QMouseEvent release(QEvent::MouseButtonRelease,local,global+QPoint(4,0),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+            QApplication::sendEvent(grip,&release);
+            check(smart->size()==QSize(810,506),"smart space resize snaps to fence with its aspect ratio preserved");
+        }
+    }
+    resizePeer->hide();canvas.setSmartSpaceAlwaysOnTop(false);
+    canvas.moveSmartSpace(100,100);canvas.resizeSmartSpace(800,500);settle(100);
     SmartTransitionVisibilityProbe visibility;
     visibility.smart = smart;
     visibility.entry = smart->findChild<QToolButton *>("smartEdgeReveal");

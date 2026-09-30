@@ -46,6 +46,7 @@ public:
     explicit SystemMonitor(QWidget *parent = nullptr);
     ~SystemMonitor() override;
 
+    QWidget *createSettingsPage(QWidget *parent);
     void setEditMode(bool edit);
     void refreshWallpaperTheme();
     void setSkin(Skin skin);
@@ -295,6 +296,7 @@ private:
     QPoint m_dragOffset;
     QPoint m_resizeStartGlobal;
     QSize m_resizeStartSize;
+    QPoint m_resizeStartPosition;
     double m_scale = 1.0;
     int m_statIntervalSec = 5;
     int m_aiExtraHeight = 0;

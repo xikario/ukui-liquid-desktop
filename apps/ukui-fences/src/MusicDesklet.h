@@ -18,6 +18,7 @@ protected:
 private:
     void updateControls();
     void syncNotesAnimation();
+    QRect notesArea() const;
     void paintFloatingNotes(QPainter &p);
     QTimer m_notesTimer;
     QElapsedTimer m_notesClock;

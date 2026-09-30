@@ -118,6 +118,7 @@ int main(int argc, char *argv[])
 {
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
+    QApplication::setAttribute(Qt::AA_DontShowIconsInMenus);
 
     QApplication app(argc, argv);
     LiquidPopup::installMenuGlyphStyle(app);
@@ -136,6 +137,7 @@ int main(int argc, char *argv[])
 
     const QStringList args = app.arguments();
     const QString existingMethod = args.contains("--quit") ? QStringLiteral("quitApp")
+        : args.contains("--settings") ? QStringLiteral("showUnifiedSettings")
         : args.contains("--hide") ? QStringLiteral("hideFences")
         : args.contains("--edit") ? QStringLiteral("toggleEditMode")
         : args.contains("--system-monitor") ? QStringLiteral("showSystemMonitorWidget")
@@ -161,7 +163,11 @@ int main(int argc, char *argv[])
     }
     setupTrayIcon(canvas, icon);
 
-    if (args.contains("--hide"))
+    if (args.contains("--settings")) {
+        canvas.showAndActivate();
+        canvas.showUnifiedSettings();
+    }
+    else if (args.contains("--hide"))
         canvas.hideFences();
     else if (args.contains("--edit"))
         canvas.setEditModeDBus(true);

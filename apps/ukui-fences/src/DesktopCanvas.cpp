@@ -1,3 +1,5 @@
+#include "FencesSettingsWindow.h"
+#include "WidgetResizeSnap.h"
 #include "../../../shared/async-work/BackgroundTask.h"
 #include "WallpaperImage.h"
 #include <QTextBrowser>
@@ -847,6 +849,7 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
 
 DesktopCanvas::~DesktopCanvas()
 {
+    delete m_settingsWindow.data();
     // Persist these before QObject destroys children in construction order.
     delete m_calendarWidget; m_calendarWidget = nullptr;
     delete m_musicWidget; m_musicWidget = nullptr;
@@ -878,7 +881,7 @@ void DesktopCanvas::showAndActivate()
     lockToDesktopGeometry();
     setupAsDesktop();
     updateHotCornerGuards();
-    raise();
+    emit desktopVisibilityChanged();
     QTimer::singleShot(250, this, [this] {
         if (!m_userHidden && isVisible())
             applyX11DesktopHints();
@@ -889,6 +892,7 @@ void DesktopCanvas::hideFences()
 {
     m_userHidden = true;
     hide();
+    emit desktopVisibilityChanged();
 }
 
 void DesktopCanvas::toggleEditMode()
@@ -948,7 +952,6 @@ void DesktopCanvas::activateOnSessionStartup()
             setWindowState(windowState() & ~Qt::WindowMinimized);
             lockToDesktopGeometry();
             setupAsDesktop();
-            raise();
             applyX11DesktopHints();
         });
     }
@@ -1078,7 +1081,6 @@ void DesktopCanvas::restackDesktopLayer()
     setWindowState(windowState() & ~Qt::WindowMinimized);
     lockToDesktopGeometry();
     setupAsDesktop();
-    raise();
     applyX11DesktopHints();
 
     const int delays[] = { 120, 500, 1200 };
@@ -1089,7 +1091,6 @@ void DesktopCanvas::restackDesktopLayer()
             show();
             lockToDesktopGeometry();
             updateHotCornerGuards();
-            raise();
             applyX11DesktopHints();
         });
     }
@@ -1150,11 +1151,52 @@ void DesktopCanvas::applyX11DesktopHints()
         }
     }
 
-    lowerPeonyDesktopWindows(display, window);
-    XRaiseWindow(display, window);
-    const Window frame = rootChildForWindow(display, window);
-    if (frame && frame != window)
-        XRaiseWindow(display, frame);
+    // Let the window manager update its own desktop-layer stacking order.
+    // Lowering root frames directly only changes the X server order: KWin
+    // restores its old Peony-above-Fences order on the next activation.
+    const Atom clientsAtom = XInternAtom(display, "_NET_CLIENT_LIST", False);
+    Atom actualType = None; int format = 0;
+    unsigned long count = 0, remaining = 0; unsigned char *data = nullptr;
+    bool managed = false;
+    if (XGetWindowProperty(display, DefaultRootWindow(display), clientsAtom, 0, 65536,
+                           False, XA_WINDOW, &actualType, &format, &count, &remaining,
+                           &data) == Success && data && format == 32) {
+        const auto *clients = reinterpret_cast<const Window *>(data);
+        for (unsigned long i = 0; i < count; ++i) managed |= clients[i] == window;
+        if (managed) for (unsigned long i = 0; i < count; ++i) {
+            if (clients[i] == window || !windowOrDescendantHasClass(display, clients[i],
+                    {QStringLiteral("peony-qt-desktop"), QStringLiteral("桌面")})) continue;
+            // Only actual DESKTOP clients, never a Peony file dialog/menu.
+            Atom peerType = None; int peerFormat = 0;
+            unsigned long peerCount = 0, peerRemaining = 0; unsigned char *peerData = nullptr;
+            bool desktop = false;
+            if (XGetWindowProperty(display, clients[i], typeAtom, 0, 16, False, XA_ATOM,
+                                   &peerType, &peerFormat, &peerCount, &peerRemaining,
+                                   &peerData) == Success && peerData && peerFormat == 32) {
+                const auto *types = reinterpret_cast<const Atom *>(peerData);
+                for (unsigned long j = 0; j < peerCount; ++j) desktop |= types[j] == desktopType;
+            }
+            if (peerData) XFree(peerData);
+            if (!desktop) continue;
+            XEvent restack{};
+            restack.xclient.type = ClientMessage; restack.xclient.window = window;
+            restack.xclient.message_type = XInternAtom(display, "_NET_RESTACK_WINDOW", False);
+            restack.xclient.format = 32;
+            restack.xclient.data.l[0] = 2; // Explicit desktop-management request.
+            restack.xclient.data.l[1] = clients[i];
+            restack.xclient.data.l[2] = Above;
+            XSendEvent(display, DefaultRootWindow(display), False,
+                       SubstructureRedirectMask | SubstructureNotifyMask, &restack);
+        }
+    }
+    if (data) XFree(data);
+    if (!managed) {
+        // Before KWin manages this window (or without a WM in tests), keep
+        // the conservative bottom-layer order until the deferred managed pass.
+        const Window frame = rootChildForWindow(display, window);
+        XLowerWindow(display, frame ? frame : window);
+        lowerPeonyDesktopWindows(display, window);
+    }
     XSync(display, False);
     XCloseDisplay(display);
 }
@@ -1816,9 +1858,131 @@ void DesktopCanvas::clearFenceSelections()
     }
 }
 
+void DesktopCanvas::showUnifiedSettings() { showSettingsPage(QString()); }
+void DesktopCanvas::showSettingsPage(const QString &page)
+{
+    if (!m_settingsWindow) {
+        m_settingsWindow = new FencesSettingsWindow(this);
+        connect(this, &QObject::destroyed, m_settingsWindow, &QObject::deleteLater);
+    }
+    m_settingsWindow->openPage(page);
+    m_settingsWindow->showNormal();
+    m_settingsWindow->raise();
+    m_settingsWindow->activateWindow();
+}
+void DesktopCanvas::openSystemWallpaper() { openWallpaperSettings(); }
+void DesktopCanvas::openFileManager()
+{
+        const QString peony = QStandardPaths::findExecutable(
+            QStringLiteral("peony"));
+        if (!peony.isEmpty() &&
+            QProcess::startDetached(peony, QStringList()))
+            return;
+        const QString home = QStandardPaths::writableLocation(
+            QStandardPaths::HomeLocation);
+        if (QProcess::startDetached(
+                QStringLiteral("gio"),
+                QStringList() << QStringLiteral("open") << home))
+            return;
+        QProcess::startDetached(
+            QStringLiteral("xdg-open"), QStringList() << home);
+}
+QString DesktopCanvas::settingsHelpHtml() const
+{
+    return QStringLiteral(
+            "<h2>UKUI Liquid Desktop · 桌面分区与小组件</h2>"
+            "<h3>分区与文件</h3>"
+            "<p>右键桌面 → 新建 → 普通分区。文件可拖入或拖出分区；单击标题栏折叠或展开。"
+            "Delete 移到回收站；剪切后的图标暂时置灰，粘贴完成后自动更新。</p>"
+            "<h3>布局编辑</h3>"
+            "<p>右键 → 编辑分区布局，开启后移动、缩放分区和桌面小组件，支持边缘吸附和图标避让。"
+            "完成后选择“退出布局编辑”。分区标题栏右键可重命名、锁定并单独设置字体。</p>"
+            "<h3>六类桌面小组件</h3>"
+            "<p>右键 → 桌面小组件，可切换智能空间、系统监视、时钟与倒计时、活动统计、"
+            "Strawberry 音乐、日历与系统待办。对号表示已启用；智能空间可收起成贴边星标。</p>"
+            "<p>活动统计记录前台应用停留时间；音乐组件通过 MPRIS 控制 Strawberry。"
+            "日历支持农历、节假日、年月滚轮和待办折叠；内置中国调休数据为 2026 年，日历右键可同步最新农历和已发布的节假日；系统待办只读。</p>"
+            "<h3>自启动与外观</h3>"
+            "<p>右键 → Fences 设置 → 桌面小组件，独立设置各组件随 Fences 启动。"
+            "“显示”与“自启动”是两个独立选项。</p>"
+            "<p>右键 → Fences 设置，可设置液态材质、主题配色和字体。"
+            "“桌面图标样式”可设置液态底座、强度和壁纸染色，并可单独允许分区内部使用。"
+            "“从当前壁纸取色”调整分区底色并保留字体颜色。液态材质使用缓存壁纸，GPU 不可用时降级渲染。</p>"
+            "<p>“Fences 壁纸”只修改 Fences 桌面层；选择“系统默认（跟随桌面）”恢复跟随系统壁纸。"
+            "自定义壁纸按文件内容识别格式。</p>"
+            "<h3>快捷键与备份</h3>"
+            "<p>Ctrl+A 全选，Ctrl+C/X/V 复制/剪切/粘贴，F2 重命名，Enter 打开，"
+            "Ctrl+滚轮缩放图标。右键 → Fences 设置 → 分区与布局，可导出和导入布局。</p>"
+            "<h3>系统监视与诊断</h3>"
+            "<p>系统监视的 API 密钥保存在系统密钥环，需要解锁后使用；只有主动执行 AI 诊断时才发送诊断数据。</p>"
+            "<p><a href=\"https://github.com/xikario/ukui-liquid-desktop\">项目源码与完整文档</a> · "
+            "<a href=\"https://github.com/SuceV587/NextKde\">NextKde 上游项目</a></p>");
+}
+QString DesktopCanvas::settingsAboutHtml() const
+{
+    return QStringLiteral(
+                "<h3>ukui-fences · UKUI Liquid Desktop</h3>"
+                "<p>核心版本：%1 · Qt 5 / UKUI X11</p>"
+                "<p>桌面分区、智能空间、系统监视，以及时钟/倒计时、活动统计、Strawberry 音乐、"
+                "日历与系统待办，共享液态材质与弹出菜单模块。</p>"
+                "<p>部分液态玻璃代码沿用并适配 NextKde 相关代码，直接 shader 来源为 NextKde-kylinos；"
+                "时钟、活动和日历参考 NextKde DeskCenter 设计，以 Qt 5 重新实现。感谢上游作者与贡献者。</p>"
+                "<p>项目以 GPL-3.0-or-later 发布，第三方文件保留原始署名及许可证。</p>"
+                "<p><a href=\"https://github.com/xikario/ukui-liquid-desktop\">项目仓库</a> · "
+                "<a href=\"https://github.com/SuceV587/NextKde\">NextKde</a> · "
+                "<a href=\"https://github.com/xikario/ukui-liquid-desktop/blob/main/THIRD_PARTY_NOTICES.md\">第三方来源与许可</a></p>")
+                .arg(QCoreApplication::applicationVersion().toHtmlEscaped());
+}
+void DesktopCanvas::resetLayoutSettings()
+{
+        if (QMessageBox::question(this, "重置布局…",
+                "确定清空所有分区和图标位置吗？") != QMessageBox::Yes)
+            return;
+
+        for (auto *fence : m_fences) {
+            fence->hide();
+            fence->deleteLater();
+        }
+        m_fences.clear();
+        clearLooseIcons();
+        m_looseIconPositions.clear();
+        clearSelection();
+        m_iconScale = 1.0;
+        m_desktopIconScale = 1.0;
+        m_gridColumns = 18;
+        m_gridRows = 11;
+        m_autoArrange = false;
+        m_arrangeMode = ArrangeMode::Manual;
+        addSystemIcons();
+        refreshDesktopIcons();
+        saveLayout();
+}
+QRect DesktopCanvas::snappedWidgetResize(QWidget *widget, const QRect &start,
+                                        QSize requested, QSize minimum, QSize maximum,
+                                        qreal ratio, Qt::Edges fixed) const
+{
+    QList<QRect> peers;
+    for (auto *peer : findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly)) {
+        if (peer == widget || !peer->isVisible()) continue;
+        if (!(peer->inherits("LiquidDesklet") || peer->inherits("FenceWidget")
+              || peer->inherits("SystemMonitor") || peer->inherits("SmartSpaceWidget"))) continue;
+        if (peer->inherits("SmartSpaceWidget") && smartSpaceEdgeHidden()) continue;
+        peers.append(QRect(peer->isWindow() ? mapFromGlobal(peer->mapToGlobal(QPoint()))
+                                           : peer->pos(), peer->size()));
+    }
+    return WidgetResizeSnap::geometry(start, requested, minimum, maximum,
+                                      rect(), peers, ratio, fixed);
+}
+
 void DesktopCanvas::showSettingsDialog()
 {
-    QDialog dlg(this);
+    showSettingsPage("icons");
+}
+
+QWidget *DesktopCanvas::createFontSettingsPage(QWidget *parent)
+{
+    auto *form = new QWidget(parent);
+    QWidget &dlg = *form;
     dlg.setWindowTitle("桌面字体设置");
     dlg.setMinimumWidth(360);
 
@@ -1853,19 +2017,19 @@ void DesktopCanvas::showSettingsDialog()
     layout->addRow("字形：", italicCheck);
 
     // 字体颜色
-    QColor chosenColor = m_fontColor;
+    auto chosenColor = std::make_shared<QColor>(m_fontColor);
     auto *colorBtn = new QPushButton(&dlg);
-    auto updateColorBtn = [colorBtn, &chosenColor] {
+    auto updateColorBtn = [colorBtn, chosenColor] {
         QPixmap px(48, 16);
-        px.fill(chosenColor);
+        px.fill(*chosenColor);
         colorBtn->setIcon(QIcon(px));
-        colorBtn->setText(chosenColor.name());
+        colorBtn->setText(chosenColor->name());
     };
     updateColorBtn();
-    connect(colorBtn, &QPushButton::clicked, [&] {
-        QColor c = QColorDialog::getColor(chosenColor, &dlg, "选择字体颜色");
+    connect(colorBtn, &QPushButton::clicked, &dlg, [=, &dlg] {
+        QColor c = QColorDialog::getColor(*chosenColor, &dlg, "选择字体颜色");
         if (c.isValid()) {
-            chosenColor = c;
+            *chosenColor = c;
             updateColorBtn();
         }
     });
@@ -1874,7 +2038,7 @@ void DesktopCanvas::showSettingsDialog()
     // 预览
     auto *preview = new QLabel("预览文字 Preview", &dlg);
     preview->setAlignment(Qt::AlignCenter);
-    auto updatePreview = [preview, fontCombo, sizeSpin, boldCheck, italicCheck, &chosenColor] {
+    auto updatePreview = [preview, fontCombo, sizeSpin, boldCheck, italicCheck, chosenColor] {
         QFont f;
         const QString family = fontCombo->currentData().toString();
         if (!family.isEmpty()) f.setFamily(family);
@@ -1884,7 +2048,7 @@ void DesktopCanvas::showSettingsDialog()
         preview->setFont(f);
         preview->setStyleSheet(
             QString("color: %1; background: #333; padding: 8px; border-radius: 4px;")
-                .arg(chosenColor.name()));
+                .arg(chosenColor->name()));
     };
     updatePreview();
     connect(fontCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -1897,25 +2061,31 @@ void DesktopCanvas::showSettingsDialog()
     layout->addRow("预览：", preview);
 
     auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        QDialogButtonBox::Apply, &dlg);
     layout->addRow(buttons);
 
-    if (dlg.exec() == QDialog::Accepted) {
+    connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dlg, [=, &dlg] {
         m_fontFamily = fontCombo->currentData().toString();
         m_fontSize = sizeSpin->value();
-        m_fontColor = chosenColor;
+        m_fontColor = *chosenColor;
         m_fontBold = boldCheck->isChecked();
         m_fontItalic = italicCheck->isChecked();
         applyFontToAll();
         saveLayout();
-    }
+        dlg.setProperty("settingsDirty", false);
+    });
+    return form;
 }
 
 void DesktopCanvas::showDesktopSyncSettingsDialog()
 {
-    QDialog dlg(this);
+    showSettingsPage("sync");
+}
+
+QWidget *DesktopCanvas::createSyncSettingsPage(QWidget *parent)
+{
+    auto *form = new QWidget(parent);
+    QWidget &dlg = *form;
     dlg.setWindowTitle("桌面文件同步设置");
     dlg.setMinimumWidth(420);
 
@@ -1946,21 +2116,27 @@ void DesktopCanvas::showDesktopSyncSettingsDialog()
     layout->addRow("说明：", hint);
 
     auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        QDialogButtonBox::Apply, &dlg);
     layout->addRow(buttons);
 
-    if (dlg.exec() == QDialog::Accepted) {
+    connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dlg, [=, &dlg] {
         m_desktopInboxFenceId = inboxCombo->currentData().toString();
         saveLayout();
         forceSyncDesktopIcons();
-    }
+        dlg.setProperty("settingsDirty", false);
+    });
+    return form;
 }
 
 void DesktopCanvas::showWallpaperDialog()
 {
-    QDialog dlg(this);
+    showSettingsPage("wallpaper");
+}
+
+QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
+{
+    auto *pageWidget = new QWidget(parent);
+    QWidget &dlg = *pageWidget;
     dlg.setWindowTitle("Fences 壁纸");
     dlg.setMinimumWidth(460);
 
@@ -1968,8 +2144,8 @@ void DesktopCanvas::showWallpaperDialog()
     auto *form = new QFormLayout();
     root->addLayout(form);
 
-    QString chosenPath = m_wallpaperPath;
-    QPixmap systemWallpaper = m_wallpaper;
+    auto chosenPath = std::make_shared<QString>(m_wallpaperPath);
+    auto systemWallpaper = std::make_shared<QPixmap>(m_wallpaper);
 
     auto *preview = new QLabel(&dlg);
     preview->setFixedSize(260, 160);
@@ -2069,47 +2245,47 @@ void DesktopCanvas::showWallpaperDialog()
         return QPixmap::fromImage(result);
     };
 
-    auto updatePreview = [&] {
+    auto updatePreview = [=, &dlg] {
         WallpaperMode mode = static_cast<WallpaperMode>(
             modeCombo->currentData().toInt());
         bool customMode = false;
         QPixmap source;
-        if (mode != WallpaperMode::System && !chosenPath.isEmpty()) {
-            source = readWallpaperPixmap(chosenPath,nullptr,
+        if (mode != WallpaperMode::System && !chosenPath->isEmpty()) {
+            source = readWallpaperPixmap(*chosenPath,nullptr,
                 mode==WallpaperMode::Tile || mode==WallpaperMode::Center ? QSize() : wallpaperDecodeSize());
             customMode = !source.isNull();
         }
         if (!customMode)
-            source = systemWallpaper;
+            source = *systemWallpaper;
         if (source.isNull())
             source = m_wallpaper;
 
         const WallpaperMode previewMode = customMode ? mode : WallpaperMode::Fill;
         preview->setPixmap(renderPreview(source, previewMode, preview->size()));
 
-        if (chosenPath.isEmpty()) {
+        if (chosenPath->isEmpty()) {
             pathLabel->setText("未选择自定义图片，当前使用系统桌面壁纸。");
-        } else if (QFileInfo::exists(chosenPath)) {
-            pathLabel->setText(chosenPath);
+        } else if (QFileInfo::exists(*chosenPath)) {
+            pathLabel->setText(*chosenPath);
         } else {
-            pathLabel->setText("图片不存在，将回退系统壁纸：\n" + chosenPath);
+            pathLabel->setText("图片不存在，将回退系统壁纸：\n" + *chosenPath);
         }
     };
 
     const QSize systemPreviewSize = wallpaperDecodeSize();
     BackgroundTask::run(&dlg, [systemPreviewSize] { return loadSystemWallpaperImage(systemPreviewSize); },
-        [&systemWallpaper, updatePreview](const QImage &image) {
-            systemWallpaper = QPixmap::fromImage(image); updatePreview();
+        [systemWallpaper, updatePreview](const QImage &image) {
+            *systemWallpaper = QPixmap::fromImage(image); updatePreview();
         });
 
     connect(modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            [&] { updatePreview(); });
-    connect(chooseBtn, &QPushButton::clicked, [&] {
-        const QString startDir = chosenPath.isEmpty()
+            [=, &dlg] { updatePreview(); });
+    connect(chooseBtn, &QPushButton::clicked, &dlg, [=, &dlg] {
+        const QString startDir = chosenPath->isEmpty()
             ? QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
-            : QFileInfo(chosenPath).absolutePath();
+            : QFileInfo(*chosenPath).absolutePath();
         const QString path = QFileDialog::getOpenFileName(
-            &dlg,
+            dlg.window(),
             "选择 Fences 壁纸",
             startDir,
             "图片文件 (*.jpg *.jpeg *.png *.bmp *.webp *.svg);;所有文件 (*)");
@@ -2124,7 +2300,7 @@ void DesktopCanvas::showWallpaperDialog()
             return;
         }
 
-        chosenPath = path;
+        *chosenPath = path;
         if (static_cast<WallpaperMode>(modeCombo->currentData().toInt()) ==
             WallpaperMode::System) {
             modeCombo->setCurrentIndex(
@@ -2132,8 +2308,8 @@ void DesktopCanvas::showWallpaperDialog()
         }
         updatePreview();
     });
-    connect(clearBtn, &QPushButton::clicked, [&] {
-        chosenPath.clear();
+    connect(clearBtn, &QPushButton::clicked, &dlg, [=, &dlg] {
+        chosenPath->clear();
         modeCombo->setCurrentIndex(
             modeCombo->findData(static_cast<int>(WallpaperMode::System)));
         updatePreview();
@@ -2148,27 +2324,27 @@ void DesktopCanvas::showWallpaperDialog()
     root->addWidget(hint);
 
     auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        QDialogButtonBox::Apply, &dlg);
     root->addWidget(buttons);
 
     updatePreview();
 
-    if (dlg.exec() != QDialog::Accepted)
-        return;
+    connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dlg, [=, &dlg] {
 
     WallpaperMode selectedMode = static_cast<WallpaperMode>(
         modeCombo->currentData().toInt());
-    if (chosenPath.isEmpty())
+    if (chosenPath->isEmpty())
         selectedMode = WallpaperMode::System;
 
-    m_wallpaperPath = chosenPath;
+    m_wallpaperPath = *chosenPath;
     m_wallpaperMode = selectedMode;
     loadWallpaper();
     if (m_monitor)
         m_monitor->refreshWallpaperTheme();
     saveLayout();
+    dlg.setProperty("settingsDirty", false);
+    });
+    return pageWidget;
 }
 
 // ── 壁纸取样建分区 / 网格布局 ───────────────────────────
@@ -2291,7 +2467,13 @@ void DesktopCanvas::finishWallpaperFenceCapture(const QRect &selection)
 
 void DesktopCanvas::showGridDialog()
 {
-    QDialog dlg(this);
+    showSettingsPage("layout");
+}
+
+QWidget *DesktopCanvas::createGridSettingsPage(QWidget *parent)
+{
+    auto *form = new QWidget(parent);
+    QWidget &dlg = *form;
     dlg.setWindowTitle("桌面图标网格");
     dlg.setMinimumWidth(390);
 
@@ -2359,14 +2541,15 @@ void DesktopCanvas::showGridDialog()
             &dlg, [=] { preset->setCurrentIndex(4); });
 
     auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        QDialogButtonBox::Apply, &dlg);
     layout->addRow(buttons);
 
-    if (dlg.exec() == QDialog::Accepted)
+    connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dlg, [=, &dlg] {
         applyDesktopGrid(colsSpin->value(), rowsSpin->value(),
                          scaleSpin->value() / 100.0);
+        dlg.setProperty("settingsDirty", false);
+    });
+    return form;
 }
 
 void DesktopCanvas::applyDesktopGrid(int columns, int rows, qreal iconScale)
@@ -2702,13 +2885,7 @@ void DesktopCanvas::setSmartSpaceDensity(int density)
 
 void DesktopCanvas::showSmartSpaceSettings()
 {
-    setSmartSpaceVisible(true);
-    if (m_smartSpace) {
-        SmartSpaceWidget *widget = m_smartSpace;
-        // A modal dialog must be entered after the D-Bus method has returned;
-        // otherwise synchronous callers block until the dialog is closed.
-        QTimer::singleShot(0, widget, [widget] { widget->showSettings(); });
-    }
+    QTimer::singleShot(0, this, [this] { showSettingsPage("smart"); });
 }
 
 void DesktopCanvas::startSmartSpaceFullIndex()
@@ -4754,13 +4931,6 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     auto *newMenu = makeMenu("新建", "desktopNewMenu");
     auto *sortModeMenu = makeMenu("排列与布局", "desktopLayoutMenu");
     auto *widgetsMenu = makeMenu("桌面小组件", "desktopWidgetsMenu");
-    auto *desktopSettingsMenu = makeMenu("外观与特效", "desktopAppearanceMenu");
-    auto *fencesMenu = makeMenu("设置与帮助", "desktopSettingsHelpMenu");
-    auto *widgetStartupMenu = makeMenu("启动设置", "desktopStartupMenu");
-    auto *themeMenu = makeMenu("主题配色", "desktopThemeMenu");
-    // The same layout submenu owns sorting, grid and layout persistence.
-    auto *layoutMenu = sortModeMenu;
-
     auto *actUndo = rootAction(
         menuIcon(QStringList() << "edit-undo", "↶", QColor("#475569")),
         "撤销上一步");
@@ -4815,13 +4985,6 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     connect(actWallpaperCapture, &QAction::triggered,
             [this] { beginWallpaperFenceCapture(); });
 
-    auto *actDesktopGrid = sortModeMenu->addAction(
-        menuIcon(QStringList() << "view-grid" << "view-grid-symbolic",
-                 "▦", QColor("#0891b2")),
-        "图标网格…");
-    connect(actDesktopGrid, &QAction::triggered,
-            [this] { showGridDialog(); });
-
     auto *actDesklet = widgetsMenu->addAction("显示系统监视");
     actDesklet->setObjectName("monitorWidgetAction");
     actDesklet->setCheckable(true);
@@ -4836,111 +4999,17 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     connect(actSmartSpace, &QAction::triggered,
             [this](bool visible) { setSmartSpaceVisible(visible); });
 
-    auto startupLabel = [](const QString &name, bool enabled) {
-        return name + (enabled ? QStringLiteral("（已开启自启动）")
-                               : QStringLiteral("（未开启自启动）"));
-    };
-    auto addDesktopWidget = [this, widgetsMenu, widgetStartupMenu, startupLabel](
-            const QString &key, const QString &title, bool visible, auto show) {
+    auto addDesktopWidget = [this, widgetsMenu](const QString &key, const QString &title,
+                                                   bool visible, auto show) {
         auto *action = widgetsMenu->addAction("显示" + title);
-        action->setObjectName(key + "WidgetAction"); action->setCheckable(true); action->setChecked(visible);
+        action->setObjectName(key + "WidgetAction");
+        action->setCheckable(true); action->setChecked(visible);
         connect(action, &QAction::triggered, this, show);
-        auto *startup = widgetStartupMenu->addAction(startupLabel(title, LiquidDesklet::autoStartEnabled(key)));
-        startup->setObjectName(key + "StartupAction"); startup->setCheckable(true);
-        startup->setChecked(LiquidDesklet::autoStartEnabled(key));
-        connect(startup, &QAction::triggered, this, [startup, startupLabel, key, title](bool enabled) {
-            LiquidDesklet::setAutoStart(key, enabled); startup->setText(startupLabel(title, enabled));
-        });
     };
     addDesktopWidget("clock", "时钟与倒计时", clockWidgetVisible(), &DesktopCanvas::setClockWidgetVisible);
     addDesktopWidget("activity", "活动统计", activityWidgetVisible(), &DesktopCanvas::setActivityWidgetVisible);
     addDesktopWidget("music", "Strawberry 音乐", musicWidgetVisible(), &DesktopCanvas::setMusicWidgetVisible);
     addDesktopWidget("calendar", "日历与系统待办", calendarWidgetVisible(), &DesktopCanvas::setCalendarWidgetVisible);
-    // --- 系统监控 ---
-    const bool monitorOn = SystemMonitor::autoStartEnabled();
-    auto *monitorStartup = widgetStartupMenu->addAction(startupLabel(QStringLiteral("系统监视"), monitorOn));
-    monitorStartup->setObjectName("monitorStartupAction");
-    monitorStartup->setCheckable(true);
-    monitorStartup->setChecked(monitorOn);
-    connect(monitorStartup, &QAction::triggered, this,
-            [this, monitorStartup, startupLabel](bool enabled) {
-        monitorStartup->setText(startupLabel(QStringLiteral("系统监视"), enabled));
-        if (m_monitor) {
-            m_monitor->setAutoStart(enabled);
-            return;
-        }
-        QSettings settings;
-        settings.beginGroup(QStringLiteral("systemMonitor"));
-        settings.setValue(QStringLiteral("autoStart"), enabled);
-        settings.endGroup();
-        settings.sync();
-    });
-    // --- 智能空间 ---
-    const bool smartOn = SmartSpaceWidget::autoStartEnabled();
-    auto *smartStartup = widgetStartupMenu->addAction(startupLabel(QStringLiteral("智能空间"), smartOn));
-    smartStartup->setObjectName("smartStartupAction");
-    smartStartup->setCheckable(true);
-    smartStartup->setChecked(smartOn);
-    connect(smartStartup, &QAction::triggered, this,
-            [this, smartStartup, startupLabel](bool enabled) {
-        smartStartup->setText(startupLabel(QStringLiteral("智能空间"), enabled));
-        if (m_smartSpace) {
-            m_smartSpace->setAutoStart(enabled);
-            return;
-        }
-        QSettings settings;
-        settings.beginGroup(QStringLiteral("smartSpace"));
-        settings.setValue(QStringLiteral("autoStart"), enabled);
-        settings.endGroup();
-        settings.sync();
-    });
-
-
-    auto *actWallpaperTheme = themeMenu->addAction(
-        menuIcon(QStringList() << "color-picker" << "preferences-color",
-                 "◎", QColor("#7c3aed")),
-        "从当前壁纸取色");
-    actWallpaperTheme->setObjectName("wallpaperThemeAction");
-    connect(actWallpaperTheme, &QAction::triggered, [this] {
-        if (!applyWallpaperThemeToFences()) {
-            QMessageBox::warning(this, "主题颜色",
-                "当前壁纸没有可提取的明显颜色。");
-        }
-    });
-
-    themeMenu->addSeparator();
-
-    auto addPreset = [this, themeMenu](const QString &name,
-                                       const QColor &accent,
-                                       const QColor &text = QColor(Qt::white)) {
-        auto *act = themeMenu->addAction(colorSwatchMenuIcon(accent), name);
-        connect(act, &QAction::triggered, [this, accent, text] {
-            QColor c = accent;
-            c.setAlpha(90);
-            applyThemeToFences(c, text);
-        });
-    };
-    addPreset("海湾蓝", QColor("#2f80ed"));
-    addPreset("樱花粉", QColor("#ff7aa2"), QColor("#202124"));
-    addPreset("松石绿", QColor("#14b8a6"));
-    addPreset("暮色紫", QColor("#8b5cf6"));
-    addPreset("石墨灰", QColor("#202124"));
-
-    auto *actApplyExternalTheme = fencesMenu->addAction(
-        menuIcon(QStringList() << "document-open" << "folder-open",
-                 "CSS", QColor("#475569")),
-        "应用外部主题文件");
-    connect(actApplyExternalTheme, &QAction::triggered, [this] {
-        if (!loadExternalTheme()) {
-            QMessageBox::warning(this, "主题颜色",
-                "没有找到外部主题文件。\n\n"
-                "这是给 Matugen/Quickshell/Waybar 用户用的高级入口。\n"
-                "普通使用可以直接点“从当前壁纸取色”或选择内置配色。");
-            return;
-        }
-
-        applyExternalThemeToFences();
-    });
 
     auto *arrangeGroup = new QActionGroup(&menu);
     arrangeGroup->setExclusive(true);
@@ -5030,228 +5099,16 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
         pasteToDesktop(clickPos);
     });
 
-    auto *actPeony = fencesMenu->addAction(
-        menuIcon(QStringList() << "system-file-manager" << "folder",
-                 "📁", QColor("#ea580c")),
+    auto *actPeony = rootAction(
+        menuIcon(QStringList() << "system-file-manager" << "folder", "📁", QColor("#ea580c")),
         "打开文件管理器");
-    connect(actPeony, &QAction::triggered, [] {
-        const QString peony = QStandardPaths::findExecutable(
-            QStringLiteral("peony"));
-        if (!peony.isEmpty() &&
-            QProcess::startDetached(peony, QStringList()))
-            return;
-        const QString home = QStandardPaths::writableLocation(
-            QStandardPaths::HomeLocation);
-        if (QProcess::startDetached(
-                QStringLiteral("gio"),
-                QStringList() << QStringLiteral("open") << home))
-            return;
-        QProcess::startDetached(
-            QStringLiteral("xdg-open"), QStringList() << home);
-    });
+    actPeony->setObjectName("desktopFileManagerAction");
+    connect(actPeony, &QAction::triggered, this, &DesktopCanvas::openFileManager);
+    auto *settingsAction = rootAction(
+        menuIcon(QStringList() << "preferences-system", "⚙", QColor("#0891b2")), "Fences 设置…");
+    settingsAction->setObjectName("fencesSettingsAction");
+    connect(settingsAction, &QAction::triggered, this, &DesktopCanvas::showUnifiedSettings);
 
-    auto *iconStyleAction = desktopSettingsMenu->addAction("桌面图标样式…");
-    iconStyleAction->setObjectName("desktopIconAppearanceAction");
-    connect(iconStyleAction,&QAction::triggered,this,&DesktopCanvas::showIconAppearanceDialog);
-    auto *glassAction = desktopSettingsMenu->addAction("分区液态玻璃");
-    glassAction->setObjectName("fenceLiquidGlassAction");
-    glassAction->setCheckable(true);
-    glassAction->setChecked(m_fenceLiquidGlassEnabled);
-    glassAction->setToolTip("所有分区的壁纸折射与鼠标边缘高光，保留磁吸轮廓。关闭即可恢复原配色。");
-    connect(glassAction, &QAction::toggled, this, &DesktopCanvas::setFenceLiquidGlassEnabled);
-    auto *magnetAction = desktopSettingsMenu->addAction("壁纸磁性画线");
-    magnetAction->setObjectName("wallpaperMagnetAction");
-    magnetAction->setCheckable(true);
-    magnetAction->setChecked(m_wallpaperMagnetEnabled);
-    magnetAction->setToolTip("拖动或调整分区时，自动沿壁纸明暗边界吸附轮廓。");
-    connect(magnetAction, &QAction::toggled,
-            this, &DesktopCanvas::setWallpaperMagnetEnabled);
-    desktopSettingsMenu->addSeparator();
-
-    auto *actSettings = desktopSettingsMenu->addAction(
-        menuIcon(QStringList() << "preferences-desktop-font" << "preferences-other",
-                 "Aa", QColor("#2563eb")),
-        "桌面字体…");
-    connect(actSettings, &QAction::triggered,
-            [this] { showSettingsDialog(); });
-
-    auto *actDesktopSync = fencesMenu->addAction(
-        menuIcon(QStringList() << "folder-sync" << "folder-saved-search",
-                 "↔", QColor("#0ea5e9")),
-        "桌面文件同步设置…");
-    connect(actDesktopSync, &QAction::triggered,
-            [this] { showDesktopSyncSettingsDialog(); });
-
-    auto *actWallpaper = desktopSettingsMenu->addAction(
-        menuIcon(QStringList() << "preferences-desktop-wallpaper" << "image-x-generic",
-                 "🖼", QColor("#16a34a")),
-        "系统壁纸…");
-    connect(actWallpaper, &QAction::triggered, [] {
-        openWallpaperSettings();
-    });
-
-    auto *actFencesWallpaper = desktopSettingsMenu->addAction(
-        menuIcon(QStringList() << "preferences-desktop-wallpaper" << "image-x-generic",
-                 "▧", QColor("#0891b2")),
-        "Fences 壁纸…");
-    connect(actFencesWallpaper, &QAction::triggered,
-            [this] { showWallpaperDialog(); });
-
-
-    auto *actHelp = fencesMenu->addAction(
-        menuIcon(QStringList() << "help-contents" << "help-browser",
-                 "?", QColor("#475569")),
-        "使用说明");
-    actHelp->setObjectName("desktopHelpAction");
-    connect(actHelp, &QAction::triggered, [this] {
-        QDialog dialog(this);
-        dialog.setWindowTitle("ukui-fences 使用说明");
-        dialog.resize(660, 540);
-        auto *layout = new QVBoxLayout(&dialog);
-        auto *text = new QTextBrowser(&dialog);
-        text->setOpenExternalLinks(true);
-        text->setHtml(QStringLiteral(
-            "<h2>UKUI Liquid Desktop · 桌面分区与小组件</h2>"
-            "<h3>分区与文件</h3>"
-            "<p>右键桌面 → 新建 → 普通分区。文件可拖入或拖出分区；单击标题栏折叠或展开。"
-            "Delete 移到回收站；剪切后的图标暂时置灰，粘贴完成后自动更新。</p>"
-            "<h3>布局编辑</h3>"
-            "<p>右键 → 编辑分区布局，开启后移动、缩放分区和桌面小组件，支持边缘吸附和图标避让。"
-            "完成后选择“退出布局编辑”。分区标题栏右键可重命名、锁定并单独设置字体。</p>"
-            "<h3>六类桌面小组件</h3>"
-            "<p>右键 → 桌面小组件，可切换智能空间、系统监视、时钟与倒计时、活动统计、"
-            "Strawberry 音乐、日历与系统待办。对号表示已启用；智能空间可收起成贴边星标。</p>"
-            "<p>活动统计记录前台应用停留时间；音乐组件通过 MPRIS 控制 Strawberry。"
-            "日历支持农历、节假日、年月滚轮和待办折叠；内置中国调休数据为 2026 年，日历右键可同步最新农历和已发布的节假日；系统待办只读。</p>"
-            "<h3>自启动与外观</h3>"
-            "<p>右键 → 设置与帮助 → 启动设置，独立设置各组件随 Fences 启动。"
-            "“显示”与“自启动”是两个独立选项。</p>"
-            "<p>右键 → 外观与特效，可设置液态材质、主题配色和字体。"
-            "“桌面图标样式”可设置液态底座、强度和壁纸染色，并可单独允许分区内部使用。"
-            "“从当前壁纸取色”调整分区底色并保留字体颜色。液态材质使用缓存壁纸，GPU 不可用时降级渲染。</p>"
-            "<p>“Fences 壁纸”只修改 Fences 桌面层；选择“系统默认（跟随桌面）”恢复跟随系统壁纸。"
-            "自定义壁纸按文件内容识别格式。</p>"
-            "<h3>快捷键与备份</h3>"
-            "<p>Ctrl+A 全选，Ctrl+C/X/V 复制/剪切/粘贴，F2 重命名，Enter 打开，"
-            "Ctrl+滚轮缩放图标。右键 → 排列与布局，可导出和导入布局。</p>"
-            "<h3>系统监视与诊断</h3>"
-            "<p>系统监视的 API 密钥保存在系统密钥环，需要解锁后使用；只有主动执行 AI 诊断时才发送诊断数据。</p>"
-            "<p><a href=\"https://github.com/xikario/ukui-liquid-desktop\">项目源码与完整文档</a> · "
-            "<a href=\"https://github.com/SuceV587/NextKde\">NextKde 上游项目</a></p>"));
-        layout->addWidget(text);
-        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-        layout->addWidget(buttons);
-        dialog.exec();
-    });
-
-    auto *actAbout = fencesMenu->addAction(
-        menuIcon(QStringList() << "help-about" << "dialog-information",
-                 "i", QColor("#0ea5e9")),
-        "关于 ukui-fences");
-    actAbout->setObjectName("desktopAboutAction");
-    connect(actAbout, &QAction::triggered, [this] {
-        QMessageBox::about(this, "关于 ukui-fences",
-            QStringLiteral(
-                "<h3>ukui-fences · UKUI Liquid Desktop</h3>"
-                "<p>核心版本：%1 · Qt 5 / UKUI X11</p>"
-                "<p>桌面分区、智能空间、系统监视，以及时钟/倒计时、活动统计、Strawberry 音乐、"
-                "日历与系统待办，共享液态材质与弹出菜单模块。</p>"
-                "<p>部分液态玻璃代码沿用并适配 NextKde 相关代码，直接 shader 来源为 NextKde-kylinos；"
-                "时钟、活动和日历参考 NextKde DeskCenter 设计，以 Qt 5 重新实现。感谢上游作者与贡献者。</p>"
-                "<p>项目以 GPL-3.0-or-later 发布，第三方文件保留原始署名及许可证。</p>"
-                "<p><a href=\"https://github.com/xikario/ukui-liquid-desktop\">项目仓库</a> · "
-                "<a href=\"https://github.com/SuceV587/NextKde\">NextKde</a> · "
-                "<a href=\"https://github.com/xikario/ukui-liquid-desktop/blob/main/THIRD_PARTY_NOTICES.md\">第三方来源与许可</a></p>")
-                .arg(QCoreApplication::applicationVersion().toHtmlEscaped()));
-    });
-
-    fencesMenu->addSeparator();
-
-    auto *actSystemDesktop = fencesMenu->addAction(
-        menuIcon(QStringList() << "user-desktop" << "computer",
-                 "▣", QColor("#16a34a")),
-        "切换到系统桌面");
-    connect(actSystemDesktop, &QAction::triggered,
-            this, &DesktopCanvas::hideFences);
-
-    auto *actQuit = fencesMenu->addAction(
-        menuIcon(QStringList() << "application-exit" << "system-log-out",
-                 "⏻", QColor("#dc2626")),
-        "退出 ukui-fences");
-    connect(actQuit, &QAction::triggered, this, &DesktopCanvas::quitApp);
-
-    auto *actExport = layoutMenu->addAction(
-        menuIcon(QStringList() << "document-save-as" << "document-export",
-                 "↑", QColor("#2563eb")),
-        "导出布局…");
-    connect(actExport, &QAction::triggered,
-            [this] { exportLayout(); });
-    auto *actImport = layoutMenu->addAction(
-        menuIcon(QStringList() << "document-open" << "document-import",
-                 "↓", QColor("#16a34a")),
-        "导入布局…");
-    connect(actImport, &QAction::triggered,
-            [this] { importLayout(); });
-    layoutMenu->addSeparator();
-    auto *actReset = layoutMenu->addAction(
-        menuIcon(QStringList() << "edit-delete" << "view-refresh",
-                 "!", QColor("#dc2626")),
-        "重置布局…");
-    connect(actReset, &QAction::triggered, [this] {
-        if (QMessageBox::question(this, "重置布局…",
-                "确定清空所有分区和图标位置吗？") != QMessageBox::Yes)
-            return;
-
-        for (auto *fence : m_fences) {
-            fence->hide();
-            fence->deleteLater();
-        }
-        m_fences.clear();
-        clearLooseIcons();
-        m_looseIconPositions.clear();
-        clearSelection();
-        m_iconScale = 1.0;
-        m_desktopIconScale = 1.0;
-        m_gridColumns = 18;
-        m_gridRows = 11;
-        m_autoArrange = false;
-        m_arrangeMode = ArrangeMode::Manual;
-        addSystemIcons();
-        refreshDesktopIcons();
-        saveLayout();
-    });
-
-    auto *previewAction = new QAction("液态气泡预览…", &menu);
-    previewAction->setObjectName("liquidPopupPreviewAction");
-    previewAction->setToolTip("预览四个界面的统一气泡效果，不修改应用设置。");
-    connect(previewAction, &QAction::triggered, this, [this] {
-        QStringList candidates;
-        candidates << QDir(QCoreApplication::applicationDirPath()).filePath("liquid-popup-preview")
-                   << QStandardPaths::findExecutable("liquid-popup-preview");
-#ifdef UKUI_LIQUID_POPUP_PREVIEW_PATH
-        candidates << QString::fromUtf8(UKUI_LIQUID_POPUP_PREVIEW_PATH);
-#endif
-        for (const QString &candidate : candidates) {
-            if (!candidate.isEmpty() && QFileInfo(candidate).isExecutable()
-                && QProcess::startDetached(candidate, QStringList()))
-                return;
-        }
-        QMessageBox::warning(this, "液态气泡预览", "无法打开预览程序，请重新安装液态气泡预览组件。");
-    });
-
-    // Compose menus last: preserve each action's behaviour, make the hierarchy
-    // and separators explicit, and keep only nine entries at the desktop root.
-    auto resetMenu = [](QMenu *target) {
-        for (QAction *action : target->actions()) target->removeAction(action);
-    };
-    for (QAction *action : {smartStartup, monitorStartup,
-            widgetStartupMenu->findChild<QAction *>("clockStartupAction"),
-            widgetStartupMenu->findChild<QAction *>("activityStartupAction"),
-            widgetStartupMenu->findChild<QAction *>("musicStartupAction"),
-            widgetStartupMenu->findChild<QAction *>("calendarStartupAction")}) {
-        widgetStartupMenu->removeAction(action); widgetStartupMenu->addAction(action);
-    }
     for (QAction *action : {actSmartSpace, actDesklet,
             widgetsMenu->findChild<QAction *>("clockWidgetAction"),
             widgetsMenu->findChild<QAction *>("activityWidgetAction"),
@@ -5259,45 +5116,18 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
             widgetsMenu->findChild<QAction *>("calendarWidgetAction")}) {
         widgetsMenu->removeAction(action); widgetsMenu->addAction(action);
     }
-    sortModeMenu->removeAction(actDesktopGrid);
-    sortModeMenu->insertSeparator(actExport);
-    sortModeMenu->insertAction(actExport, actDesktopGrid);
-    sortModeMenu->insertSeparator(actExport);
-    resetMenu(desktopSettingsMenu);
-    desktopSettingsMenu->addAction(glassAction);
-    desktopSettingsMenu->addAction(iconStyleAction);
-    desktopSettingsMenu->addAction(magnetAction);
-    desktopSettingsMenu->addAction(previewAction);
-    desktopSettingsMenu->addSeparator();
-    desktopSettingsMenu->addMenu(themeMenu);
-    desktopSettingsMenu->addAction(actSettings);
-    desktopSettingsMenu->addSeparator();
-    desktopSettingsMenu->addAction(actWallpaper);
-    desktopSettingsMenu->addAction(actFencesWallpaper);
-    resetMenu(fencesMenu);
-    fencesMenu->addAction(actDesktopSync);
-    fencesMenu->addMenu(widgetStartupMenu);
-    fencesMenu->addAction(actApplyExternalTheme);
-    fencesMenu->addSeparator();
-    fencesMenu->addAction(actPeony);
-    fencesMenu->addSeparator();
-    fencesMenu->addAction(actHelp);
-    fencesMenu->addAction(actAbout);
-    fencesMenu->addSeparator();
-    fencesMenu->addAction(actSystemDesktop);
-    fencesMenu->addAction(actQuit);
     menu.addMenu(newMenu);
     menu.addAction(actPaste);
     menu.addAction(actUndo);
     menu.addAction(actRefresh);
+    menu.addAction(actPeony);
     menu.addSeparator();
     menu.addAction(actEdit);
     menu.addMenu(sortModeMenu);
     menu.addSeparator();
     menu.addMenu(widgetsMenu);
-    menu.addMenu(desktopSettingsMenu);
     menu.addSeparator();
-    menu.addMenu(fencesMenu);
+    menu.addAction(settingsAction);
 
     menu.exec(e->globalPos());
     e->accept();

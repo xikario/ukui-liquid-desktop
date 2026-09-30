@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+ <defs>
+  <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#80ebee"/><stop offset=".5" stop-color="#327cc4"/><stop offset="1" stop-color="#263673"/></linearGradient>
+  <linearGradient id="light" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff" stop-opacity=".85"/><stop offset="1" stop-color="#c4f4ff" stop-opacity=".22"/></linearGradient>
+ </defs>
+ <rect x="10" y="10" width="236" height="236" rx="57" fill="url(#glass)"/>
+ <rect x="13" y="13" width="230" height="230" rx="54" fill="none" stroke="url(#light)" stroke-width="5"/>
+ <path d="M27 88V67a40 40 0 0 1 40-40h122a40 40 0 0 1 33 18C151 29 107 107 27 88Z" fill="#fff" opacity=".16"/>
+ <g stroke="#e7fcff" stroke-width="5" fill="#defaff" fill-opacity=".2">
+  <rect x="43" y="48" width="67" height="67" rx="14"/>
+  <rect x="128" y="48" width="78" height="39" rx="12"/>
+  <rect x="43" y="133" width="47" height="73" rx="13"/>
+ </g>
+ <g transform="translate(161 160)" fill="#f1fcff">
+  <rect x="-10" y="-56" width="20" height="112" rx="5"/>
+  <rect x="-56" y="-10" width="112" height="20" rx="5"/>
+  <rect x="-10" y="-56" width="20" height="112" rx="5" transform="rotate(45)"/>
+  <rect x="-10" y="-56" width="20" height="112" rx="5" transform="rotate(-45)"/>
+  <circle r="43"/>
+  <circle r="24" fill="#2a658f"/>
+  <circle r="13" fill="#a2f4ef"/>
+ </g>
+</svg>

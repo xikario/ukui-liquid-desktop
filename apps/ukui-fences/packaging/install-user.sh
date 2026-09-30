@@ -24,6 +24,15 @@ sed -i "s|^Exec=.*|Exec=$USER_PREFIX/bin/ukui-fences-launcher --autostart|" "$au
 install -m 0644 "$PROJECT_DIR/packaging/ukui-fences.desktop" \
     "$HOME/.local/share/applications/ukui-fences.desktop"
 
+# Some UKUI sessions expose a relative user icon search path. A resolved icon
+# path lets the panel display this settings icon independently of its cwd/cache.
+settings_file="$HOME/.local/share/applications/ukui-fences-settings.desktop"
+awk -v launcher="$USER_PREFIX/bin/ukui-fences-launcher" \
+    -v icon="$USER_PREFIX/share/icons/hicolor/scalable/apps/ukui-fences-settings.svg" \
+    '/^Exec=/ { print "Exec=\"" launcher "\" --settings"; next }
+     /^Icon=/ { print "Icon=" icon; next } { print }' \
+    "$PROJECT_DIR/packaging/ukui-fences-settings.desktop" > "$settings_file"
+
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 fi

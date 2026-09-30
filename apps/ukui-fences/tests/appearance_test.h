@@ -1,4 +1,6 @@
 #pragma once
+#include "FencesSettingsWindow.h"
+#include <QPushButton>
 #include "WallpaperImage.h"
 #include "DesktopIcon.h"
 
@@ -50,20 +52,16 @@ static int runAppearanceTest(const QString &root)
     QTimer::singleShot(100, &canvas, [&] {
         auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
         if (!menu) return;
-        auto *themeAction = menu->findChild<QAction *>("wallpaperThemeAction");
-        check(themeAction != nullptr, "wallpaper sampling action is present");
-        if (themeAction) {
-            const QColor before = canvas.fontColor();
-            themeAction->trigger();
-            check(canvas.fontColor() == before, "bright wallpaper tint cannot overwrite white labels");
-            canvas.setFontColor(QColor("#273344"));
-            themeAction->trigger();
-            check(canvas.fontColor() == QColor("#273344"), "wallpaper tint preserves explicit dark label preference");
-        }
-        auto *appearance=menu->findChild<QMenu *>("desktopAppearanceMenu");
-        auto *iconStyle=menu->findChild<QAction *>("desktopIconAppearanceAction");
-        check(appearance && iconStyle && appearance->actions().contains(iconStyle),
-              "icon style action remains visible after final menu reordering");
+        for(auto *action:menu->findChildren<QAction *>())
+            check(!action->isIconVisibleInMenu(),"context menus hide decorative icons without losing toggle state");
+        auto *settingsAction=menu->findChild<QAction *>("fencesSettingsAction");
+        check(settingsAction && menu->actions().contains(settingsAction),"single settings entry is present at root");
+        check(!menu->findChild<QMenu *>("desktopAppearanceMenu") && !menu->findChild<QMenu *>("desktopSettingsHelpMenu"),
+              "old appearance and help submenus are merged");
+        auto *fileManager=menu->findChild<QAction *>("desktopFileManagerAction");
+        const int managerIndex=menu->actions().indexOf(fileManager);
+        check(managerIndex>0 && menu->actions().at(managerIndex-1)->text()=="刷新桌面",
+              "file manager sits directly below refresh desktop");
         auto *widgets = menu->findChild<QMenu *>("desktopWidgetsMenu");
         check(widgets && widgets->actions().size()==6, "six widget visibility toggles available");
         if (widgets) {
@@ -85,13 +83,18 @@ static int runAppearanceTest(const QString &root)
             QDir().mkpath("artifacts");widgets->grab().save("artifacts/widgets-menu.png");
             widgets->hide();
         }
-        check(menu->findChild<QAction *>("desktopHelpAction") && menu->findChild<QAction *>("desktopAboutAction"),
-              "updated help and attribution are reachable from context menu");
         inspected = true;
         menu->close();
     });
     QContextMenuEvent event(QContextMenuEvent::Mouse,QPoint(50,50),canvas.mapToGlobal(QPoint(50,50)));
     QApplication::sendEvent(&canvas,&event);
     check(inspected, "desktop appearance actions inspected");
+    canvas.showSettingsPage("wallpaper");settle(100);
+    FencesSettingsWindow *window=nullptr;
+    for(auto *w:QApplication::topLevelWidgets())if(auto *candidate=qobject_cast<FencesSettingsWindow *>(w))window=candidate;
+    auto *sample=window?window->findChild<QPushButton *>("wallpaperThemeButton"):nullptr;
+    check(sample!=nullptr,"wallpaper sampling is reachable inside settings");
+    if(sample){const QColor before=canvas.fontColor();sample->click();check(canvas.fontColor()==before,"wallpaper tint preserves label color");
+        canvas.setFontColor(QColor("#273344"));sample->click();check(canvas.fontColor()==QColor("#273344"),"wallpaper tint preserves explicit dark labels");}
     return failures ? 1 : 0;
 }

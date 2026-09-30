@@ -59,6 +59,8 @@ public:
     void setEmbeddedWidget(QWidget *widget);
     bool hasEmbeddedWidget() const { return m_embeddedWidget != nullptr; }
     void refreshMagneticContour();
+    QWidget *createFontSettingsPage(QWidget *parent);
+    QWidget *createTitleFontSettingsPage(QWidget *parent);
     bool hasLocalFont() const { return m_hasLocalFont; }
 
     // 图标管理
@@ -161,6 +163,7 @@ private:
     bool     m_locked    = false;
     int      m_expandedH = 240;
     QPropertyAnimation *m_collapseAnimation = nullptr;
+    QPixmap m_collapseSnapshot;
     qreal    m_iconScale = 1.0;
     int      m_scrollOffset = 0;
     int      m_contentHeight = 0;

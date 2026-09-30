@@ -57,6 +57,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "music_test.h"
 #include "calendar_test.h"
 #include "appearance_test.h"
+#include "settings_center_test.h"
 #include "icon_appearance_test.h"
 #include "clipboard_test.h"
 #include "folder_drop_undo_test.h"
@@ -77,6 +78,7 @@ int main(int argc, char **argv)
     qputenv("UKUI_FENCES_SMARTSPACE_ROOTS", isolated.path().toUtf8());
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
+    QApplication::setAttribute(Qt::AA_DontShowIconsInMenus);
     QApplication app(argc, argv);
     LiquidPopup::installMenuGlyphStyle(app);
     LiquidPopup::install(app);
@@ -98,6 +100,8 @@ int main(int argc, char **argv)
         return runClipboardTest(isolated.path());
     if (app.arguments().contains("--icon-appearance-only"))
         return runIconAppearanceTest(isolated.path());
+    if (app.arguments().contains("--settings-center-only"))
+        return runSettingsCenterTest(isolated.path());
     if (app.arguments().contains("--appearance-only"))
         return runAppearanceTest(isolated.path());
     if (app.arguments().contains("--read-wallpaper")) {
@@ -283,7 +287,10 @@ int main(int argc, char **argv)
         check(QSettings().value("systemMonitor/skin").toInt()==5, "system monitor skin persists globally");
         monitor->setSkin(SystemMonitor::Skin::Dark);
         settle();
-        check(monitor->grab().toImage()==monitorOriginal, "system monitor returns to its original skin");
+        const QImage restoredMonitor=monitor->grab().toImage();
+        check(monitor->skin()==SystemMonitor::Skin::Dark &&
+              restoredMonitor.pixelColor(restoredMonitor.width()/2,8)==monitorOriginal.pixelColor(monitorOriginal.width()/2,8),
+              "system monitor restores original skin and background despite changing live statistics");
         canvas.toggleDesklet();
 
         // Open the actual desktop context menu; ensure the visible setting is wired.
@@ -296,8 +303,8 @@ int main(int argc, char **argv)
                         if (!a->isSeparator()) result << a->text();
                     return result;
                 };
-                check(labels(menu) == QStringList({"新建", "粘贴", "撤销上一步", "刷新桌面", "编辑分区布局",
-                    "排列与布局", "桌面小组件", "外观与特效", "设置与帮助"}),
+                check(labels(menu) == QStringList({"新建", "粘贴", "撤销上一步", "刷新桌面", "打开文件管理器", "编辑分区布局",
+                    "排列与布局", "桌面小组件", "Fences 设置…"}),
                     "desktop menu has nine ordered entries");
                 auto *edit=menu->findChild<QAction *>("layoutEditAction");
                 check(edit && !edit->isChecked(),"layout action starts unlocked for activation");
@@ -309,62 +316,13 @@ int main(int argc, char **argv)
                     check(!canvas.globalEditMode() && !edit->isChecked() && edit->text()==QStringLiteral("编辑分区布局"),
                           "leaving layout editing restores its action label");
                 }
-                auto *appearance=menu->findChild<QMenu *>("desktopAppearanceMenu");
-                auto *magnet=menu->findChild<QAction *>("wallpaperMagnetAction");
-                check(magnet && appearance && appearance->actions().contains(magnet)
-                      && magnet->isCheckable() && magnet->isChecked(),
-                      "appearance contains magnetic contour toggle");
-                if (magnet) {
-                    magnet->trigger();
-                    check(!canvas.wallpaperMagnetEnabled() && magnetic->mask().isEmpty(),
-                          "magnet menu action disables existing contour");
-                    magnet->trigger();
-                    check(canvas.wallpaperMagnetEnabled(), "magnet menu action reenables detection");
-                }
-                auto *preview=menu->findChild<QAction *>("liquidPopupPreviewAction");
-                check(appearance && preview && appearance->actions().contains(preview),
-                    "popup preview is accessible under appearance");
-                // Exercise the real launch action with an isolated executable on PATH.
-                const QString previewBin=isolated.path()+"/bin";
-                QDir().mkpath(previewBin);
-                const QString marker=isolated.path()+"/preview-launched";
-                QFile stub(previewBin+"/liquid-popup-preview");
-                check(stub.open(QIODevice::WriteOnly), "preview launch fixture opens");
-                stub.write(("#!/bin/sh\nprintf launched > '"+marker+"'\n").toUtf8());
-                stub.close();
-                stub.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
-                const QByteArray originalPath=qgetenv("PATH");
-                qputenv("PATH", previewBin.toUtf8()+":"+originalPath);
-                if (preview) preview->trigger();
-                QElapsedTimer launchTimer; launchTimer.start();
-                while (!QFile::exists(marker) && launchTimer.elapsed()<2000) settle(20);
-                qputenv("PATH", originalPath);
-                check(QFile::exists(marker), "preview menu action launches installed command");
+                check(!menu->findChild<QAction *>("liquidPopupPreviewAction"),
+                      "unused liquid preview is absent from desktop menu");
                 auto *widgets=menu->findChild<QMenu *>("desktopWidgetsMenu");
-                auto *startup=menu->findChild<QMenu *>("desktopStartupMenu");
-                check(labels(widgets)==QStringList({"显示智能空间", "显示系统监视", "显示时钟与倒计时", "显示活动统计", "显示Strawberry 音乐", "显示日历与系统待办"})
-                      && startup && startup->actions().size()==6
-                      && startup->actions()[0]->objectName()=="smartStartupAction"
-                      && startup->actions()[1]->objectName()=="monitorStartupAction",
-                    "widget visibility and startup have separate menus");
-                if (startup) for (auto *a : startup->actions()) {
-                    check(a->isCheckable() && a->icon().isNull(), "startup leaves native checkmark slot clear");
-                    const QString key=a->objectName()=="smartStartupAction"
-                        ? "smartSpace/autoStart" : a->objectName()=="monitorStartupAction" ? "systemMonitor/autoStart"
-                        : a->objectName()=="clockStartupAction" ? "desklets/clock/autoStart" : a->objectName()=="activityStartupAction" ? "desklets/activity/autoStart" : a->objectName()=="musicStartupAction" ? "desklets/music/autoStart" : "desklets/calendar/autoStart";
-                    const bool original=a->isChecked();
-                    for (int toggle=0; toggle<2; ++toggle) {
-                        a->trigger();
-                        check(a->text().contains(a->isChecked() ? "已开启自启动" : "未开启自启动"),
-                            "startup text follows checked state in both directions");
-                        check(QSettings().value(key).toBool()==a->isChecked(),
-                            "startup displayed state matches saved preference");
-                    }
-                    check(a->isChecked()==original, "startup preference restored after test");
-                }
+                check(widgets && widgets->actions().size()==6 && !menu->findChild<QMenu *>("desktopStartupMenu"),
+                      "visibility stays in menu while startup moves to unified settings");
                 auto *layout=menu->findChild<QMenu *>("desktopLayoutMenu");
-                check(labels(layout)==QStringList({"手动排列", "按名称排列", "按类型排列", "按修改时间排列",
-                    "图标网格…", "导出布局…", "导入布局…", "重置布局…"}),
+                check(labels(layout)==QStringList({"手动排列", "按名称排列", "按类型排列", "按修改时间排列"}),
                     "sorting and layout controls are grouped");
                 if (layout && layout->actions().size()>=4) {
                     auto *manual=layout->actions()[0];
@@ -375,14 +333,28 @@ int main(int argc, char **argv)
                     check(manual->isChecked() && !byName->isChecked(), "manual sorting can be restored");
                 }
                 menu->grab().save(output+"/desktop-menu.png");
-                auto *action=menu->findChild<QAction *>("fenceLiquidGlassAction");
-                if (action) { menuFound=action->isCheckable() && !action->isChecked(); action->trigger(); }
+                auto *action=menu->findChild<QAction *>("fencesSettingsAction");
+                if (action) { menuFound=true; action->trigger(); }
                 menu->close();
             }
         });
         QContextMenuEvent context(QContextMenuEvent::Mouse, QPoint(100,100), canvas.mapToGlobal(QPoint(100,100)));
         QApplication::sendEvent(&canvas, &context);
-        check(menuFound && canvas.fenceLiquidGlassEnabled(), "desktop settings menu contains working glass toggle");
+        FencesSettingsWindow *window=nullptr;
+        for(auto *w:QApplication::topLevelWidgets())if(auto *f=qobject_cast<FencesSettingsWindow *>(w))window=f;
+        check(menuFound && window,"desktop menu opens unified settings");
+        if(window){
+            window->openPage("layout");
+            auto *magnet=window->findChild<QCheckBox *>("wallpaperMagnet");
+            check(magnet && magnet->isChecked(),"unified layout contains magnetic contour toggle");
+            if(magnet){magnet->click();check(!canvas.wallpaperMagnetEnabled() && magnetic->mask().isEmpty(),"settings toggle removes magnetic mask");magnet->click();}
+            window->openPage("appearance");
+            auto *glass=window->findChild<QCheckBox *>("fenceLiquidGlass");
+            check(glass && !glass->isChecked(),"glass toggle reflects disabled state");
+            if(glass)glass->click();
+            check(canvas.fenceLiquidGlassEnabled(),"unified settings enables and persists glass");
+            window->close();settle();
+        }
         canvas.saveLayout();
     }
     {

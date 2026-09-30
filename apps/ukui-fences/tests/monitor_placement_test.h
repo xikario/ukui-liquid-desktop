@@ -58,5 +58,22 @@ static int runMonitorPlacementTest()
     syncScreen();
     check(monitor->pos() == bottomRight,
           "offscreen positions are still clamped inside the desktop");
+    canvas.show();canvas.setGlobalEditMode(true);settle(80);
+    monitor->move(canvas.width()-monitor->width(),0);
+    const QSize initial=monitor->size();
+    auto *peer=canvas.createFence("resize neighbour",
+        QRect(canvas.width()-initial.width()-40-200,0,200,initial.height()+80));
+    const QPoint grip(monitor->width()-10,monitor->height()-10),global=monitor->mapToGlobal(grip);
+    const int dx=70; // Averaging the two scale axes gives ~35 px wider.
+    QMouseEvent press(QEvent::MouseButtonPress,grip,global,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(monitor,&press);
+    QMouseEvent move(QEvent::MouseMove,grip+QPoint(dx,0),global+QPoint(dx,0),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(monitor,&move);
+    QMouseEvent release(QEvent::MouseButtonRelease,grip,global+QPoint(dx,0),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+    QApplication::sendEvent(monitor,&release);
+    check(monitor->x()==peer->x()+peer->width()
+          && monitor->x()+monitor->width()==canvas.width() && monitor->y()==0,
+          "monitor real resize snaps to neighbour while preserving the top-right anchor");
+    canvas.setGlobalEditMode(false);
     return failures ? 1 : 0;
 }

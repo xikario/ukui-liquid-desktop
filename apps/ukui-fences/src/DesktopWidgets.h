@@ -82,6 +82,7 @@ private:
     qint64 m_faceSourceKey = 0;
     int m_faceBuilds = 0;
     bool m_timerPage = false;
+    bool m_faceLight = false;
     CountdownState m_countdown;
     QTimer m_tick;
     QPushButton *m_clockTab = nullptr, *m_timerTab = nullptr;

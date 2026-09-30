@@ -85,7 +85,7 @@ sleep 0.4
 import -window root "$RESULT_DIR/smart-space-desktop-context-menu.png"
 xdotool key Escape
 sleep 0.3
-SETTINGS_BEFORE=$(xdotool search --name '智能空间设置' 2>/dev/null || true)
+SETTINGS_BEFORE=$(xdotool search --name 'Fences 设置' 2>/dev/null || true)
 # Use the public desktop integration surface. Fixed rail coordinates are not
 # stable across responsive-layout and display-scale changes.
 gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
@@ -93,7 +93,7 @@ gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
 attempt=0
 SETTINGS_WINDOW=
 while [ "$attempt" -lt 20 ]; do
-    for candidate in $(xdotool search --name '智能空间设置' 2>/dev/null || true); do
+    for candidate in $(xdotool search --name 'Fences 设置' 2>/dev/null || true); do
         case " $SETTINGS_BEFORE " in
             *" $candidate "*) ;;
             *) SETTINGS_WINDOW=$candidate ;;

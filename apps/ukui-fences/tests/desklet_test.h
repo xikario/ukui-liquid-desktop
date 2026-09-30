@@ -1,3 +1,4 @@
+#include "WidgetResizeSnap.h"
 #include "DesktopWidgets.h"
 #include "DeskletModels.h"
 #include "ActivityRecorder.h"
@@ -124,6 +125,59 @@ static int runDeskletTest(const QString &root)
         check(clock->x()+clock->width()==snapFence->x() && clock->y()==snapFence->y(),
               "new widget can dock beside an existing fence");
         snapFence->hide();
+        // Resize uses the original fixed corner, including while entering and
+        // leaving a snap in the same pointer gesture.
+        clock->setGeometry(200,200,300,300);activity->setGeometry(600,200,360,250);
+        QPoint grip(clock->width()-5,clock->height()-5), global=clock->mapToGlobal(grip);
+        mouse(clock,QEvent::MouseButtonPress,grip,global);
+        mouse(clock,QEvent::MouseMove,grip+QPoint(94,0),global+QPoint(94,0));
+        check(clock->geometry()==QRect(200,200,400,300)
+              && !clock->geometry().intersects(activity->geometry()),
+              "resize snaps right edge to neighbouring widget without overlap or anchor movement");
+        mouse(clock,QEvent::MouseMove,grip+QPoint(70,0),global+QPoint(70,0));
+        check(clock->geometry()==QRect(200,200,370,300),
+              "resize releases a snap without accumulating previous-event offsets");
+        mouse(clock,QEvent::MouseButtonRelease,grip,global+QPoint(70,0));
+        clock->setGeometry(200,200,300,300);activity->move(200,700);
+        drag(clock,QPoint(295,295),QPoint(0,194));
+        check(clock->geometry()==QRect(200,200,300,500),"resize snaps bottom to peer top");
+        clock->setGeometry(200,200,300,300);activity->setGeometry(600,200,360,405);
+        drag(clock,QPoint(295,295),QPoint(96,100));
+        check(clock->geometry()==QRect(200,200,400,405),"resize can align two compatible edges at once");
+        activity->hide();clock->setGeometry(200,200,300,300);
+        drag(clock,QPoint(295,295),QPoint(94,0));
+        check(clock->width()==394,"hidden widgets do not attract resize");
+        activity->show();activity->move(600,750);clock->setGeometry(200,200,300,300);
+        drag(clock,QPoint(295,295),QPoint(94,0));
+        check(clock->width()==394,"distant widgets outside perpendicular span do not attract resize");
+        activity->hide();clock->setGeometry(canvas.width()-500,canvas.height()-500,300,300);
+        drag(clock,QPoint(295,295),QPoint(182,182));
+        check(clock->size()==QSize(500,500) && canvas.rect().contains(clock->geometry()),
+              "resize snaps to desktop boundaries without moving its fixed corner");
+        drag(clock,QPoint(495,495),QPoint(400,400));
+        check(clock->size()==QSize(500,500),"resize remains inside the canvas beyond its edge");
+        clock->setGeometry(200,200,300,300);
+        drag(clock,QPoint(295,295),QPoint(-500,-500));
+        check(clock->size()==clock->minimumSize(),"resize respects minimum readable widget dimensions");
+        clock->setGeometry(200,200,300,300);
+        grip=QPoint(295,295);global=clock->mapToGlobal(grip);
+        mouse(clock,QEvent::MouseButtonPress,grip,global);canvas.setGlobalEditMode(false);
+        mouse(clock,QEvent::MouseMove,grip+QPoint(94,0),global+QPoint(94,0));
+        mouse(clock,QEvent::MouseButtonRelease,grip,global+QPoint(94,0));
+        check(clock->size()==QSize(300,300),"leaving edit mode cancels an in-flight resize");
+        // Aspect-preserving clients (monitor and smart space) share this solver.
+        const QRect bounds(0,0,1200,900),resizeStart(100,100,400,200);
+        auto scaled=WidgetResizeSnap::geometry(resizeStart,QSize(494,247),QSize(200,100),
+            QSize(1000,500),bounds,{QRect(600,100,300,250)},2.0);
+        check(scaled==QRect(100,100,500,250),"aspect resize snaps while preserving ratio");
+        auto anchored=WidgetResizeSnap::geometry(QRect(800,0,400,200),QSize(494,247),
+            QSize(200,100),QSize(1000,500),bounds,{QRect(400,0,300,300)},2.0,
+            Qt::RightEdge|Qt::TopEdge);
+        check(anchored==QRect(700,0,500,250),"right-anchored monitor grows left to a neighbour and remains flush right");
+        auto limited=WidgetResizeSnap::geometry(resizeStart,QSize(694,347),QSize(200,100),
+            QSize(695,500),bounds,{QRect(800,100,300,250)},2.0);
+        check(limited.width()==694,"snap cannot exceed maximum size");
+        activity->show();
         clock->setGeometry(clockBeforeSnap);activity->setGeometry(activityBeforeSnap);
         canvas.setGlobalEditMode(false);settle(100);
         auto fixtureIcon=[&](const QString &path)->DesktopIcon *{
@@ -198,6 +252,12 @@ static int runDeskletTest(const QString &root)
         setWallpaper(bluePath);canvas.loadLayout();canvas.refreshAll();settle(700);clock->grab();
         check(before!=clock->material(),"wallpaper refresh reaches new clock material");
         check(faceBefore!=clock->faceMaterial(),"wallpaper refresh also invalidates the cached clock lens");
+        check(!clock->property("clockFaceDarkInk").toBool(),"dark wallpaper keeps light clock ink");
+        const QString whitePath=root+"/desklet-white.png";color.fill(Qt::white);color.save(whitePath);
+        setWallpaper(whitePath);canvas.loadLayout();canvas.refreshAll();settle(700);
+        clock->findChild<QPushButton *>("clockTab")->click();clock->grab();
+        check(clock->property("clockFaceDarkInk").toBool(),"white wallpaper selects contrasting dark dial marks and hands");
+        QDir().mkpath("artifacts");clock->grab().save(QString("artifacts/clock-white-%1.png").arg(clock->devicePixelRatioF()));
         canvas.setActivityWidgetVisible(false);setWallpaper(redPath);canvas.loadLayout();canvas.refreshAll();settle(300);canvas.setActivityWidgetVisible(true);settle(200);
         const QImage material=activity->material();const QColor sample=material.pixelColor(material.width()/2,material.height()/2);
         check(sample.red()>sample.blue()+40,"hidden activity widget refreshes wallpaper on reveal");

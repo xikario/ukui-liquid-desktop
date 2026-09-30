@@ -1,3 +1,4 @@
+#include "FencesSettingsWindow.h"
 #pragma once
 #include "DesktopIcon.h"
 #include "FileClipboard.h"
@@ -51,14 +52,16 @@ static int runIconAppearanceTest(const QString &root)
         check(icon.visualStyle()==IconVisualStyle::LiquidPlate,"desktop defaults to liquid");
         canvas.configureIconAppearance(&icon,IconSurface::Fence);
         check(icon.visualStyle()==IconVisualStyle::Native,"fence defaults to native");
-        QTimer::singleShot(50,&canvas,[&] {
-            auto *dialog=canvas.findChild<QDialog *>("iconAppearanceDialog");
-            check(dialog!=nullptr,"icon settings reachable");if(!dialog)return;
-            dialog->findChild<QCheckBox *>("fenceIconPlates")->setChecked(true);
-            dialog->findChild<QSlider *>("iconGlassStrength")->setValue(73);
-            dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
-        });
-        canvas.showIconAppearanceDialog();
+        canvas.showIconAppearanceDialog();settle(100);
+        FencesSettingsWindow *window=nullptr;
+        for(auto *w:QApplication::topLevelWidgets())if(auto *candidate=qobject_cast<FencesSettingsWindow *>(w))window=candidate;
+        auto *form=window?window->findChild<QWidget *>("iconAppearanceDialog"):nullptr;
+        check(form!=nullptr,"icon settings are embedded in the unified window");
+        if(form){
+            form->findChild<QCheckBox *>("fenceIconPlates")->setChecked(true);
+            form->findChild<QSlider *>("iconGlassStrength")->setValue(73);
+            form->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Apply)->click();
+        }
         canvas.configureIconAppearance(&icon,IconSurface::Fence);
         check(icon.visualStyle()==IconVisualStyle::LiquidPlate,"fence opt-in takes effect immediately");
         check(IconAppearance::load().strength==73 && IconAppearance::load().fencePlates,"appearance persists independently of layout");

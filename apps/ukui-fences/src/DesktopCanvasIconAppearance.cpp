@@ -24,9 +24,11 @@ void DesktopCanvas::applyIconAppearanceToAll()
         configureIconAppearance(icon,icon->iconSurface());
 }
 
-void DesktopCanvas::showIconAppearanceDialog()
+void DesktopCanvas::showIconAppearanceDialog() { showSettingsPage("icons"); }
+
+QWidget *DesktopCanvas::createIconSettingsPage(QWidget *parent)
 {
-    QDialog dialog(this); dialog.setWindowTitle("桌面图标样式"); dialog.setObjectName("iconAppearanceDialog");
+    auto *form=new QWidget(parent); QWidget &dialog=*form; dialog.setWindowTitle("桌面图标样式"); dialog.setObjectName("iconAppearanceDialog");
     auto *layout=new QFormLayout(&dialog);
     auto *style=new QComboBox(&dialog); style->setObjectName("iconVisualStyle");
     style->addItems({"系统原始","液态玻璃底座"});
@@ -40,26 +42,24 @@ void DesktopCanvas::showIconAppearanceDialog()
     layout->addRow("颜色",tint); layout->addRow(fence);
     auto *hint=new QLabel("原始图标保持清晰；分区内底座自动减弱。应用后立即生效。",&dialog);
     hint->setWordWrap(true); layout->addRow(hint);
-    auto fill=[&](const IconAppearance &a) {
+    auto fill=[=, &dialog](const IconAppearance &a) {
         style->setCurrentIndex(a.style==IconVisualStyle::Native?0:1);
         strength->setValue(a.strength); tint->setCurrentIndex(a.wallpaperTint?0:1);
         fence->setChecked(a.fencePlates);
     };
-    auto enable=[&] { const bool on=style->currentIndex()==1;
+    auto enable=[=, &dialog] { const bool on=style->currentIndex()==1;
         strength->setEnabled(on); tint->setEnabled(on); fence->setEnabled(on); };
-    connect(strength,&QSlider::valueChanged,&dialog,[&](int n){value->setText(QString::number(n)+"%");});
-    connect(style,QOverload<int>::of(&QComboBox::currentIndexChanged),&dialog,[&](int){enable();});
+    connect(strength,&QSlider::valueChanged,&dialog,[=, &dialog](int n){value->setText(QString::number(n)+"%");});
+    connect(style,QOverload<int>::of(&QComboBox::currentIndexChanged),&dialog,[=, &dialog](int){enable();});
     fill(m_iconAppearance); enable();
-    auto *buttons=new QDialogButtonBox(QDialogButtonBox::RestoreDefaults|QDialogButtonBox::Cancel|QDialogButtonBox::Apply|QDialogButtonBox::Ok,&dialog);
+    auto *buttons=new QDialogButtonBox(QDialogButtonBox::RestoreDefaults|QDialogButtonBox::Apply,&dialog);
     layout->addRow(buttons);
-    auto apply=[&] {
+    auto apply=[=, &dialog] {
         m_iconAppearance.style=style->currentIndex()==0?IconVisualStyle::Native:IconVisualStyle::LiquidPlate;
         m_iconAppearance.strength=strength->value(); m_iconAppearance.wallpaperTint=tint->currentIndex()==0;
-        m_iconAppearance.fencePlates=fence->isChecked(); m_iconAppearance.save(); applyIconAppearanceToAll();
+        m_iconAppearance.fencePlates=fence->isChecked(); m_iconAppearance.save(); applyIconAppearanceToAll(); dialog.setProperty("settingsDirty",false);
     };
-    connect(buttons->button(QDialogButtonBox::RestoreDefaults),&QPushButton::clicked,&dialog,[&]{fill(IconAppearance());});
+    connect(buttons->button(QDialogButtonBox::RestoreDefaults),&QPushButton::clicked,&dialog,[=, &dialog]{fill(IconAppearance());});
     connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,apply);
-    connect(buttons,&QDialogButtonBox::accepted,&dialog,[&]{apply();dialog.accept();});
-    connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-    dialog.exec();
+    return form;
 }

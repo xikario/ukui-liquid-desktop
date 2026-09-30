@@ -1,4 +1,7 @@
 <RCC>
+    <qresource prefix="/settings">
+        <file alias="ukui-fences-settings.svg">packaging/ukui-fences-settings.svg</file>
+    </qresource>
     <qresource prefix="/smart-space">
         <file alias="menu-refresh.png">assets/smart-space-menu-icons/refresh.png</file>
         <file alias="menu-fast-full.png">assets/smart-space-menu-icons/fast-full.png</file>

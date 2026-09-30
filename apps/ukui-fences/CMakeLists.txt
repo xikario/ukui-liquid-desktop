@@ -42,6 +42,9 @@ endif()
 add_executable(ukui-fences
     src/main.cpp
     src/DesktopCanvas.cpp
+    src/FencesSettingsWindow.cpp
+    src/LiquidWheelPicker.cpp
+    src/SettingsComboPopup.cpp
     src/DesktopWidgets.cpp
     src/StrawberryPlayer.cpp
     src/MusicDesklet.cpp
@@ -161,7 +164,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:fence-glass-test> --clipboard-only)
         set_tests_properties(desktop_clipboard_async PROPERTIES TIMEOUT 30 LABELS "integration;files")
         foreach(SCALE 1 1.5 2)
-            foreach(KIND appearance icon-appearance icon-damage smart-interaction)
+            foreach(KIND appearance icon-appearance icon-damage smart-interaction settings-center)
                 add_test(NAME desktop_${KIND}_${SCALE}
                     COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
                         ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --${KIND}-only)
@@ -245,11 +248,11 @@ install(PROGRAMS scripts/smart_space_indexer.py
                  scripts/credential_store.py
                  scripts/smart_space_knowledge.py
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/ukui-fences)
-install(FILES packaging/ukui-fences.desktop
+install(FILES packaging/ukui-fences.desktop packaging/ukui-fences-settings.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES packaging/ukui-fences.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
-install(FILES packaging/ukui-fences.svg
+install(FILES packaging/ukui-fences.svg packaging/ukui-fences-settings.svg
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
 install(DIRECTORY assets/fence-icons/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/ukui-fences/fence-icons

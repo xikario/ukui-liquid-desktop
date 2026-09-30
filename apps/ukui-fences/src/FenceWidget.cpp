@@ -1,3 +1,4 @@
+#include <memory>
 #include "FenceWidget.h"
 #include "DesktopIcon.h"
 #include "DesktopCanvas.h"
@@ -326,26 +327,40 @@ void FenceWidget::setCollapsed(bool c)
 {
     if (m_collapsed == c) return;
     const int restoredHeight = expandedHeight();
+    const QRect start = geometry();
     if (!m_collapseAnimation) {
         m_collapseAnimation = new QPropertyAnimation(this, "geometry", this);
-        m_collapseAnimation->setDuration(160);
-        m_collapseAnimation->setEasingCurve(QEasingCurve::OutCubic);
+        m_collapseAnimation->setEasingCurve(QEasingCurve::InOutCubic);
         connect(m_collapseAnimation, &QPropertyAnimation::finished, this, [this] {
+            m_collapseSnapshot = {};
             updateShapeMask();
             layoutIcons();
+            update();
             emit geometryChanged();
         });
     }
-    // A second click reverses the existing transition instead of leaving two
-    // geometry animations (and stale completion callbacks) fighting each other.
     m_collapseAnimation->stop();
     m_expandedH = restoredHeight;
+    // Capture the expanded surface only once, including its icons. Resizing
+    // during the transition then reveals this cache instead of rebuilding glass
+    // and relaying out live children on every frame. Reversals reuse the cache.
+    if (m_collapseSnapshot.isNull()) {
+        m_collapsed = false;
+        resize(width(), restoredHeight);
+        layoutIcons();
+        m_collapseSnapshot = grab();
+        setProperty("collapseCaptures", property("collapseCaptures").toInt() + 1);
+    }
     m_collapsed = c;
+    m_iconViewport->hide();
+    if (m_embeddedWidget) m_embeddedWidget->hide();
+    setGeometry(start);
     updateShapeMask();
-    layoutIcons();
-    m_collapseAnimation->setStartValue(geometry());
-    m_collapseAnimation->setEndValue(
-        QRect(x(), y(), width(), c ? TITLE_H : m_expandedH));
+    const int target = c ? TITLE_H : m_expandedH;
+    m_collapseAnimation->setDuration(qMax(60, 200 * qAbs(target - height()) /
+                                               qMax(1, m_expandedH - TITLE_H)));
+    m_collapseAnimation->setStartValue(start);
+    m_collapseAnimation->setEndValue(QRect(x(), y(), width(), target));
     m_collapseAnimation->start();
     update();
 }
@@ -784,6 +799,7 @@ bool FenceWidget::iconBelongsToThisFence(DesktopIcon *icon) const
 
 void FenceWidget::layoutIcons()
 {
+    if (!m_collapseSnapshot.isNull()) return;
     if (m_embeddedWidget) {
         m_iconViewport->hide();
         m_embeddedWidget->setGeometry(
@@ -830,6 +846,7 @@ void FenceWidget::layoutIcons()
 
 void FenceWidget::resizeEvent(QResizeEvent *)
 {
+    if (!m_collapseSnapshot.isNull()) { update(); return; }
     updateShapeMask();
     if (m_embeddedWidget) {
         m_embeddedWidget->setGeometry(
@@ -1420,6 +1437,20 @@ void FenceWidget::paintEvent(QPaintEvent *)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
+    if (!m_collapseSnapshot.isNull()) {
+        // Keep glyphs at their original size; reveal/retract vertically and
+        // retain the rounded lower rim rather than squashing the entire image.
+        QPainterPath clip;
+        clip.addRoundedRect(QRectF(rect()), 10, 10);
+        p.setClipPath(clip);
+        p.drawPixmap(0, 0, m_collapseSnapshot);
+        const qreal dpr = m_collapseSnapshot.devicePixelRatio();
+        const qreal fullHeight = m_collapseSnapshot.height() / dpr;
+        if (height() < fullHeight && height() > TITLE_H + 10)
+            p.drawPixmap(QRectF(0, height()-10, width(), 10), m_collapseSnapshot,
+                         QRectF(0, (fullHeight-10)*dpr, m_collapseSnapshot.width(), 10*dpr));
+        return;
+    }
     const QRectF r(rect());
 
     // 整体背景
@@ -1431,6 +1462,7 @@ void FenceWidget::paintEvent(QPaintEvent *)
             if (auto *canvas = qobject_cast<DesktopCanvas *>(parentWidget())) {
                 m_glassImage = canvas->renderLiquidGlass(
                     geometry(), 10.0, shaped ? bgPath : QPainterPath());
+                setProperty("glassBuilds", property("glassBuilds").toInt() + 1);
                 m_glassGeometry = geometry();
                 m_glassShape = bgPath;
             }
@@ -1628,6 +1660,7 @@ void FenceWidget::mousePressEvent(QMouseEvent *e)
     if (m_editMode && m_collapseAnimation &&
         m_collapseAnimation->state() == QAbstractAnimation::Running) {
         m_collapseAnimation->stop();
+        m_collapseSnapshot = {};
         resize(width(), m_collapsed ? TITLE_H : m_expandedH);
         layoutIcons();
     }
@@ -2122,7 +2155,14 @@ void FenceWidget::dropEvent(QDropEvent *e)
 
 void FenceWidget::showFontSettingsDialog()
 {
-    QDialog dlg(this);
+    if (auto *canvas=qobject_cast<DesktopCanvas *>(parentWidget()))
+        canvas->showSettingsPage("fence:"+fenceId());
+}
+
+QWidget *FenceWidget::createFontSettingsPage(QWidget *parent)
+{
+    auto *form=new QWidget(parent); QWidget &dlg=*form;
+    connect(this,&QObject::destroyed,form,&QObject::deleteLater);
     dlg.setWindowTitle(QString("分区「%1」内部图标字体设置").arg(m_title));
     dlg.setMinimumWidth(340);
 
@@ -2158,19 +2198,19 @@ void FenceWidget::showFontSettingsDialog()
     layout->addRow("", italicCheck);
 
     // 字体颜色
-    QColor chosenColor = m_hasLocalFont ? m_localFontColor : Qt::white;
+    auto chosenColor = std::make_shared<QColor>(m_hasLocalFont ? m_localFontColor : Qt::white);
     auto *colorBtn = new QPushButton(&dlg);
-    auto updateColorBtn = [colorBtn, &chosenColor] {
+    auto updateColorBtn = [colorBtn, chosenColor] {
         QPixmap px(48, 16);
-        px.fill(chosenColor);
+        px.fill(*chosenColor);
         colorBtn->setIcon(QIcon(px));
-        colorBtn->setText(chosenColor.name());
+        colorBtn->setText(chosenColor->name());
     };
     updateColorBtn();
-    connect(colorBtn, &QPushButton::clicked, [&] {
-        QColor c = QColorDialog::getColor(chosenColor, &dlg, "选择字体颜色");
+    connect(colorBtn, &QPushButton::clicked, &dlg, [=, &dlg] {
+        QColor c = QColorDialog::getColor(*chosenColor, &dlg, "选择字体颜色");
         if (c.isValid()) {
-            chosenColor = c;
+            *chosenColor = c;
             updateColorBtn();
         }
     });
@@ -2178,35 +2218,29 @@ void FenceWidget::showFontSettingsDialog()
 
     // 重置按钮（恢复为全局设置）
     auto *resetBtn = new QPushButton("内部图标恢复为全局设置", &dlg);
+    resetBtn->setProperty("settingsImmediate",true);
     layout->addRow("", resetBtn);
 
-    bool resetClicked = false;
-    connect(resetBtn, &QPushButton::clicked, [&] {
-        resetClicked = true;
-        dlg.accept();
-    });
-
     auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        QDialogButtonBox::Apply, &dlg);
     layout->addRow(buttons);
 
-    if (dlg.exec() == QDialog::Accepted) {
-        if (resetClicked) {
+    connect(resetBtn,&QPushButton::clicked,&dlg,[=, &dlg] {
+
             // 清除本地字体设置
             m_hasLocalFont = false;
             for (auto *icon : m_icons)
                 applyInheritedIconFont(icon);
             update();
             emit geometryChanged();
-            return;
-        }
+            dlg.setProperty("settingsDirty",false);
+    });
+    connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dlg,[=, &dlg] {
 
         m_hasLocalFont = true;
         m_localFontFamily = fontCombo->currentData().toString();
         m_localFontSize = sizeSpin->value();
-        m_localFontColor = chosenColor;
+        m_localFontColor = *chosenColor;
         m_localFontBold = boldCheck->isChecked();
         m_localFontItalic = italicCheck->isChecked();
 
@@ -2214,12 +2248,21 @@ void FenceWidget::showFontSettingsDialog()
         for (auto *icon : m_icons)
             applyLocalIconFont(icon);
         emit geometryChanged();
-    }
+        dlg.setProperty("settingsDirty",false);
+    });
+    return form;
 }
 
 void FenceWidget::showTitleFontSettingsDialog()
 {
-    QDialog dlg(this);
+    if (auto *canvas=qobject_cast<DesktopCanvas *>(parentWidget()))
+        canvas->showSettingsPage("fence:"+fenceId());
+}
+
+QWidget *FenceWidget::createTitleFontSettingsPage(QWidget *parent)
+{
+    auto *form=new QWidget(parent); QWidget &dlg=*form;
+    connect(this,&QObject::destroyed,form,&QObject::deleteLater);
     dlg.setWindowTitle(QString("分区「%1」标题字体设置").arg(m_title));
     dlg.setMinimumWidth(340);
 
@@ -2250,54 +2293,50 @@ void FenceWidget::showTitleFontSettingsDialog()
     italicCheck->setChecked(m_hasTitleFont ? m_titleFontItalic : false);
     layout->addRow("", italicCheck);
 
-    QColor chosenColor = m_hasTitleFont ? m_titleFontColor : Qt::white;
+    auto chosenColor = std::make_shared<QColor>(m_hasTitleFont ? m_titleFontColor : Qt::white);
     auto *colorBtn = new QPushButton(&dlg);
-    auto updateColorBtn = [colorBtn, &chosenColor] {
+    auto updateColorBtn = [colorBtn, chosenColor] {
         QPixmap px(48, 16);
-        px.fill(chosenColor);
+        px.fill(*chosenColor);
         colorBtn->setIcon(QIcon(px));
-        colorBtn->setText(chosenColor.name());
+        colorBtn->setText(chosenColor->name());
     };
     updateColorBtn();
-    connect(colorBtn, &QPushButton::clicked, [&] {
-        QColor c = QColorDialog::getColor(chosenColor, &dlg, "选择标题字体颜色");
+    connect(colorBtn, &QPushButton::clicked, &dlg, [=, &dlg] {
+        QColor c = QColorDialog::getColor(*chosenColor, &dlg, "选择标题字体颜色");
         if (c.isValid()) {
-            chosenColor = c;
+            *chosenColor = c;
             updateColorBtn();
         }
     });
     layout->addRow("标题字体颜色：", colorBtn);
 
     auto *resetBtn = new QPushButton("标题恢复为默认设置", &dlg);
+    resetBtn->setProperty("settingsImmediate",true);
     layout->addRow("", resetBtn);
 
-    bool resetClicked = false;
-    connect(resetBtn, &QPushButton::clicked, [&] {
-        resetClicked = true;
-        dlg.accept();
-    });
-
     auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        QDialogButtonBox::Apply, &dlg);
     layout->addRow(buttons);
 
-    if (dlg.exec() == QDialog::Accepted) {
-        if (resetClicked) {
+    connect(resetBtn,&QPushButton::clicked,&dlg,[=, &dlg] {
+
             m_hasTitleFont = false;
             update();
             emit geometryChanged();
-            return;
-        }
+            dlg.setProperty("settingsDirty",false);
+    });
+    connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dlg,[=, &dlg] {
 
         m_hasTitleFont = true;
         m_titleFontFamily = fontCombo->currentData().toString();
         m_titleFontSize = sizeSpin->value();
-        m_titleFontColor = chosenColor;
+        m_titleFontColor = *chosenColor;
         m_titleFontBold = boldCheck->isChecked();
         m_titleFontItalic = italicCheck->isChecked();
         update();
         emit geometryChanged();
-    }
+        dlg.setProperty("settingsDirty",false);
+    });
+    return form;
 }

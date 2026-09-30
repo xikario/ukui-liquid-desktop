@@ -29,6 +29,9 @@ static int runMusicTest(const QString &root){
         check(card->notesAnimating(),"MPRIS playing starts floating notes");
         const QImage firstNotes=card->grab(QRect(6,4,104,120)).toImage();settle(180);
         check(firstNotes!=card->grab(QRect(6,4,104,120)).toImage(),"floating notes visibly move over the cover");
+        const QRect expandedArea(112,4,card->width()-124,card->height()-56);
+        const QImage rightNotes=card->grab(expandedArea).toImage();settle(210);
+        check(rightNotes!=card->grab(expandedArea).toImage(),"notes animate across the right side above progress, beyond album art");
         const QString preview=qEnvironmentVariable("UKUI_FENCES_NOTES_PREVIEW");
         if(!preview.isEmpty()) {
             QDir().mkpath(preview);

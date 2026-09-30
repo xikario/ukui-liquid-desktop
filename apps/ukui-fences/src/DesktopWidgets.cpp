@@ -185,7 +185,11 @@ void LiquidDesklet::mousePressEvent(QMouseEvent *e) {
 void LiquidDesklet::mouseMoveEvent(QMouseEvent *e) {
     if(!m_editMode){setCursor(Qt::ArrowCursor);return;}
     if(m_drag){move(boundedPosition(m_startPos+e->globalPos()-m_pressGlobal,true));}
-    else if(m_resize){const auto delta=e->globalPos()-m_pressGlobal;resize(m_startSize+QSize(delta.x(),delta.y()));constrainToCanvas();}
+    else if(m_resize){
+        const auto delta=e->globalPos()-m_pressGlobal;
+        setGeometry(m_canvas->snappedWidgetResize(this, QRect(m_startPos,m_startSize),
+            m_startSize+QSize(delta.x(),delta.y()), minimumSize(), maximumSize()));
+    }
     else setCursor((e->x()>width()-24 && e->y()>height()-24)?Qt::SizeFDiagCursor:(e->y()<44?Qt::SizeAllCursor:Qt::ArrowCursor));
 }
 void LiquidDesklet::mouseReleaseEvent(QMouseEvent *e){if(e->button()==Qt::LeftButton){const bool changed=m_drag || m_resize;m_drag=m_resize=false;if(changed)savePlacement();e->accept();}else QWidget::mouseReleaseEvent(e);}
@@ -197,6 +201,7 @@ void LiquidDesklet::contextMenuEvent(QContextMenuEvent *e){
     QMenu menu(this);auto *startup=menu.addAction(autoStartEnabled(m_key)?"随 Fences 启动（已开启）":"随 Fences 启动（未开启）");
     startup->setCheckable(true);startup->setChecked(autoStartEnabled(m_key));
     connect(startup,&QAction::triggered,this,[this](bool on){setAutoStart(m_key,on);});
+    connect(menu.addAction("组件设置…"),&QAction::triggered,this,[this]{m_canvas->showSettingsPage(m_key);});
     extendMenu(menu);menu.addSeparator();
     connect(menu.addAction("刷新液态材质"),&QAction::triggered,this,&LiquidDesklet::invalidateMaterial);
     connect(menu.addAction("隐藏组件"),&QAction::triggered,this,&QWidget::hide);
@@ -289,6 +294,13 @@ void ClockDesklet::paintGlassFace(QPainter &p,const QPointF &center,qreal radius
             lens.setPen(QPen(QColor(225,250,255,38),1.));
             lens.drawArc(bounds.adjusted(3,3,-3,-3),30*16,105*16);
         }
+        // Sample the rendered lens once, not on every clock tick. Clear glass
+        // over snow/white walls needs dark hands; mixed backgrounds also get a
+        // thin opposite-colour keyline around the dial content.
+        const QImage sample=m_faceMaterial.scaled(12,12,Qt::IgnoreAspectRatio,Qt::SmoothTransformation);
+        qreal light=0;int count=0;
+        for(int y=2;y<10;++y)for(int x=2;x<10;++x){const QColor c=sample.pixelColor(x,y);light+=.299*c.red()+.587*c.green()+.114*c.blue();++count;}
+        m_faceLight=light/qMax(1,count)>155;setProperty("clockFaceDarkInk",m_faceLight);
         m_faceSourceKey=sourceKey;m_faceRect=face;++m_faceBuilds;
         setProperty("clockFaceOpticalGpu",m_faceOptics->usedGpu());
     }
@@ -299,26 +311,44 @@ void ClockDesklet::paintContent(QPainter &p){
     if(!m_timerPage){
         const qreal r=qMin(width()-54,height()-96)/2.;const QPointF c(width()/2.,50+r);
         paintGlassFace(p,c,r);
+        const QColor faceInk=m_faceLight?QColor("#182b3b"):ink;
+        const QColor faceAccent=m_faceLight?QColor("#146759"):accent;
+        const QColor outline=m_faceLight?QColor(249,254,255,165):QColor(12,24,37,185);
         for(int i=0;i<60;++i){const qreal a=qDegreesToRadians(i*6.-90);const bool major=i%5==0;
-            p.setPen(QPen(major?QColor(235,250,255,150):QColor(210,237,252,48),major?1.7:1.,Qt::SolidLine,Qt::RoundCap));
-            p.drawLine(c+QPointF(qCos(a)*(r-5),qSin(a)*(r-5)),c+QPointF(qCos(a)*(r-(major?12:8)),qSin(a)*(r-(major?12:8))));
+            const QPointF from=c+QPointF(qCos(a)*(r-5),qSin(a)*(r-5)),to=c+QPointF(qCos(a)*(r-(major?12:8)),qSin(a)*(r-(major?12:8)));
+            p.setPen(QPen(outline,major?3.:2.,Qt::SolidLine,Qt::RoundCap));p.drawLine(from,to);
+            QColor mark=faceInk;mark.setAlpha(major?240:150);
+            p.setPen(QPen(mark,major?1.7:1.,Qt::SolidLine,Qt::RoundCap));p.drawLine(from,to);
         }
-        for(int i=1;i<=12;++i){const qreal a=qDegreesToRadians(i*30.-90);QPointF pos=c+QPointF(qCos(a)*(r-20),qSin(a)*(r-20));text(p,QRectF(pos-QPointF(13,12),QSizeF(26,24)),QString::number(i),11,ink,i%3==0);}
-        auto hand=[&](qreal degrees,qreal length,qreal weight,QColor color){const qreal a=qDegreesToRadians(degrees-90);p.setPen(QPen(color,weight,Qt::SolidLine,Qt::RoundCap));p.drawLine(c-QPointF(qCos(a)*5,qSin(a)*5),c+QPointF(qCos(a)*length,qSin(a)*length));};
-        const auto t=now.time();hand((t.hour()%12+t.minute()/60.)*30,r*.46,4.6,ink);hand((t.minute()+t.second()/60.)*6,r*.67,3.0,ink);hand(t.second()*6,r*.76,1.35,accent);
-        p.setPen(Qt::NoPen);p.setBrush(accent);p.drawEllipse(c,3.5,3.5);
+        for(int i=1;i<=12;++i){
+            const qreal a=qDegreesToRadians(i*30.-90);const QPointF pos=c+QPointF(qCos(a)*(r-20),qSin(a)*(r-20));
+            QFont f=font();f.setPixelSize(11);f.setBold(i%3==0);QFontMetricsF fm(f);
+            const QString number=QString::number(i);QPainterPath glyph;
+            glyph.addText(pos-QPointF(fm.horizontalAdvance(number)/2.,-(fm.ascent()-fm.descent())/2.),f,number);
+            p.strokePath(glyph,QPen(outline,2.2,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));p.fillPath(glyph,faceInk);
+        }
+        auto hand=[&](qreal degrees,qreal length,qreal weight,QColor color){
+            const qreal a=qDegreesToRadians(degrees-90);const QPointF from=c-QPointF(qCos(a)*5,qSin(a)*5),to=c+QPointF(qCos(a)*length,qSin(a)*length);
+            p.setPen(QPen(outline,weight+1.8,Qt::SolidLine,Qt::RoundCap));p.drawLine(from,to);
+            p.setPen(QPen(color,weight,Qt::SolidLine,Qt::RoundCap));p.drawLine(from,to);
+        };
+        const auto t=now.time();hand((t.hour()%12+t.minute()/60.)*30,r*.46,4.6,faceInk);hand((t.minute()+t.second()/60.)*6,r*.67,3.0,faceInk);hand(t.second()*6,r*.76,1.35,faceAccent);
+        p.setPen(QPen(outline,1.));p.setBrush(faceAccent);p.drawEllipse(c,3.5,3.5);
         text(p,QRectF(20,height()-43,width()-40,22),now.toString("HH:mm:ss"),18,ink,true);
         text(p,QRectF(20,height()-23,width()-40,18),QLocale(QLocale::Chinese).toString(now.date(),"M月d日 dddd"),11,muted);
     }else{
         const qreal r=qMin(width()-90,height()-130)/2.;const QPointF c(width()/2.,50+r);
         paintGlassFace(p,c,r);
-        const QRectF ring(c-QPointF(r-3,r-3),QSizeF((r-3)*2,(r-3)*2));p.setBrush(Qt::NoBrush);p.setPen(QPen(QColor(224,244,255,27),5));p.drawEllipse(ring);
+        const QColor faceInk=m_faceLight?QColor("#182b3b"):ink;
+        const QColor faceAccent=m_faceLight?QColor("#146759"):accent;
+        const QColor faceMuted=m_faceLight?QColor("#344c5e"):muted;
+        const QRectF ring(c-QPointF(r-3,r-3),QSizeF((r-3)*2,(r-3)*2));p.setBrush(Qt::NoBrush);p.setPen(QPen(m_faceLight?QColor(20,40,55,48):QColor(224,244,255,60),5));p.drawEllipse(ring);
         const qint64 left=m_countdown.remaining(now.toMSecsSinceEpoch());
         const qreal progress=qBound(0.,double(left)/m_countdown.durationMs,1.);
-        p.setPen(QPen(accent,5,Qt::SolidLine,Qt::RoundCap));p.drawArc(ring,90*16,-qRound(360*16*progress));
-        text(p,QRectF(0,c.y()-22,width(),40),timerText(left),left>=3600000?21:27,ink,true);
+        p.setPen(QPen(faceAccent,5,Qt::SolidLine,Qt::RoundCap));p.drawArc(ring,90*16,-qRound(360*16*progress));
+        text(p,QRectF(0,c.y()-22,width(),40),timerText(left),left>=3600000?21:27,faceInk,true);
         const QString status=m_countdown.state==CountdownState::Running?"专注这一刻":m_countdown.state==CountdownState::Paused?"已暂停":m_countdown.state==CountdownState::Finished?"时间到了":"准备开始";
-        text(p,QRectF(0,c.y()+17,width(),18),status,11,muted);
+        text(p,QRectF(0,c.y()+17,width(),18),status,11,faceMuted);
     }
 }
 ActivityDesklet::ActivityDesklet(DesktopCanvas *canvas,ActivityRecorder *recorder):LiquidDesklet(canvas,"activity","活动统计",QSize(360,220)),m_recorder(recorder){

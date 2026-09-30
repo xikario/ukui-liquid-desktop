@@ -56,7 +56,7 @@ static int runCalendarTest(const QString &root){
         check(calendar->height()==450 && list->isVisible(),"expand restores custom expanded height and tasks");
         auto choose=[&](const QString &buttonName,const QString &menuName,int value){
             QTimer::singleShot(160,calendar,[&,menuName,value]{
-                auto *menu=calendar->findChild<QMenu *>(menuName);
+                auto *menu=qobject_cast<QMenu *>(QApplication::activePopupWidget());
                 check(menu && menu->isVisible(),"date selector opens visible menu");
                 if(!menu)return;
                 check(menu->property("liquidPopupSkin").toBool(),"date selector uses shared liquid popup");
@@ -73,7 +73,7 @@ static int runCalendarTest(const QString &root){
                 QKeyEvent enter(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);QApplication::sendEvent(wheel,&enter);
             });
             // Prevent a test failure from leaving a nested menu loop running.
-            QTimer::singleShot(1000,calendar,[&,menuName]{if(auto *menu=calendar->findChild<QMenu *>(menuName))menu->close();});
+            QTimer::singleShot(1000,calendar,[&,menuName]{if(auto *menu=qobject_cast<QMenu *>(QApplication::activePopupWidget()))menu->close();});
             calendar->findChild<QPushButton *>(buttonName)->click();
         };
         calendar->selectDate(QDate(2028,2,29));settle(400);
@@ -85,7 +85,7 @@ static int runCalendarTest(const QString &root){
         check(calendar->findChild<QPushButton *>("calendarYear")->text().contains("2026") && calendar->findChild<QPushButton *>("calendarMonth")->text().startsWith("2 "),"date header follows selection");
         const QDate beforeCancel=calendar->selectedDate();
         QTimer::singleShot(160,calendar,[&]{
-            auto *menu=calendar->findChild<QMenu *>("calendarMonthMenu");
+            auto *menu=qobject_cast<QMenu *>(QApplication::activePopupWidget());
             auto *wheel=menu?menu->findChild<QWidget *>("calendarMonthWheel"):nullptr;
             check(wheel!=nullptr,"wheel supports direct scrolling and dragging");if(!wheel){if(menu)menu->close();return;}
             const QPointF center(wheel->rect().center());

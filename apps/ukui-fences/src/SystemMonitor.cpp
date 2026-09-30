@@ -1928,10 +1928,23 @@ QString SystemMonitor::tooltipAt(const QPoint &position) const
 
 void SystemMonitor::showSettingsDialog()
 {
-    QDialog dialog(this);
+    if (auto *canvas = qobject_cast<DesktopCanvas *>(parentWidget()))
+        canvas->showSettingsPage("monitor");
+}
+
+QWidget *SystemMonitor::createSettingsPage(QWidget *parent)
+{
+    auto *form = new QWidget(parent);
+    QWidget &dialog = *form;
+    connect(this, &QObject::destroyed, form, &QObject::deleteLater);
     dialog.setWindowTitle(QStringLiteral("小组件配置"));
     dialog.setMinimumWidth(500);
     auto *layout = new QFormLayout(&dialog);
+
+    auto *skinChoice=new QComboBox(&dialog);
+    skinChoice->addItems({"深色","浅色","赛博","毛玻璃","壁纸取色","液态玻璃"});
+    skinChoice->setCurrentIndex(static_cast<int>(m_skin));
+    layout->addRow("外观皮肤：",skinChoice);
 
     auto *titleEdit = new QLineEdit(m_widgetTitle, &dialog);
     titleEdit->setMaxLength(40);
@@ -2011,11 +2024,6 @@ void SystemMonitor::showSettingsDialog()
     intervalSpin->setSuffix(QStringLiteral(" 秒"));
     layout->addRow(QStringLiteral("采样周期："), intervalSpin);
 
-    auto *autoStartCheck = new QCheckBox(
-        QStringLiteral("随 Fences 启动时自动打开系统监控"), &dialog);
-    autoStartCheck->setChecked(m_autoStart);
-    layout->addRow(QStringLiteral("自动启动："), autoStartCheck);
-
     auto *premiumCheck = new QCheckBox(
         QStringLiteral("启用高级仿毛玻璃与卡片发光"), &dialog);
     premiumCheck->setChecked(m_premiumAesthetics);
@@ -2030,14 +2038,10 @@ void SystemMonitor::showSettingsDialog()
     layout->addRow(QStringLiteral("资源策略："), resourceHint);
 
     auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    connect(buttons, &QDialogButtonBox::accepted,
-            &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected,
-            &dialog, &QDialog::reject);
+        QDialogButtonBox::Apply, &dialog);
     layout->addRow(buttons);
 
-    if (dialog.exec() == QDialog::Accepted) {
+    connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [=, &dialog] {
         m_widgetTitle = titleEdit->text().trimmed();
         if (m_widgetTitle.isEmpty())
             m_widgetTitle = QStringLiteral("飞腾桌面资源监控");
@@ -2045,10 +2049,9 @@ void SystemMonitor::showSettingsDialog()
         m_widgetFontSize = fontSize->value();
         m_windowOpacity = opacitySlider->value();
         m_statIntervalSec = intervalSpin->value();
-        m_autoStart = autoStartCheck->isChecked();
         m_premiumAesthetics = premiumCheck->isChecked();
         const QString editedKey = keyEdit->text().trimmed();
-        if (editedKey != m_apiKey || m_credentialFailed) {
+        if (keyEdit->isModified() && (editedKey != m_apiKey || m_credentialFailed)) {
             m_apiKey = editedKey;
             saveCredential(m_apiKey);
         }
@@ -2056,11 +2059,14 @@ void SystemMonitor::showSettingsDialog()
         m_aiError.clear();
         // 应用新的采样周期
         m_timer.setInterval(m_statIntervalSec * 1000);
+        setSkin(static_cast<Skin>(skinChoice->currentIndex()));
         saveSettings();
         updateAiLayoutHeight();
         update();
         emit appearanceChanged();
-    }
+        dialog.setProperty("settingsDirty", false);
+    });
+    return form;
 }
 
 void SystemMonitor::startDiagnosis()
@@ -2523,6 +2529,7 @@ void SystemMonitor::mousePressEvent(QMouseEvent *event)
             m_resizing = true;
             m_resizeStartGlobal = event->globalPos();
             m_resizeStartSize = size();
+            m_resizeStartPosition = pos();
             if (!m_mouseGrabbed) {
                 grabMouse();
                 m_mouseGrabbed = true;
@@ -2614,49 +2621,29 @@ void SystemMonitor::mouseMoveEvent(QMouseEvent *event)
         const QPoint delta = event->globalPos() - m_resizeStartGlobal;
         const QSize logical = baseSize();
 
-        // 判断当前磁吸状态：左右边缘是否吸附在屏幕边缘
-        if (!parentWidget())
-            return;
-        const QRect bounds = parentWidget()->rect();
-        constexpr int snapFreeze = 8;  // 吸附后固定阈值
-        const bool snappedLeft =
-            qAbs(pos().x() - bounds.left()) <= snapFreeze;
-        const bool snappedRight =
-            qAbs(pos().x() + width() - bounds.right()) <= snapFreeze;
-        const bool snappedTop =
-            qAbs(pos().y() - bounds.top()) <= snapFreeze;
-        const bool snappedBottom =
-            qAbs(pos().y() + height() - bounds.bottom()) <= snapFreeze;
-
-        const double horizontal =
-            (m_resizeStartSize.width() + delta.x()) /
+        auto *canvas = qobject_cast<DesktopCanvas *>(parentWidget());
+        if (!canvas) return;
+        const QRect bounds = canvas->rect();
+        const QRect start(m_resizeStartPosition, m_resizeStartSize);
+        Qt::Edges fixed = Qt::TopEdge | Qt::LeftEdge;
+        // Freeze the anchor chosen at press time; acquiring a snap during the
+        // drag must not switch anchors or make the next mouse event jump.
+        if (qAbs(start.x()-bounds.x())>8
+            && qAbs(start.x()+start.width()-bounds.x()-bounds.width())<=8)
+            fixed = (fixed & ~Qt::LeftEdge) | Qt::RightEdge;
+        if (qAbs(start.y()-bounds.y())>8
+            && qAbs(start.y()+start.height()-bounds.y()-bounds.height())<=8)
+            fixed = (fixed & ~Qt::TopEdge) | Qt::BottomEdge;
+        const double horizontal = (m_resizeStartSize.width()+delta.x()) /
             static_cast<double>(logical.width());
-        const double vertical =
-            (m_resizeStartSize.height() + delta.y()) /
+        const double vertical = (m_resizeStartSize.height()+delta.y()) /
             static_cast<double>(logical.height());
-        m_scale = qBound(0.65, (horizontal + vertical) / 2.0, 1.60);
-        const QSize newSize = logical * m_scale;
-        resize(newSize);
-
-        // 磁吸边缘不动：只向非吸附方向扩展/收缩
-        QPoint newPos = pos();
-        if (snappedLeft)
-            newPos.setX(bounds.left());
-        else if (snappedRight)
-            newPos.setX(bounds.right() - newSize.width());
-        if (snappedTop)
-            newPos.setY(bounds.top());
-        else if (snappedBottom)
-            newPos.setY(bounds.bottom() - newSize.height());
-
-        // 如果左右都吸附，以左侧为准固定
-        if (snappedLeft && snappedRight)
-            newPos.setX(bounds.left());
-        // 如果上下都吸附，以上侧为准固定
-        if (snappedTop && snappedBottom)
-            newPos.setY(bounds.top());
-
-        move(boundedPosition(newPos));
+        const double scale = qBound(0.65, (horizontal+vertical)/2.0, 1.60);
+        const QRect snapped = canvas->snappedWidgetResize(this, start, logical*scale,
+            logical*0.65, logical*1.60,
+            logical.width()/static_cast<qreal>(logical.height()), fixed);
+        m_scale = snapped.width()/static_cast<double>(logical.width());
+        setGeometry(snapped);
         update();
         event->accept();
         return;

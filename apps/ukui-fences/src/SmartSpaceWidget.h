@@ -66,6 +66,7 @@ public:
                               QWidget *parent = nullptr);
     ~SmartSpaceWidget() override;
 
+    QWidget *createSettingsPage(QWidget *parent);
     void setEditMode(bool edit);
     static bool autoStartEnabled();
     void setAutoStart(bool enabled);

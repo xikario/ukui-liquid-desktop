@@ -1,3 +1,4 @@
+#include <QDBusPendingCall>
 #include "LiquidPopup.h"
 #include "SmartSpaceWidget.h"
 #include "DesktopCanvas.h"
@@ -253,6 +254,7 @@ public:
     AspectRatioSizeGrip(QWidget *target, QWidget *parent)
         : QWidget(parent), m_target(target)
     {
+        setObjectName(QStringLiteral("smartSpaceResizeGrip"));
         setFixedSize(22, 22);
         setCursor(Qt::SizeFDiagCursor);
         setMouseTracking(true);
@@ -266,6 +268,7 @@ protected:
         m_dragging = true;
         m_startGlobal = event->globalPos();
         m_startSize = m_target->size();
+        m_startPosition = m_target->pos();
         m_ratio = qMax(0.1, m_startSize.width() /
                               static_cast<qreal>(qMax(1, m_startSize.height())));
         grabMouse();
@@ -290,14 +293,27 @@ protected:
                                 qCeil(minimum.height() * m_ratio));
         int maximumWidth = QWIDGETSIZE_MAX;
         if (QWidget *container = m_target->parentWidget()) {
-            const int availableWidth = container->width() - m_target->x();
-            const int availableHeight = container->height() - m_target->y();
+            const QPoint origin = m_target->isWindow()
+                ? container->mapFromGlobal(m_startPosition) : m_startPosition;
+            const int availableWidth = container->width() - origin.x();
+            const int availableHeight = container->height() - origin.y();
             maximumWidth = qMin(availableWidth,
                                 qFloor(availableHeight * m_ratio));
         }
         maximumWidth = qMax(minimumWidth, maximumWidth);
         width = qBound(minimumWidth, width, maximumWidth);
-        m_target->resize(width, qRound(width / m_ratio));
+        if (auto *canvas = qobject_cast<DesktopCanvas *>(m_target->parentWidget())) {
+            const QPoint origin = m_target->isWindow()
+                ? canvas->mapFromGlobal(m_startPosition) : m_startPosition;
+            const QRect snapped = canvas->snappedWidgetResize(m_target,
+                QRect(origin, m_startSize), QSize(width, qRound(width/m_ratio)),
+                minimum, m_target->maximumSize(), m_ratio);
+            // Smart space may be a top-level window: only resize it, leaving
+            // its native-window/animation position lifecycle untouched.
+            m_target->resize(snapped.size());
+        } else {
+            m_target->resize(width, qRound(width / m_ratio));
+        }
         event->accept();
     }
 
@@ -327,6 +343,7 @@ protected:
     }
 
 private:
+    QPoint m_startPosition;
     QWidget *m_target = nullptr;
     QPoint m_startGlobal;
     QSize m_startSize;
@@ -4986,54 +5003,25 @@ void SmartSpaceWidget::showEntryMenu(QListWidget *list, const QPoint &position)
 
 void SmartSpaceWidget::showSettingsDialog()
 {
-    struct ThemeSnapshot {
-        int mode;
-        int baseSkin;
-        int opacity;
-        bool colorsEnabled;
-        QColor surface, card, border, text, muted, accent;
-        QColor searchBg, searchText, buttonBg, buttonText, buttonHover;
-        QColor menuBg, menuText, menuHover;
-        QString fontFamily;
-        int fontSize;
-        bool fontBold;
-    };
-    const ThemeSnapshot originalTheme{
-        m_themeMode, m_customBaseSkin, m_customOpacity, m_customColorsEnabled,
-        m_customSurface, m_customCard, m_customBorder, m_customText,
-        m_customMuted, m_customAccent, m_customSearchBg, m_customSearchText,
-        m_customButtonBg, m_customButtonText, m_customButtonHover,
-        m_customMenuBg, m_customMenuText, m_customMenuHover,
-        m_customFontFamily, m_customFontSize, m_customFontBold
-    };
-    auto restoreTheme = [this, originalTheme] {
-        m_themeMode = originalTheme.mode;
-        m_customBaseSkin = originalTheme.baseSkin;
-        m_customOpacity = originalTheme.opacity;
-        m_customColorsEnabled = originalTheme.colorsEnabled;
-        m_customSurface = originalTheme.surface;
-        m_customCard = originalTheme.card;
-        m_customBorder = originalTheme.border;
-        m_customText = originalTheme.text;
-        m_customMuted = originalTheme.muted;
-        m_customAccent = originalTheme.accent;
-        m_customSearchBg = originalTheme.searchBg;
-        m_customSearchText = originalTheme.searchText;
-        m_customButtonBg = originalTheme.buttonBg;
-        m_customButtonText = originalTheme.buttonText;
-        m_customButtonHover = originalTheme.buttonHover;
-        m_customMenuBg = originalTheme.menuBg;
-        m_customMenuText = originalTheme.menuText;
-        m_customMenuHover = originalTheme.menuHover;
-        m_customFontFamily = originalTheme.fontFamily;
-        m_customFontSize = originalTheme.fontSize;
-        m_customFontBold = originalTheme.fontBold;
-        applyTheme();
-    };
+    if (auto *canvas = qobject_cast<DesktopCanvas *>(parentWidget())) {
+        canvas->showSettingsPage("smart");
+        return;
+    }
     QDialog dialog(this);
     dialog.setWindowTitle(QStringLiteral("智能空间设置"));
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(createSettingsPage(&dialog));
+    dialog.exec();
+}
+
+QWidget *SmartSpaceWidget::createSettingsPage(QWidget *parent)
+{
+    auto *form = new QWidget(parent);
+    QWidget &dialog = *form;
+    connect(this, &QObject::destroyed, form, &QObject::deleteLater);
+    dialog.setWindowTitle(QStringLiteral("智能空间设置"));
     dialog.resize(760, 700);
-    dialog.setMinimumSize(700, 620);
+    dialog.setMinimumSize(600, 540);
     dialog.setPalette(palette());
     QColor buttonHover = m_accentColor;
     buttonHover.setAlpha(55);
@@ -5289,10 +5277,6 @@ void SmartSpaceWidget::showSettingsDialog()
         interval->setEnabled(indexMode->currentData().toInt() == 2);
     });
 
-    auto *autoStart = new QCheckBox(
-        QStringLiteral("随 Fences 启动时显示组件（不代表自动索引）"), updateTab);
-    autoStart->setChecked(m_autoStart);
-    updateLayout->addWidget(autoStart);
     auto *defaultHidden = new QCheckBox(
         QStringLiteral("启动或启用组件后默认贴边隐藏"), updateTab);
     defaultHidden->setChecked(m_defaultHidden);
@@ -5363,15 +5347,6 @@ void SmartSpaceWidget::showSettingsDialog()
     appearanceLayout->addWidget(appearanceDetail);
     appearanceLayout->addStretch(1);
     tabs->addTab(appearanceTab, QStringLiteral("外观"));
-    connect(themeMode, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            &dialog, [this, themeMode](int) {
-        const int mode = themeMode->currentData().toInt();
-        if (mode < 1 || mode > 3)
-            return;
-        m_themeMode = mode;
-        applyTheme();
-    });
-
     auto *knowledgeTab = new QWidget(tabs);
     auto *knowledgeLayout = new QVBoxLayout(knowledgeTab);
     knowledgeLayout->setContentsMargins(14, 14, 14, 14);
@@ -5389,7 +5364,7 @@ void SmartSpaceWidget::showSettingsDialog()
     connect(browseKnowledge, &QPushButton::clicked, &dialog,
             [&dialog, knowledgePathEdit] {
         const QString path = QFileDialog::getExistingDirectory(
-            &dialog, QStringLiteral("选择知识库保存位置"),
+            dialog.window(), QStringLiteral("选择知识库保存位置"),
             knowledgePathEdit->text());
         if (!path.isEmpty())
             knowledgePathEdit->setText(path);
@@ -5487,7 +5462,7 @@ void SmartSpaceWidget::showSettingsDialog()
             return;
         }
         const QString destination = QFileDialog::getExistingDirectory(
-            &dialog, QStringLiteral("选择 Skill 导出目录"));
+            dialog.window(), QStringLiteral("选择 Skill 导出目录"));
         if (destination.isEmpty())
             return;
         const QString target = QDir(destination).filePath(
@@ -5538,8 +5513,8 @@ void SmartSpaceWidget::showSettingsDialog()
     tabs->addTab(providerTab, QStringLiteral("数据源"));
 
     auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    if (auto *ok = buttons->button(QDialogButtonBox::Ok)) {
+        QDialogButtonBox::Apply, &dialog);
+    if (auto *ok = buttons->button(QDialogButtonBox::Apply)) {
         ok->setText(QStringLiteral("保存设置"));
         ok->setIcon(QIcon());
         ok->setObjectName(QStringLiteral("primarySettingsButton"));
@@ -5554,11 +5529,9 @@ void SmartSpaceWidget::showSettingsDialog()
         cancel->setIcon(QIcon());
     }
     layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     connect(addRoot, &QPushButton::clicked, &dialog, [&dialog, rootList] {
         const QString path = QFileDialog::getExistingDirectory(
-            &dialog, QStringLiteral("选择索引目录"));
+            dialog.window(), QStringLiteral("选择索引目录"));
         if (!path.isEmpty()) {
             const QList<QListWidgetItem *> found = rootList->findItems(path, Qt::MatchExactly);
             if (found.isEmpty())
@@ -5571,7 +5544,7 @@ void SmartSpaceWidget::showSettingsDialog()
     connect(addExclude, &QPushButton::clicked, &dialog,
             [&dialog, rootList, excludeList] {
         const QString path = QFileDialog::getExistingDirectory(
-            &dialog, QStringLiteral("选择要排除的文件夹"));
+            dialog.window(), QStringLiteral("选择要排除的文件夹"));
         if (path.isEmpty())
             return;
         const QString clean = normalizedPath(path);
@@ -5642,7 +5615,7 @@ void SmartSpaceWidget::showSettingsDialog()
     });
     connect(browseProvider, &QPushButton::clicked, &dialog, [&dialog, providerEdit] {
         const QString path = QFileDialog::getOpenFileName(
-            &dialog, QStringLiteral("选择 Provider 配置"),
+            dialog.window(), QStringLiteral("选择 Provider 配置"),
             QFileInfo(providerEdit->text()).absolutePath(), QStringLiteral("JSON (*.json)"));
         if (!path.isEmpty()) providerEdit->setText(path);
     });
@@ -5717,10 +5690,7 @@ void SmartSpaceWidget::showSettingsDialog()
         editor.exec();
     });
 
-    if (dialog.exec() != QDialog::Accepted) {
-        restoreTheme();
-        return;
-    }
+    connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [=, &dialog] {
     QStringList roots;
     for (int i = 0; i < rootList->count(); ++i) {
         const QString path = rootList->item(i)->text();
@@ -5730,7 +5700,6 @@ void SmartSpaceWidget::showSettingsDialog()
     if (roots.isEmpty()) {
         smartInformation(this, QStringLiteral("智能空间"),
                                  QStringLiteral("至少需要保留一个可访问的索引目录。"));
-        restoreTheme();
         return;
     }
     QStringList excludedFolders;
@@ -5788,7 +5757,6 @@ void SmartSpaceWidget::showSettingsDialog()
             noIndexFormats
                 ? QStringLiteral("索引格式至少需要保留一项。")
                 : QStringLiteral("匹配文件显示格式至少需要保留一项。"));
-        restoreTheme();
         return;
     }
     const bool excludeChanged = excludedFolders != m_excludedFolders;
@@ -5812,7 +5780,6 @@ void SmartSpaceWidget::showSettingsDialog()
     m_themeMode = themeMode->currentData().toInt();
     m_customOpacity = 100;
     m_customColorsEnabled = false;
-    m_autoStart = autoStart->isChecked();
     m_defaultHidden = defaultHidden->isChecked();
     m_knowledgeDirectory = QDir::cleanPath(
         knowledgePathEdit->text().trimmed());
@@ -5852,7 +5819,7 @@ void SmartSpaceWidget::showSettingsDialog()
             QDBusConnection::sessionBus());
         if (indexService.isValid()) {
             for (const QString &root : m_roots)
-                indexService.call(QStringLiteral("appendSearchDir"), root);
+                indexService.asyncCall(QStringLiteral("appendSearchDir"), root);
         }
     }
     rebuildWatches();
@@ -5866,6 +5833,11 @@ void SmartSpaceWidget::showSettingsDialog()
     }
     if (buildKnowledgeNow->isChecked())
         QTimer::singleShot(0, this, &SmartSpaceWidget::startKnowledgeBuild);
+    indexNow->setChecked(false);
+    buildKnowledgeNow->setChecked(false);
+    dialog.setProperty("settingsDirty", false);
+    });
+    return form;
 }
 
 void SmartSpaceWidget::setEditMode(bool edit)

@@ -14,6 +14,8 @@ public:
     int scheduleCount() const {return m_items.size();}
     QDate selectedDate() const {return m_selected;}
     void selectDate(QDate date);
+    void syncCalendarData();
+    void setAgendaCollapsed(bool collapsed);
 protected:
     void paintContent(QPainter &) override;
     void arrangeControls() override;
@@ -24,8 +26,6 @@ protected:
     void extendMenu(QMenu &) override;
 private:
     void reload();
-    void syncCalendarData();
-    void setAgendaCollapsed(bool collapsed);
     void showYearMenu();
     void showMonthMenu();
     void updateDateButtons();

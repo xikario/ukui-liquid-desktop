@@ -10,8 +10,6 @@
 #include <QSignalBlocker>
 #include <cmath>
 namespace {
-// Keep animation damage away from the track text and transport controls.
-const QRect notesArea(6, 4, 104, 120);
 // Vector notes remain crisp at fractional scaling and need no music-symbol font.
 void drawNote(QPainter &p, bool paired) {
     p.setPen(Qt::NoPen);
@@ -56,35 +54,37 @@ MusicDesklet::MusicDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"music","
     connect(m_volume,&QSlider::valueChanged,this,[this](int v){if(!m_updating && !m_volume->isSliderDown())m_player->setVolume(v/100.0);});
     connect(m_player,&StrawberryPlayer::changed,this,&MusicDesklet::updateControls);
     m_notesTimer.setInterval(33);
-    connect(&m_notesTimer,&QTimer::timeout,this,[this]{update(notesArea);});
+    connect(&m_notesTimer,&QTimer::timeout,this,[this]{update(notesArea());});
     arrangeControls();updateControls();
 }
+QRect MusicDesklet::notesArea() const {return QRect(6,4,width()-12,qMax(1,height()-54));}
 void MusicDesklet::syncNotesAnimation() {
     const bool animate=isVisible() && m_player->connected() && m_player->playing();
     if (animate && !m_notesTimer.isActive()) {
         m_notesClock.start();
         m_notesTimer.start();
-        update(notesArea);
+        update(notesArea());
     } else if (!animate && m_notesTimer.isActive()) {
         m_notesTimer.stop();
         m_notesClock.invalidate();
-        update(notesArea);
+        update(notesArea());
     }
 }
 void MusicDesklet::paintFloatingNotes(QPainter &p) {
     if (!m_notesTimer.isActive()) return;
     const qreal seconds=m_notesClock.elapsed()/1000.;
     const QColor colors[]={QColor("#a2f5df"),QColor("#fff0cc"),QColor("#e6c4ff")};
-    p.save();p.setClipRect(notesArea,Qt::IntersectClip);
-    for (int i=0;i<6;++i) {
-        const qreal life=3.2+.19*i;
-        const qreal phase=std::fmod(seconds/life+i/6.,1.);
+    p.save();p.setClipRect(notesArea(),Qt::IntersectClip);
+    const QRect area=notesArea();
+    for (int i=0;i<5;++i) {
+        const qreal life=4.2+.23*i;
+        const qreal phase=std::fmod(seconds/life+i/5.,1.);
         const qreal fade=qMin(qMin(phase/.15,(1.-phase)/.28),1.);
-        const qreal x=22+(i%3)*32+std::sin(phase*6.283185+i*1.7)*7;
-        const qreal y=109-phase*96;
+        const qreal x=area.left()+18+(area.width()-36)*(i+.5)/5.+std::sin(phase*6.283185+i*1.7)*9;
+        const qreal y=area.bottom()-10-phase*(area.height()-20);
         p.save();p.translate(x,y);p.rotate(std::sin(phase*6.283185+i)*17);
         const qreal scale=.70+(i%3)*.12;p.scale(scale,scale);
-        p.setOpacity(.90*fade*qMin(seconds/.25,1.));
+        p.setOpacity(.72*fade*qMin(seconds/.25,1.));
         // Small dark outline keeps the notes legible over bright album art.
         p.setBrush(QColor(20,35,53,160));p.translate(.8,1);drawNote(p,i%2==0);
         p.translate(-.8,-1);p.setBrush(colors[i%3]);drawNote(p,i%2==0);

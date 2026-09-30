@@ -23,6 +23,7 @@ call_running() {
 method=showAndActivate
 case "${1:-}" in
     --quit) method=quitApp ;;
+    --settings) method=showUnifiedSettings ;;
     --hide) method=hideFences ;;
     --edit) method=toggleEditMode ;;
     --system-monitor) method=showSystemMonitorWidget ;;

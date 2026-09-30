@@ -2,6 +2,7 @@
 #include "IconAppearance.h"
 
 #include <QWidget>
+#include <QPointer>
 #include <QPixmap>
 #include <QList>
 #include <QMap>
@@ -18,6 +19,7 @@
 #include "DesktopItem.h"
 #include "FileClipboard.h"
 
+class FencesSettingsWindow;
 class FenceWidget;
 class FenceGlassRenderer;
 class DesktopIcon;
@@ -45,6 +47,7 @@ class DesktopCanvas : public QWidget
     Q_CLASSINFO("D-Bus Interface", "org.ukui.fences")
     friend class FenceWidget;
     friend class SystemMonitor;
+    friend class FencesSettingsWindow;
 public:
     explicit DesktopCanvas(QWidget *parent = nullptr);
     ~DesktopCanvas();
@@ -55,7 +58,12 @@ public:
                                bool move, std::function<void()> completed = {});
     void setGlobalEditMode(bool edit);
     bool globalEditMode() const { return m_editMode; }
+    QRect snappedWidgetResize(QWidget *widget, const QRect &start,
+                              QSize requested, QSize minimum, QSize maximum,
+                              qreal ratio = 0,
+                              Qt::Edges fixed = Qt::TopEdge | Qt::LeftEdge) const;
 
+    void showSettingsPage(const QString &page);
     void saveLayout();
     void loadLayout();
     void exportLayout();
@@ -80,6 +88,7 @@ public:
     QImage wallpaperBackdrop(const QRect &globalArea, qreal dpr) const;
 
 signals:
+    void desktopVisibilityChanged();
     void initialWallpaperReady();
     void wallpaperChanged();
 
@@ -90,6 +99,7 @@ public slots:
     Q_SCRIPTABLE bool fenceLiquidGlassEnabled() const { return m_fenceLiquidGlassEnabled; }
     Q_SCRIPTABLE void showAndActivate();
     Q_SCRIPTABLE void hideFences();
+    Q_SCRIPTABLE bool fencesDesktopVisible() const { return !m_userHidden && isVisible(); }
     Q_SCRIPTABLE void toggleEditMode();
     Q_SCRIPTABLE void toggleDesklet();
     Q_SCRIPTABLE void setSystemMonitorSkin(int skin);
@@ -131,6 +141,7 @@ public slots:
     Q_SCRIPTABLE void refreshAll();
     Q_SCRIPTABLE void activateOnSessionStartup();
     Q_SCRIPTABLE void quitApp();
+    Q_SCRIPTABLE void showUnifiedSettings();
 
 protected:
     void paintEvent(QPaintEvent *)           override;
@@ -152,6 +163,17 @@ private slots:
     void refreshDesktopIcons();
 
 private:
+    QPointer<FencesSettingsWindow> m_settingsWindow;
+    QWidget *createFontSettingsPage(QWidget *parent);
+    QWidget *createSyncSettingsPage(QWidget *parent);
+    QWidget *createWallpaperSettingsPage(QWidget *parent);
+    QWidget *createGridSettingsPage(QWidget *parent);
+    QWidget *createIconSettingsPage(QWidget *parent);
+    QString settingsHelpHtml() const;
+    QString settingsAboutHtml() const;
+    void openFileManager();
+    void openSystemWallpaper();
+    void resetLayoutSettings();
     enum class ArrangeMode {
         Manual,
         ByName,
