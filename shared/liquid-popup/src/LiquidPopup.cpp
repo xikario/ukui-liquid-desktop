@@ -140,20 +140,28 @@ protected:
             // Capture only the popup footprint, not an entire monitor.
             if(tip) tip->hide();
             QToolTip::hideText();
-            const QImage crop=capture(QRect(menu->mapToGlobal(QPoint()),menu->size()),
-                                      menu->devicePixelRatioF());
-            const bool light=menu->palette().color(QPalette::WindowText).lightness()<128;
-            material=renderMenuMaterial(crop,menu->size(),menu->devicePixelRatioF(),light);
-            QPainterPath path;
-            // Native regions are binary and use logical integer coordinates.
-            // Keep their stair steps outside the antialiased material edge.
-            const qreal radius=qMin(theme().radius,qMin(menu->width(),menu->height())/2.);
-            path.addRoundedRect(QRectF(menu->rect()).adjusted(-2,-2,2,2),radius+2,radius+2);
-            menu->setMask(QRegion(path.toFillPolygon().toPolygon()));
+            backdropArea=QRect(menu->mapToGlobal(QPoint()),menu->size());
+            availableArea=screenRect(backdropArea.center());
+            backdrop=capture(backdropArea,menu->devicePixelRatioF());
+            rebuildMaterial();
             if(!theme().reducedMotion && QGuiApplication::platformName()=="xcb") {
                 fade.stop();fade.setStartValue(.15);fade.setEndValue(1.0);
                 fade.setDuration(theme().openMs);fade.setEasingCurve(QEasingCurve::OutCubic);fade.start();
             }
+        } else if(e->type()==QEvent::Resize && styled && !material.isNull()) {
+            // QAction text can change after Show (e.g. async package lookup).
+            // Keep the alpha material and native silhouette at the same size.
+            // Reuse the opening snapshot: capturing a mapped menu would feed
+            // its own text/rim back into the glass and produce ghost images.
+            // Qt constrains initial popup placement, but not a later resize.
+            const QPoint bounded(
+                qBound(availableArea.left(),menu->x(),
+                       qMax(availableArea.left(),availableArea.right()-menu->width()+1)),
+                qBound(availableArea.top(),menu->y(),
+                       qMax(availableArea.top(),availableArea.bottom()-menu->height()+1)));
+            if(menu->pos()!=bounded) menu->move(bounded);
+            rebuildMaterial();
+            menu->update();
         } else if(e->type()==QEvent::Paint) {
             QPainter p(menu);
             p.setCompositionMode(QPainter::CompositionMode_Source);
@@ -166,10 +174,42 @@ protected:
         }
         return false;
     }
+    QImage alignedBackdrop() const {
+        const QRect area(menu->mapToGlobal(QPoint()),menu->size());
+        if(backdrop.isNull() || area==backdropArea) return backdrop;
+        const qreal dpr=menu->devicePixelRatioF();
+        const QImage source=backdrop.scaled(
+            QSize(qMax(1,qRound(backdropArea.width()*dpr)),qMax(1,qRound(backdropArea.height()*dpr))),
+            Qt::IgnoreAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_RGB32);
+        QImage aligned(QSize(qMax(1,qRound(area.width()*dpr)),qMax(1,qRound(area.height()*dpr))),
+                       QImage::Format_RGB32);
+        const QPoint offset(qRound((area.x()-backdropArea.x())*dpr),
+                            qRound((area.y()-backdropArea.y())*dpr));
+        // Keep overlapping background pixels in place instead of stretching
+        // the scene when a label changes. Extend only uncaptured edge pixels.
+        for(int y=0;y<aligned.height();++y) {
+            const auto *row=reinterpret_cast<const QRgb *>(source.constScanLine(qBound(0,y+offset.y(),source.height()-1)));
+            auto *output=reinterpret_cast<QRgb *>(aligned.scanLine(y));
+            for(int x=0;x<aligned.width();++x)
+                output[x]=row[qBound(0,x+offset.x(),source.width()-1)];
+        }
+        aligned.setDevicePixelRatio(dpr);
+        return aligned;
+    }
+    void rebuildMaterial() {
+        const bool light=menu->palette().color(QPalette::WindowText).lightness()<128;
+        material=renderMenuMaterial(alignedBackdrop(),menu->size(),menu->devicePixelRatioF(),light);
+        QPainterPath path;
+        // Native regions are binary and use logical integer coordinates.
+        // Keep their stair steps outside the antialiased material edge.
+        const qreal radius=qMin(theme().radius,qMin(menu->width(),menu->height())/2.);
+        path.addRoundedRect(QRectF(menu->rect()).adjusted(-2,-2,2,2),radius+2,radius+2);
+        menu->setMask(QRegion(path.toFillPolygon().toPolygon()));
+    }
     void restore() {
         if (!styled) return;
         styled = false;
-        fade.stop();menu->setWindowOpacity(1);material={};
+        fade.stop();menu->setWindowOpacity(1);material={};backdrop={};
         menu->setStyleSheet(originalStyle);
         if (glyphStyle) menu->setStyle(originalWidgetStyle);
         menu->setMask(originalMask);
@@ -190,7 +230,8 @@ private:
     QRegion originalMask;
     bool styled = false, originalTranslucent = false, originalAutoFill = false;
     QMenu *menu;
-    QImage material;
+    QImage material, backdrop;
+    QRect backdropArea, availableArea;
     QList<QPointer<QAction>> indicatorIcons;
     QVariantAnimation fade;
 };

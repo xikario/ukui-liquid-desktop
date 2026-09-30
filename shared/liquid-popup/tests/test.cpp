@@ -108,6 +108,68 @@ int main(int argc,char **argv){
  check(external.isIconVisibleInMenu(),"destroying open menu restores external action");
  check(app.style()==originalAppStyle,"menu lifetime leaves application style unchanged");
  sub->popup(QPoint(300,50));app.processEvents();check(sub->property("liquidPopupSkin").toBool(),"native submenu adapted");sub->hide();
+ // Launcher installation-source lookup changes this label after native Show.
+ // Exercise both shrinking and growing without mapping a second popup.
+ QMenu changing;
+ changing.setStyleSheet("QMenu {color:white;padding:6px;} QMenu::item {min-height:18px;}");
+ auto *changingAction=changing.addAction(QString::fromUtf8("正在检查安装来源…"));
+ changingAction->setEnabled(false);
+ changing.popup(QPoint(80,80));app.processEvents();
+ const QSize openingSize=changing.size();const int openingCaptures=captures;
+ changingAction->setText(QString::fromUtf8("卸载 deb 软件包"));
+ changingAction->setEnabled(true);app.processEvents();
+ qInfo()<<"dynamic menu opening/shrunk size"<<openingSize<<changing.size();
+ check(changing.mask().contains(QPoint(changing.width()-2,changing.height()/2)),
+       "shrunk popup mask follows the current right edge");
+ const int narrowWidth=changing.width();
+ changingAction->setText(QString::fromUtf8("正在检查其他应用，请稍后重开菜单"));
+ app.processEvents();
+ qInfo()<<"dynamic menu expanded size"<<changing.size();
+ check(changing.width()>narrowWidth,"async action text grows the native menu");
+ for(int x:{1,changing.width()/2,changing.width()-2})
+   check(changing.mask().contains(QPoint(x,changing.height()/2)),
+         "resized popup silhouette covers both current side edges");
+ QImage expanded(changing.size()*changing.devicePixelRatioF(),QImage::Format_ARGB32_Premultiplied);
+ expanded.setDevicePixelRatio(changing.devicePixelRatioF());
+ expanded.fill(Qt::transparent);changing.render(&expanded,QPoint(),QRegion(),QWidget::DrawChildren);
+ for(int x:{1,expanded.width()/2,expanded.width()-2})
+   check(expanded.pixelColor(x,expanded.height()/2).alpha()>0,
+         "resized popup material paints across its full width");
+ check(captures==openingCaptures,"visible resize never captures the popup itself");
+ expanded.save("artifacts/menu-resized.png");
+ // A late short result, followed by another long result, must not retain
+ // pixels or masks from either earlier width. Repeat with a fresh opening.
+ changing.hide();
+ for(int opening=0;opening<3;++opening) {
+   changing.popup(QPoint(80,80));app.processEvents();
+   const int capturesAfterOpen=captures;
+   for(const auto &text:{QString::fromUtf8("移除快捷方式"),
+                        QString::fromUtf8("系统组件，无法卸载"),
+                        QString::fromUtf8("正在检查其他应用，请稍后重开菜单")}) {
+     changingAction->setText(text);app.processEvents();
+     QImage frame(changing.size()*changing.devicePixelRatioF(),QImage::Format_ARGB32_Premultiplied);
+     frame.setDevicePixelRatio(changing.devicePixelRatioF());frame.fill(Qt::transparent);
+     changing.render(&frame,QPoint(),QRegion(),QWidget::DrawChildren);
+     const int middle=frame.height()/2;
+     check(frame.pixelColor(1,middle).alpha()>0 &&
+           frame.pixelColor(frame.width()-2,middle).alpha()>0,
+           "repeated grow/shrink repaints both material edges");
+     check(frame.pixelColor(0,0).alpha()==0 &&
+           frame.pixelColor(frame.width()-1,0).alpha()==0 &&
+           frame.pixelColor(0,frame.height()-1).alpha()==0 &&
+           frame.pixelColor(frame.width()-1,frame.height()-1).alpha()==0,
+           "repeated grow/shrink clears all exterior corners");
+     check(captures==capturesAfterOpen,"repeated action updates reuse only the opening capture");
+   }
+   changing.hide();
+   check(changing.mask().isEmpty(),"closing resized popup restores its native mask");
+ }
+ changingAction->setText(QString::fromUtf8("打开"));
+ changing.popup(available.bottomRight()-QPoint(8,8));app.processEvents();
+ changingAction->setText(QString::fromUtf8("正在检查其他应用，请稍后重开菜单"));app.processEvents();
+ qInfo()<<"resized edge menu"<<changing.geometry()<<"available"<<available;
+ check(available.contains(changing.geometry()),"async resized popup remains inside the screen");
+ changing.hide();
  // Exercise the actual nested QMenu::exec path, not just geometry math.
  const QRect anchor(250,80,200,35);
  QTimer::singleShot(0,&menu,[&]{

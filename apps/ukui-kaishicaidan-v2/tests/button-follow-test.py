@@ -68,7 +68,11 @@ with tempfile.TemporaryDirectory() as tmp:
    w=panel(200);wait_for(lambda:tracks(200),'overlay recovers after panel replacement')
    subprocess.run(['xdotool','key','Super_L'],check=True);wait_for(menu_visible,'Windows key still opens menu')
    assert app.poll() is None
+   subprocess.run(['gdbus','call','--session','--dest','org.ukui.kaishicaidan.v2','--object-path','/ukuiKaishicaidanV2','--method','org.ukui.kaishicaidan.v2.quitApp'],stdout=subprocess.DEVNULL,check=True,timeout=5)
+   assert app.wait(timeout=5)==0
+   print('PASS: normal quit releases the XRecord connection',flush=True)
   except:
    print(Path(tmp+'/app.log').read_text()[-6000:]);raise
   finally:
-   app.terminate();app.wait(timeout=5)
+   if app.poll() is None:
+    app.terminate();app.wait(timeout=5)

@@ -327,6 +327,10 @@ void KeyInterceptor::ungrabWinKey()
     if (m_active && m_ctrlDisplay && m_recordContext) {
         XRecordDisableContext(m_ctrlDisplay, m_recordContext);
         XRecordFreeContext(m_ctrlDisplay, m_recordContext);
+        // Deliver the control requests before XCloseDisplay synchronizes the
+        // recording connection; otherwise its still-enabled stream can block
+        // shutdown while the disable request remains in the control buffer.
+        XSync(m_ctrlDisplay, False);
         m_recordContext = 0;
     }
 
