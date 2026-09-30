@@ -3604,6 +3604,42 @@ void StartMenu::confirmDebRemoval(const AppEntry &app, const AppRemovalTarget &t
                     QStringLiteral("-y"), QStringLiteral("--"), target.target});
 }
 
+void StartMenu::queryAppRemovalTarget(const AppEntry &app, QAction *action,
+    const std::shared_ptr<AppRemovalTarget> &target)
+{
+    const QPointer<QAction> guard(action);
+    if (m_removalQueryPending) {
+        // One worker and one latest menu request. Closing and reopening menus
+        // never creates an unbounded queue or leaves the current menu blocked.
+        m_nextRemovalQuery = [this, app, guard, target] {
+            if (guard) queryAppRemovalTarget(app, guard.data(), target);
+        };
+        return;
+    }
+    m_removalQueryPending = true;
+    const bool accepted = BackgroundTask::run(this,
+        [app] { return detectAppRemovalTarget(app); },
+        [this, guard, target](const AppRemovalTarget &result) {
+            m_removalQueryPending = false;
+            if (guard) {
+                *target = result;
+                guard->setText(result.actionText);
+                guard->setToolTip(result.detail);
+                guard->setEnabled(result.kind == AppRemovalTarget::Kind::DebPackage
+                    || result.kind == AppRemovalTarget::Kind::FolderBundle
+                    || result.kind == AppRemovalTarget::Kind::DesktopShortcut);
+            }
+            auto next = std::move(m_nextRemovalQuery);
+            m_nextRemovalQuery = {};
+            if (next) next();
+        });
+    if (!accepted) {
+        m_removalQueryPending = false;
+        action->setText(kRemoveUnknownText);
+        action->setToolTip("安装来源检查未启动，请重新打开菜单。");
+    }
+}
+
 void StartMenu::showAppContextMenu(const AppEntry &app, const QPoint &globalPos)
 {
     if (app.desktopPath.isEmpty())
@@ -3627,18 +3663,7 @@ void StartMenu::showAppContextMenu(const AppEntry &app, const QPoint &globalPos)
     auto removalTarget = std::make_shared<AppRemovalTarget>();
     QAction *actUninstall = menu.addAction(themedIcon({"edit-delete"}), "正在检查安装来源…");
     actUninstall->setEnabled(false);
-    // Keep the rest of the menu usable while dpkg is consulted.
-    const QPointer<QAction> actionGuard(actUninstall);
-    if (!m_removalPending) {
-        m_removalPending = true;
-        BackgroundTask::run(this, [app] { return detectAppRemovalTarget(app); },
-            [this, actionGuard, removalTarget](const AppRemovalTarget &target) {
-                m_removalPending = false; *removalTarget = target;
-                if (!actionGuard) return;
-                actionGuard->setText(target.actionText); actionGuard->setToolTip(target.detail);
-                actionGuard->setEnabled(target.kind==AppRemovalTarget::Kind::DebPackage || target.kind==AppRemovalTarget::Kind::FolderBundle || target.kind==AppRemovalTarget::Kind::DesktopShortcut);
-            });
-    } else actUninstall->setText("正在检查其他应用，请稍后重开菜单");
+    queryAppRemovalTarget(app, actUninstall, removalTarget);
 
     // Measure every possible lookup result before Show, after liquid metrics
     // are installed. Async status changes must not visibly stretch the menu.

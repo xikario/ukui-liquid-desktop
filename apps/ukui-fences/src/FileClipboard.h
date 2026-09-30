@@ -5,6 +5,8 @@
 class QWidget;
 #include <QString>
 #include <QStringList>
+#include <QMap>
+#include <QByteArray>
 
 namespace FileClipboard {
 
@@ -16,6 +18,17 @@ struct ClipboardFiles
     bool isEmpty() const { return paths.isEmpty(); }
 };
 
+// A receipt identifies this deletion, not just a reusable original pathname.
+struct TrashEntry
+{
+    QString originalPath;
+    QString infoPath;
+    QString trashedPath;
+    QByteArray infoIdentity;
+    QByteArray fileIdentity;
+    QByteArray infoDigest;
+};
+
 struct PasteResult
 {
     QStringList sourcePaths;
@@ -23,6 +36,8 @@ struct PasteResult
     QStringList placedSourcePaths;
     QStringList transferredPaths;
     QStringList failedPaths;
+    QMap<QString, TrashEntry> trashEntries;
+    QStringList undoUnavailablePaths;
     bool move = false;
     bool cancelled = false;
 
@@ -38,6 +53,7 @@ QStringList currentCutPaths();
 QString uniqueTargetPath(const QString &dirPath, const QString &fileName);
 bool isInDirectory(const QString &path, const QString &dirPath);
 bool transferPath(const QString &srcPath, const QString &targetPath, bool move);
+QString restoreTrashedEntry(const TrashEntry &entry);
 
 // All GUI entry points share one bounded job slot. Cancellation takes effect
 // between files so an in-flight move is never interrupted halfway through.

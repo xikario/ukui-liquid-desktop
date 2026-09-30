@@ -549,7 +549,7 @@ void FenceWidget::trashSelectedIcons()
         for (const auto &path : result.placedPaths) removeItem(path);
         if (!result.failedPaths.isEmpty())
             QMessageBox::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
-        if (!result.placedPaths.isEmpty()) emit filesTrashed(result.placedPaths);
+        if (!result.placedPaths.isEmpty()) emit filesTrashed(result);
         emit geometryChanged();
     });
 }
@@ -647,10 +647,10 @@ void FenceWidget::insertItem(const DesktopItem &item, int index)
         emit geometryChanged();
     });
     connect(icon, &DesktopIcon::filesDroppedToTrash,
-            this, [this](const QStringList &paths) {
-        for (const QString &path : paths)
+            this, [this](const FileClipboard::PasteResult &result) {
+        for (const QString &path : result.placedPaths)
             removeItem(path);
-        emit filesTrashed(paths);
+        emit filesTrashed(result);
         emit geometryChanged();
     });
     m_icons.insert(qBound(0, index, m_icons.size()), icon);

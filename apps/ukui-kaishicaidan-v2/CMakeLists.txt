@@ -54,8 +54,7 @@ if(NOT KAISHICAIDAN_GL_INCLUDE_DIR)
     message(FATAL_ERROR "GL/gl.h was not found; install OpenGL development headers or set KAISHICAIDAN_GL_INCLUDE_DIR")
 endif()
 
-add_executable(ukui-kaishicaidan-v2
-    src/main.cpp
+set(LAUNCHER_SOURCES
     src/StartMenu.cpp
     src/StartButton.cpp
     src/KeyInterceptor.cpp
@@ -68,6 +67,7 @@ add_executable(ukui-kaishicaidan-v2
     ../ukui-fences/src/LiquidIconRenderer.cpp
     src/glass.qrc
 )
+add_executable(ukui-kaishicaidan-v2 src/main.cpp ${LAUNCHER_SOURCES})
 
 target_compile_definitions(ukui-kaishicaidan-v2 PRIVATE
     UKUI_KAISHICAIDAN_V2=1
@@ -120,4 +120,22 @@ if(BUILD_TESTING)
     target_include_directories(launcher-metadata-test PRIVATE src ${X11_INCLUDE_DIR} ${KAISHICAIDAN_GL_INCLUDE_DIR})
     target_link_libraries(launcher-metadata-test PRIVATE Qt5::Core Qt5::Gui ${X11_LIBRARY})
     add_test(NAME launcher-metadata COMMAND launcher-metadata-test)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(launcher-removal-query-test tests/removal_query_test.cpp ${LAUNCHER_SOURCES})
+    target_compile_definitions(launcher-removal-query-test PRIVATE UKUI_KAISHICAIDAN_V2=1)
+    target_include_directories(launcher-removal-query-test PRIVATE src ${X11_INCLUDE_DIR} ${KAISHICAIDAN_GL_INCLUDE_DIR} ../../shared/async-work)
+    target_link_libraries(launcher-removal-query-test PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets Qt5::DBus ${X11_LIBRARY} ${XTST_LIBRARY} ukui-liquid-popup ukui-liquid-optics)
+    find_program(XVFB_RUN_EXECUTABLE xvfb-run)
+    find_program(DBUS_RUN_SESSION_EXECUTABLE dbus-run-session)
+    if(XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
+        foreach(SCALE 1 1.5 2)
+            add_test(NAME launcher-removal-query-${SCALE}
+                COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
+                    ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:launcher-removal-query-test>)
+            set_tests_properties(launcher-removal-query-${SCALE} PROPERTIES TIMEOUT 30
+                ENVIRONMENT "QT_SCALE_FACTOR=${SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1")
+        endforeach()
+    endif()
 endif()

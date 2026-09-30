@@ -60,6 +60,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "settings_center_test.h"
 #include "icon_appearance_test.h"
 #include "clipboard_test.h"
+#include "trash_undo_test.h"
 #include "folder_drop_undo_test.h"
 #include "icon_damage_test.h"
 #include "smart_interaction_test.h"
@@ -74,6 +75,14 @@ int main(int argc, char **argv)
     // Must run under a separate X server and session bus (CTest does this).
     QTemporaryDir isolated("/tmp/fences-global-glass-test-XXXXXX");
     if (!isolated.isValid()) return 2;
+    for (int i = 1; i < argc; ++i) {
+        if (QString::fromLocal8Bit(argv[i]) == "--trash-undo-only") {
+            // GIO chooses home vs volume trash using the home filesystem.
+            // Keep both home and XDG data isolated on the fixture filesystem.
+            qputenv("HOME", isolated.path().toUtf8());
+            qputenv("GIO_USE_VFS", "local");
+        }
+    }
     qputenv("XDG_CONFIG_HOME", (isolated.path()+"/config").toUtf8());
     qputenv("XDG_DATA_HOME", (isolated.path()+"/data").toUtf8());
     qputenv("XDG_CACHE_HOME", (isolated.path()+"/cache").toUtf8());
@@ -102,6 +111,8 @@ int main(int argc, char **argv)
         return runIconDamageTest(isolated.path());
     if (app.arguments().contains("--folder-drop-undo-only"))
         return runFolderDropUndoTest(isolated.path());
+    if (app.arguments().contains("--trash-undo-only"))
+        return runTrashUndoTest(isolated.path());
     if (app.arguments().contains("--clipboard-only"))
         return runClipboardTest(isolated.path());
     if (app.arguments().contains("--icon-appearance-only"))

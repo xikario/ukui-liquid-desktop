@@ -12,6 +12,11 @@
 #include <QPointer>
 #include <QProgressDialog>
 #include <QTemporaryDir>
+#include <QStandardPaths>
+#include <QStorageInfo>
+#include <QCryptographicHash>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <memory>
 #include <atomic>
 #include <QMessageBox>
@@ -43,6 +48,105 @@ QStringList clipboardFormats()
 bool pathExists(const QString &path)
 {
     const QFileInfo info(path); return info.exists() || info.isSymLink();
+}
+
+QByteArray fileIdentity(const QString &path, bool includeChangeTime = true)
+{
+    struct stat st;
+    if (::lstat(QFile::encodeName(path).constData(), &st) != 0) return {};
+    QByteArray identity = QByteArray::number(quint64(st.st_dev)) + ':'
+        + QByteArray::number(quint64(st.st_ino));
+    if (includeChangeTime)
+        identity += ':' + QByteArray::number(qint64(st.st_ctim.tv_sec)) + ':'
+            + QByteArray::number(qint64(st.st_ctim.tv_nsec));
+    return identity;
+}
+
+struct TrashLocation { QString root; QString relativeBase; };
+
+QList<TrashLocation> trashLocations(const QString &original)
+{
+    const QString data = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    QList<TrashLocation> locations{{data + "/Trash", data}};
+    // Inspect the containing filesystem without following a trashed symlink.
+    const QString top = QStorageInfo(QFileInfo(original).absolutePath()).rootPath();
+    if (!top.isEmpty()) {
+        const QString uid = QString::number(::getuid());
+        const QString shared = QDir(top).filePath(".Trash");
+        struct stat st;
+        if (::lstat(QFile::encodeName(shared).constData(), &st) == 0
+            && S_ISDIR(st.st_mode) && (st.st_mode & S_ISVTX))
+            locations.append({shared + '/' + uid, top});
+        locations.append({QDir(top).filePath(".Trash-" + uid), top});
+    }
+    return locations;
+}
+
+QString trashOriginal(const QByteArray &metadata, const QString &relativeBase)
+{
+    const auto lines = metadata.split('\n');
+    if (lines.isEmpty() || lines.first().trimmed() != "[Trash Info]") return {};
+    for (auto line : lines) {
+        if (!line.startsWith("Path=")) continue;
+        if (line.endsWith('\r')) line.chop(1);
+        QString path = QUrl::fromPercentEncoding(line.mid(5));
+        if (path.isEmpty()) return {};
+        if (QDir::isRelativePath(path)) {
+            if (path.split('/').contains("..")) return {};
+            path = QDir(relativeBase).absoluteFilePath(path);
+        }
+        return QDir::cleanPath(path);
+    }
+    return {};
+}
+
+QString resolvedParentPath(const QString &path)
+{
+    if (path.isEmpty()) return {};
+    const QFileInfo info(path);
+    const QString parent = info.dir().canonicalPath();
+    return parent.isEmpty() ? QDir::cleanPath(info.absoluteFilePath())
+                           : QDir(parent).filePath(info.fileName());
+}
+
+QStringList trashInfoPaths(const TrashLocation &location)
+{
+    struct stat st;
+    if (::lstat(QFile::encodeName(location.root).constData(), &st) != 0
+        || !S_ISDIR(st.st_mode) || st.st_uid != ::getuid()) return {};
+    const QDir info(location.root + "/info");
+    QStringList paths;
+    for (const QString &name : info.entryList({"*.trashinfo"}, QDir::Files | QDir::Hidden | QDir::NoSymLinks))
+        paths << info.absoluteFilePath(name);
+    return paths;
+}
+
+FileClipboard::TrashEntry findTrashEntry(const QString &original,
+    const QByteArray &sourceIdentity, const QList<TrashLocation> &locations,
+    const QMap<QString, QByteArray> &before)
+{
+    FileClipboard::TrashEntry receipt;
+    if (sourceIdentity.isEmpty()) return receipt;
+    for (const auto &location : locations) {
+        for (const auto &infoPath : trashInfoPaths(location)) {
+            const QByteArray infoId = fileIdentity(infoPath);
+            if (infoId.isEmpty() || before.value(infoPath) == infoId) continue;
+            QFile info(infoPath);
+            if (!info.open(QIODevice::ReadOnly)) continue;
+            const QByteArray metadata = info.readAll();
+            if (resolvedParentPath(trashOriginal(metadata, location.relativeBase))
+                != resolvedParentPath(original)) continue;
+            QString name = QFileInfo(infoPath).fileName();
+            name.chop(QString(".trashinfo").size());
+            const QString payload = location.root + "/files/" + name;
+            if (fileIdentity(payload, false) != sourceIdentity) continue;
+            // Never guess if a backend leaves more than one possible receipt.
+            if (!receipt.infoPath.isEmpty()) return {};
+            receipt = {original, infoPath, payload, infoId, fileIdentity(payload),
+                QCryptographicHash::hash(metadata, QCryptographicHash::Sha256)};
+        }
+    }
+    return receipt;
 }
 
 bool safeTarget(const QString &source, const QString &target)
@@ -343,14 +447,41 @@ bool trashFilesAsync(const QStringList &paths, QWidget *owner, Completion comple
             if (cancel->load() || QThread::currentThread()->isInterruptionRequested()) {
                 result.cancelled = true; result.failedPaths << path; continue;
             }
-            if (QProcess::execute("gio", {"trash", "--", path}) == 0)
-                result.placedPaths << QFileInfo(path).absoluteFilePath();
-            else result.failedPaths << path;
+            const QString original = normalizedLocalPath(path);
+            const auto locations = trashLocations(original);
+            QMap<QString, QByteArray> before;
+            for (const auto &location : locations)
+                for (const auto &info : trashInfoPaths(location))
+                    before.insert(info, fileIdentity(info));
+            const QByteArray sourceIdentity = fileIdentity(original, false);
+            if (QProcess::execute("gio", {"trash", "--", original}) == 0) {
+                result.placedPaths << original;
+                const auto entry = findTrashEntry(original, sourceIdentity, locations, before);
+                if (!entry.infoPath.isEmpty()) result.trashEntries.insert(original, entry);
+                else result.undoUnavailablePaths << original;
+            } else result.failedPaths << path;
         }
         return result;
     }, [guard, completed](const PasteResult &result) {
         if (guard) completed(result);
     });
+}
+
+QString restoreTrashedEntry(const TrashEntry &entry)
+{
+    if (entry.originalPath.isEmpty() || entry.infoIdentity.isEmpty() || entry.fileIdentity.isEmpty()
+        || fileIdentity(entry.infoPath) != entry.infoIdentity
+        || fileIdentity(entry.trashedPath) != entry.fileIdentity) return {};
+    QFile info(entry.infoPath);
+    if (!info.open(QIODevice::ReadOnly)
+        || QCryptographicHash::hash(info.readAll(), QCryptographicHash::Sha256) != entry.infoDigest) return {};
+    info.close();
+    const QFileInfo original(entry.originalPath);
+    const QString target = pathExists(entry.originalPath)
+        ? uniqueTargetPath(original.absolutePath(), original.fileName()) : entry.originalPath;
+    if (!transferPath(entry.trashedPath, target, true)) return {};
+    QFile::remove(entry.infoPath);
+    return target;
 }
 
 bool pasteFilesToDirectoryAsync(const QString &targetDir, QWidget *owner,

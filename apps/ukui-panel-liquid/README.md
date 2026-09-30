@@ -35,7 +35,9 @@ xvfb-run -a -s '-screen 0 2880x1800x24' dbus-run-session -- python3 tests/oem_sm
 
 ## 安装与恢复
 
-`python3 scripts/install.py` 安装用户级 Qt 插件、启动包装器、`~/.config/autostart/ukui-panel.desktop` 和独立的 `ukui-panel-liquid-session.desktop` 登录检查入口；原文件及 panel 配置备份到 `releases/<时间>/`。此命令不自行停止面板。
+`python3 scripts/install.py` 安装用户级 Qt 插件、启动包装器、`~/.config/autostart/ukui-panel.desktop` 和独立的 `ukui-panel-liquid-session.desktop` 登录检查入口；原文件（含恢复脚本）及 panel 配置备份到 `releases/<时间>-<随机后缀>/`。安装前读取并验证全部输入，先完成暂存再替换；可捕获的安装异常会恢复旧内容、权限和符号链接，移除本次新增文件及暂存文件。若存储故障导致回滚也失败，会明确报告未恢复的目标及备份位置。此命令不自行停止面板。
+
+安装回归：`python3 tests/install_test.py`；会话恢复回归：`python3 tests/session_start_test.py`。测试均使用临时目录，不改变当前用户的安装。
 
 启动：`~/.local/bin/ukui-panel-liquid`（应先结束旧面板，单实例锁会阻止双开）。
 

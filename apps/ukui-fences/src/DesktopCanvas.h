@@ -204,6 +204,7 @@ private:
         QStringList targetPaths;
         QStringList fenceIds;
         QMap<QString, QPoint> loosePositions;
+        QMap<QString, FileClipboard::TrashEntry> trashEntries;
         bool move = false;
     };
 
@@ -286,13 +287,12 @@ private:
     void recordCreateUndo(const QString &path);
     void recordRenameUndo(const QString &oldPath, const QString &newPath,
                           FenceWidget *fence = nullptr);
-    void recordTrashUndo(const QStringList &paths, FenceWidget *fence = nullptr);
+    void recordTrashUndo(const FileClipboard::PasteResult &result, FenceWidget *fence = nullptr);
     void recordPasteUndo(const FileClipboard::PasteResult &result,
                          FenceWidget *fence = nullptr);
     FenceWidget *fenceById(const QString &id) const;
     FenceWidget *fenceContainingPath(const QString &path) const;
     FenceWidget *desktopInboxFence() const;
-    static QString restoreTrashedPath(const QString &originalPath);
     static bool deletePathForUndo(const QString &path);
     static bool movePathForUndo(const QString &srcPath, const QString &targetPath);
     void startMultiDrag();

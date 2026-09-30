@@ -1,4 +1,5 @@
 #pragma once
+#include "FileClipboard.h"
 
 #include <QWidget>
 #include <QPoint>
@@ -56,7 +57,7 @@ signals:
     void clicked(DesktopIcon *self, Qt::KeyboardModifiers modifiers);
     void copyRequested(DesktopIcon *self, bool move);
     void systemIconMoved(DesktopIcon *self, const QPoint &newPos);
-    void filesDroppedToTrash(const QStringList &paths);
+    void filesDroppedToTrash(const FileClipboard::PasteResult &result);
 
 protected:
     bool event(QEvent *) override;

@@ -1,4 +1,5 @@
 #pragma once
+#include "FileClipboard.h"
 
 #include <QWidget>
 #include <QList>
@@ -76,7 +77,7 @@ signals:
     void deleteRequested(FenceWidget *self);
     void interactionStarted(FenceWidget *self);
     void undoRequested();
-    void filesTrashed(const QStringList &paths);
+    void filesTrashed(const FileClipboard::PasteResult &result);
     void fileRenamedForUndo(const QString &oldPath, const QString &newPath);
     void filesPasted(const QStringList &sourcePaths,
                      const QStringList &placedPaths,

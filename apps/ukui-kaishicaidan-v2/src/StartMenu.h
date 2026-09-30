@@ -11,6 +11,8 @@
 #include <QFileSystemWatcher>
 #include <QImage>
 #include <QPixmap>
+#include <functional>
+#include <memory>
 #include "StartMenuTheme.h"
 #include "AppRegistry.h"
 #include "RecentFiles.h"
@@ -26,6 +28,7 @@ class QDropEvent;
 typedef struct _XDisplay Display;
 class NextKdeGlassView;
 class QSocketNotifier;
+class QAction;
 
 class StartMenu : public QWidget {
     Q_OBJECT
@@ -82,6 +85,7 @@ protected:
     void dropEvent(QDropEvent *) override;
 
 private:
+    friend class StartMenuRemovalQueryTest;
     void setupUi();
     void setupPinnedGrid();
     void setupRecentFiles();
@@ -138,6 +142,10 @@ private:
     void removeApp(const AppEntry &app, const AppRemovalTarget &target);
     void confirmDebRemoval(const AppEntry &app, const AppRemovalTarget &target, const QStringList &removedPackages);
     bool m_removalPending = false;
+    bool m_removalQueryPending = false;
+    std::function<void()> m_nextRemovalQuery;
+    void queryAppRemovalTarget(const AppEntry &app, QAction *action,
+        const std::shared_ptr<AppRemovalTarget> &target);
     bool m_palettePending = false;
     bool m_paletteApplying = false;
     QColor m_wallpaperAccent;

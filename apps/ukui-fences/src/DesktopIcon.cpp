@@ -1038,7 +1038,7 @@ void DesktopIcon::contextMenuEvent(QContextMenuEvent *e)
                 [this](const FileClipboard::PasteResult &result) {
                     if (!result.failedPaths.isEmpty())
                         QMessageBox::warning(this, "移到回收站失败", "项目未能移到回收站。");
-                    if (!result.placedPaths.isEmpty()) emit filesDroppedToTrash(result.placedPaths);
+                    if (!result.placedPaths.isEmpty()) emit filesDroppedToTrash(result);
                 });
         }
     });
@@ -1142,7 +1142,7 @@ void DesktopIcon::dropEvent(QDropEvent *e)
                 if (!result.failedPaths.isEmpty())
                     QMessageBox::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
                 refreshTrashIcon();
-                if (!result.placedPaths.isEmpty()) emit filesDroppedToTrash(result.placedPaths);
+                if (!result.placedPaths.isEmpty()) emit filesDroppedToTrash(result);
             });
         e->setDropAction(Qt::MoveAction);
     } else if (m_item.isDir && !m_item.isSystemIcon) {
