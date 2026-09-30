@@ -59,7 +59,40 @@ if ! gdbus introspect --session --dest org.ukui.fences \
     exit 1
 fi
 
-BASE_RSS=$(awk '/VmRSS:/ {print $2}' "/proc/$APP_PID/status")
+# D-Bus registration precedes asynchronous wallpaper loading/first paint.
+# Measuring at service registration incorrectly charges desktop startup memory
+# to Smart Space. Wait for the visible desktop and a stable startup baseline.
+attempt=0
+while [ "$attempt" -lt 100 ]; do
+    ready=$(gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
+        --method org.ukui.fences.fencesDesktopVisible)
+    case "$ready" in *true*) break;; esac
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+if [ "$attempt" -ge 100 ]; then
+    echo "desktop did not finish wallpaper startup" >&2
+    exit 1
+fi
+BASE_RSS=$(python3 - "$APP_PID" <<'PY'
+import sys, time
+from pathlib import Path
+status = Path('/proc') / sys.argv[1] / 'status'
+previous = 0
+stable = 0
+for _ in range(100):
+    current = int(next(line.split()[1] for line in status.read_text().splitlines()
+                       if line.startswith('VmRSS:')))
+    stable = stable + 1 if abs(current - previous) < 512 else 0
+    if stable >= 10:
+        print(current)
+        break
+    previous = current
+    time.sleep(.1)
+else:
+    raise SystemExit('Desktop startup RSS did not stabilize')
+PY
+)
 gdbus call --session --dest org.ukui.fences --object-path /ukuiFences \
     --method org.ukui.fences.toggleSmartSpace >/dev/null
 

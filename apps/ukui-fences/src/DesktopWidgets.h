@@ -11,6 +11,7 @@ class ActivityRecorder;
 class QPushButton;
 class QSpinBox;
 class QPainter;
+namespace LiquidMaterial { class Preparation; }
 
 // Desktop desklets use this one cached material, placement, menu and persistence layer.
 class LiquidDesklet : public QWidget {
@@ -51,10 +52,12 @@ private:
     void constrainToCanvas();
     QPoint boundedPosition(const QPoint &position, bool snap) const;
     std::unique_ptr<LiquidOpticsRenderer> m_optics;
+    LiquidMaterial::Preparation *m_preparation;
     QImage m_material;
     QTimer m_materialTimer, m_saveTimer;
     bool m_editMode = false;
     bool m_drag = false, m_resize = false, m_ready = false, m_materialDirty = true;
+    bool m_materialPending = false;
     QPoint m_pressGlobal, m_startPos;
     QSize m_startSize;
     int m_materialBuilds = 0;

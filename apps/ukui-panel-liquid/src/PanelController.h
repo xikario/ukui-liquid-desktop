@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QHash>
+#include <QSet>
 #include <QImage>
 #include <QDialog>
 #include "LiquidSurface.h"
@@ -11,6 +12,7 @@
 #include <QTimer>
 class QWidget;
 class QMenu;
+namespace LiquidMaterial { class Preparation; }
 class PanelController final : public QObject {
 public:
     explicit PanelController(QObject *parent);
@@ -25,6 +27,7 @@ private:
     void updateWallpaperWatchers();
     void syncOutline(QWidget *);
     void updatePointer(QWidget *,const QPointF &);
+    void invalidateMaterial(QWidget *);
     QString configFile() const;
     bool m_enabled=true, m_reducedMotion=false, m_followWallpaper=true;
     LiquidPopup::SurfaceStyle m_surface;
@@ -40,6 +43,8 @@ private:
     QHash<QWidget *,QPointF> m_pointers;
     LiquidOpticsRenderer m_optics;
     QHash<QWidget *,QImage> m_cache;
+    QSet<QWidget *> m_materialDirty;
+    QHash<QWidget *,LiquidMaterial::Preparation *> m_preparations;
     QHash<QWidget *,QRegion> m_originalMasks;
     QPointer<QDialog> m_dialog;
     quint64 m_paints=0, m_builds=0, m_dirtyPixels=0;

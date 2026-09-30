@@ -228,7 +228,7 @@ static PasteResult pasteFiles(const QString &targetDir, const ClipboardFiles &fi
     QDir().mkpath(normalizedTargetDir);
 
     for (const QString &path : files.paths) {
-        if (cancel && cancel->load()) {
+        if ((cancel && cancel->load()) || QThread::currentThread()->isInterruptionRequested()) {
             result.cancelled = true;
             result.failedPaths << path;
             continue;
@@ -340,7 +340,7 @@ bool trashFilesAsync(const QStringList &paths, QWidget *owner, Completion comple
     return submit(owner, [paths](const auto &cancel) {
         PasteResult result; result.sourcePaths = paths; result.move = true;
         for (const auto &path : paths) {
-            if (cancel->load()) {
+            if (cancel->load() || QThread::currentThread()->isInterruptionRequested()) {
                 result.cancelled = true; result.failedPaths << path; continue;
             }
             if (QProcess::execute("gio", {"trash", "--", path}) == 0)

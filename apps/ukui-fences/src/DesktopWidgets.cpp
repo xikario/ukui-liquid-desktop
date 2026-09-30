@@ -2,6 +2,7 @@
 #include "DesktopCanvas.h"
 #include "ActivityRecorder.h"
 #include "LiquidOpticsRenderer.h"
+#include "LiquidMaterialPreparation.h"
 #include "LiquidPopup.h"
 #include <QApplication>
 #include <QPainter>
@@ -36,7 +37,8 @@ QString timerText(qint64 ms) {
 }
 }
 LiquidDesklet::LiquidDesklet(DesktopCanvas *canvas, const QString &key, const QString &title, QSize initial)
-    : QWidget(canvas), m_canvas(canvas), m_key(key), m_title(title), m_optics(new LiquidOpticsRenderer) {
+    : QWidget(canvas), m_canvas(canvas), m_key(key), m_title(title), m_optics(new LiquidOpticsRenderer),
+      m_preparation(new LiquidMaterial::Preparation(this)) {
     setObjectName(key+"Desklet"); setWindowTitle(title); setAccessibleName(title);
     setAttribute(Qt::WA_TranslucentBackground); setAutoFillBackground(false); setMouseTracking(true);
     setMinimumSize(initial); setMaximumSize(800,700);
@@ -148,22 +150,36 @@ void LiquidDesklet::constrainToCanvas() {
     move(boundedPosition(pos(),false));
 }
 void LiquidDesklet::reveal(){constrainToCanvas();show();raise();invalidateMaterial();}
-void LiquidDesklet::invalidateMaterial(){m_materialDirty=true;if(isVisible())m_materialTimer.start();}
+void LiquidDesklet::invalidateMaterial(){
+    m_preparation->invalidate();m_materialPending=false;m_materialDirty=true;
+    if(isVisible())m_materialTimer.start();
+}
 void LiquidDesklet::rebuildMaterial() {
     m_materialTimer.stop();m_materialDirty=false;
     const qreal dpr=devicePixelRatioF();
     auto wallpaper=m_canvas->wallpaperBackdrop(QRect(mapToGlobal(QPoint()),size()),dpr);
     if(wallpaper.isNull()) {wallpaper=QImage(QSize(qRound(width()*dpr),qRound(height()*dpr)),QImage::Format_RGB32);wallpaper.setDevicePixelRatio(dpr);wallpaper.fill(QColor("#344257"));}
-    const auto &theme=LiquidPopup::theme();
-    m_optics->setOptics(theme.refraction,theme.tint,theme.highlight,1.0);
-    m_optics->setWallpaper(wallpaper);
-    m_material=m_optics->renderPanel(QRect(QPoint(),size()),qMax(16.,theme.radius));
-    ++m_materialBuilds;setProperty("liquidMaterialBuilds",m_materialBuilds);setProperty("liquidOpticalGpu",m_optics->usedGpu());
-    update();
+    const QRect requested(mapToGlobal(QPoint()),size());
+    m_materialPending=true;
+    m_preparation->request(wallpaper,[this,requested,dpr](const LiquidMaterial::Prepared &material){
+        m_materialPending=false;
+        if(requested!=QRect(mapToGlobal(QPoint()),size()) || !qFuzzyCompare(dpr,devicePixelRatioF()) || m_materialDirty){
+            if(isVisible())rebuildMaterial();
+            return;
+        }
+        const auto &theme=LiquidPopup::theme();
+        m_optics->setOptics(theme.refraction,theme.tint,theme.highlight,1.0);
+        m_optics->setPreparedWallpaper(material);
+        m_material=m_optics->renderPanel(QRect(QPoint(),size()),qMax(16.,theme.radius));
+        ++m_materialBuilds;setProperty("liquidMaterialBuilds",m_materialBuilds);setProperty("liquidOpticalGpu",m_optics->usedGpu());
+        update();
+    });
 }
 void LiquidDesklet::paintEvent(QPaintEvent *) {
-    if(m_material.isNull() || m_material.devicePixelRatio()!=devicePixelRatioF())rebuildMaterial();
-    QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.drawImage(QRectF(rect()),m_material,QRectF(m_material.rect()));
+    if(!m_materialPending && (m_material.isNull() || m_material.devicePixelRatio()!=devicePixelRatioF()))rebuildMaterial();
+    QPainter p(this);p.setRenderHint(QPainter::Antialiasing);
+    if(m_material.isNull()){p.setPen(Qt::NoPen);p.setBrush(QColor(28,43,59,240));p.drawRoundedRect(QRectF(rect()),16,16);}
+    else p.drawImage(QRectF(rect()),m_material,QRectF(m_material.rect()));
     paintContent(p);
     if(m_editMode) {
         p.setBrush(Qt::NoBrush);p.setPen(QPen(QColor(154,232,219,170),1,Qt::DashLine));

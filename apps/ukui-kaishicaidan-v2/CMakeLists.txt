@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(ukui-kaishicaidan-v2 VERSION 0.2.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
+include(CTest)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -114,7 +115,6 @@ install(FILES packaging/ukui-kaishicaidan.desktop DESTINATION ${CMAKE_INSTALL_DA
 install(FILES vendor/nextkde-glass/LICENSE vendor/nextkde-glass/README.md
     DESTINATION ${CMAKE_INSTALL_DOCDIR}/nextkde-glass)
 
-include(CTest)
 if(BUILD_TESTING)
     add_executable(launcher-metadata-test tests/metadata_test.cpp src/RecentFiles.cpp)
     target_include_directories(launcher-metadata-test PRIVATE src ${X11_INCLUDE_DIR} ${KAISHICAIDAN_GL_INCLUDE_DIR})

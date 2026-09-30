@@ -3,6 +3,7 @@
 #include <QRect>
 #include <QPainterPath>
 #include <memory>
+namespace LiquidMaterial { struct Prepared; }
 
 // GUI-thread only. One prepared backdrop and one GL backend per renderer.
 // Each caller caches its final surface; hover never re-runs the shader.
@@ -14,6 +15,7 @@ public:
     void setOptics(qreal refraction, qreal shade, qreal highlight, qreal chroma = 1.1);
     void setMaterial(qreal clarity = 0, qreal liquidStrength = 1);
     void setWallpaper(const QImage &source);
+    void setPreparedWallpaper(const LiquidMaterial::Prepared &material);
     QImage renderPanel(const QRect &logicalRect, qreal radius, const QPainterPath &shape = {});
     QImage renderControl(const QRect &logicalRect, qreal radius, bool pressed=false);
     bool usedGpu() const { return m_usedGpu; }

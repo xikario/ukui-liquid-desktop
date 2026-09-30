@@ -4,6 +4,7 @@
 #include <QRectF>
 #include <memory>
 #include <QCache>
+#include <functional>
 #include "LiquidOpticsRenderer.h"
 
 // Cached full-panel renderer, painted below BOTH the rail and content.
@@ -17,6 +18,7 @@ public:
     void setBackdrop(const QImage &image);
     // Explicit low-cost fallback, without shader/FBO resources.
     void setBackdropFast(const QImage &image);
+    void setBackdropAsync(const QImage &image, bool fast, std::function<void()> ready);
     void setRadius(float radius) { m_radius = radius; }
     const QImage &image() const { return m_image; }
     bool usedGpu() const { return m_usedGpu; }
@@ -26,6 +28,7 @@ public:
     QImage controlImage(const QRectF &logicalRect, qreal radius, bool pressed=false);
     int controlRenderCount() const { return m_controlRenderCount; }
 private:
+    void startBackdropPreparation();
     std::unique_ptr<LiquidOpticsRenderer> m_optics;
     LiquidOpticsRenderer m_controlOptics;
     int m_gpuInitializationCount = 0;
@@ -35,4 +38,8 @@ private:
     bool m_usedGpu = false;
     QCache<QString,QImage> m_controls{8192}; // bounded to 8 MiB, reset per backdrop
     int m_controlRenderCount = 0;
+    QImage m_requestedBackdrop;
+    std::function<void()> m_backdropReady;
+    quint64 m_backdropRevision = 0;
+    bool m_backdropPending = false, m_requestedFast = false;
 };

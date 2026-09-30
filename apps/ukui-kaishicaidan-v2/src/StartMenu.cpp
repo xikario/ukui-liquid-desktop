@@ -1748,10 +1748,7 @@ void StartMenu::captureNextKdeBackdrop()
         && backdrop.devicePixelRatio() == m_lastBackdrop.devicePixelRatio()
         && backdrop == m_lastBackdrop)
         return;
-    if (!qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_FAST"))
-        m_nextKdeGlassView->setBackdrop(backdrop);
-    else
-        m_nextKdeGlassView->setBackdropFast(backdrop);
+    m_nextKdeGlassView->setBackdropAsync(backdrop,qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_FAST"),[this]{update();});
     m_lastBackdrop = backdrop;
     qDebug() << "[NextKdeGlass] captured backdrop" << snapshot.size()
              << "mode" << (qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_FAST") ? "fast" : "shared-optics")

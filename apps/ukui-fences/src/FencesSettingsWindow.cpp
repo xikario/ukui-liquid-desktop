@@ -9,6 +9,7 @@
 #include "ActivityRecorder.h"
 #include "FenceWidget.h"
 #include "LiquidOpticsRenderer.h"
+#include "LiquidMaterialPreparation.h"
 #include "LiquidPopup.h"
 #include "SettingsComboPopup.h"
 #include <QTimer>
@@ -191,15 +192,21 @@ void FencesSettingsWindow::openPage(const QString &requested) {
 
 }
 void FencesSettingsWindow::refreshMaterial() {
-    if(!m_material.isNull() || !m_canvas || !isVisible())return;
+    if(!m_material.isNull() || m_materialPreparing || !m_canvas || !isVisible())return;
     const qreal dpr=devicePixelRatioF();
     QImage wall=m_canvas->wallpaperBackdrop(QRect(mapToGlobal(QPoint()),size()),dpr);
     if(wall.isNull()){wall=QImage(size()*dpr,QImage::Format_RGB32);wall.setDevicePixelRatio(dpr);wall.fill(QColor("#293c50"));}
-    const auto &theme=LiquidPopup::theme();m_optics->setOptics(theme.refraction,theme.tint,theme.highlight,1.0);
-    m_optics->setWallpaper(wall);m_material=m_optics->renderPanel(QRect(QPoint(),size()),22);
-    setProperty("materialBuilds",++m_materialBuilds);setProperty("opticalGpu",m_optics->usedGpu());
-    if (!m_material.isNull()) m_optics.reset(); // Frozen for this window lifetime, including drag/resize/wallpaper changes.
-    update();
+    if(!m_preparation)m_preparation=new LiquidMaterial::Preparation(this);
+    m_materialPreparing=true;
+    const QSize requestedSize=size();
+    m_preparation->request(wall,[this,requestedSize](const LiquidMaterial::Prepared &material){
+        m_materialPreparing=false;
+        const auto &theme=LiquidPopup::theme();m_optics->setOptics(theme.refraction,theme.tint,theme.highlight,1.0);
+        m_optics->setPreparedWallpaper(material);m_material=m_optics->renderPanel(QRect(QPoint(),requestedSize),22);
+        setProperty("materialBuilds",++m_materialBuilds);setProperty("opticalGpu",m_optics->usedGpu());
+        if (!m_material.isNull()) m_optics.reset(); // Frozen for this window lifetime, including drag/resize/wallpaper changes.
+        update();
+    });
 }
 void FencesSettingsWindow::showEvent(QShowEvent *e) {
     QWidget::showEvent(e);

@@ -1,5 +1,6 @@
 #include "../../../shared/async-work/BackgroundTask.h"
 #include "PanelController.h"
+#include "LiquidMaterialPreparation.h"
 #include "LiquidPopup.h"
 #include <QApplication>
 #include <QWidget>
@@ -72,8 +73,9 @@ void PanelController::attach(QWidget *w) {
     w->setProperty("liquidPanelAttached",true);
     w->setProperty("liquidPanelEnabled",m_enabled);
     m_cache.insert(w,{});
+    m_preparations.insert(w,new LiquidMaterial::Preparation(this));
     m_originalMasks.insert(w,w->mask());
-    connect(w,&QObject::destroyed,this,[this,w]{m_cache.remove(w);m_pointers.remove(w);m_originalMasks.remove(w);});
+    connect(w,&QObject::destroyed,this,[this,w]{delete m_preparations.take(w);m_cache.remove(w);m_materialDirty.remove(w);m_pointers.remove(w);m_originalMasks.remove(w);});
     syncOutline(w);
     w->setMouseTracking(true);
     for(QWidget *child:w->findChildren<QWidget *>())child->setMouseTracking(true);
@@ -99,7 +101,7 @@ void PanelController::apply() {
     LiquidPopup::theme().highlight=m_surface.highlight;
     LiquidPopup::setEnabled(m_enabled);
     for(auto it=m_cache.begin();it!=m_cache.end();++it) {
-        it.value()={};it.key()->setProperty("liquidPanelEnabled",m_enabled);syncOutline(it.key());it.key()->update();
+        invalidateMaterial(it.key());it.key()->setProperty("liquidPanelEnabled",m_enabled);syncOutline(it.key());it.key()->update();
     }
 }
 void PanelController::addMenu(QMenu *menu) {
@@ -174,7 +176,7 @@ bool PanelController::eventFilter(QObject *obj,QEvent *e) {
     }
     if (!w->property("liquidPanelAttached").toBool())return false;
     if(e->type()==QEvent::Move || e->type()==QEvent::Resize || e->type()==QEvent::PaletteChange || e->type()==QEvent::StyleChange || e->type()==QEvent::Show) {
-        m_cache[w]={};
+        invalidateMaterial(w);
         // OEM may update native effects inside its own event handler.
         QPointer<QWidget> guard(w);
         QTimer::singleShot(0,this,[this,guard]{if(guard)syncOutline(guard);});
@@ -184,22 +186,34 @@ bool PanelController::eventFilter(QObject *obj,QEvent *e) {
         const auto region=static_cast<QPaintEvent *>(e)->region();
         for (const QRect &r:region) m_dirtyPixels+=quint64(r.width())*r.height();
         QImage &image=m_cache[w];
-        if(image.isNull() || image.devicePixelRatio()!=w->devicePixelRatioF()) {
+        if(m_materialDirty.contains(w) || image.isNull() || image.devicePixelRatio()!=w->devicePixelRatioF()) {
+            m_materialDirty.remove(w);
             ++m_builds;
             QScreen *screen=QGuiApplication::screenAt(w->mapToGlobal(w->rect().center()));
             if(!screen)screen=QGuiApplication::primaryScreen();
             const QImage source=screen?m_wallpaper.sample(QRect(w->mapToGlobal(QPoint()),w->size()),screen->geometry(),w->devicePixelRatioF()):QImage();
-            if(!source.isNull()) {
-                m_optics.setOptics(m_refraction,m_surface.opacity,m_surface.highlight,m_chroma);
-                m_optics.setMaterial(m_clarity,m_liquidStrength);
-                m_optics.setWallpaper(source);
-                image=m_optics.renderPanel(QRect(QPoint(),w->size()),m_surface.radius);
-                w->setProperty("liquidOpticalGpu",m_optics.usedGpu());
-                qInfo()<<"[LiquidPanelOptics]"<<(m_optics.usedGpu()?"Snell GPU":"blur fallback")<<w->size();
-            } else {
-                auto style=m_surface;style.light=w->palette().color(QPalette::Base).lightness()>150;
+            auto style=m_surface;style.light=w->palette().color(QPalette::Base).lightness()>150;
+            if(image.isNull() || image.size()!=source.size() || image.devicePixelRatio()!=w->devicePixelRatioF()){
                 image=LiquidPopup::renderSurface(w->size(),w->devicePixelRatioF(),style);
                 w->setProperty("liquidOpticalGpu",false);
+            }
+            if(!source.isNull()) {
+                const QPointer<QWidget> guard(w);
+                const QRect requested(w->mapToGlobal(QPoint()),w->size());
+                const qreal dpr=w->devicePixelRatioF();
+                m_preparations[w]->request(source,[this,guard,requested,dpr](const LiquidMaterial::Prepared &material){
+                    if(!guard || !m_enabled)return;
+                    if(requested!=QRect(guard->mapToGlobal(QPoint()),guard->size()) || !qFuzzyCompare(dpr,guard->devicePixelRatioF())){
+                        invalidateMaterial(guard);guard->update();return;
+                    }
+                    m_optics.setOptics(m_refraction,m_surface.opacity,m_surface.highlight,m_chroma);
+                    m_optics.setMaterial(m_clarity,m_liquidStrength);
+                    m_optics.setPreparedWallpaper(material);
+                    m_cache[guard]=m_optics.renderPanel(QRect(QPoint(),guard->size()),m_surface.radius);
+                    guard->setProperty("liquidOpticalGpu",m_optics.usedGpu());
+                    guard->setProperty("liquidMaterialReady",true);
+                    syncOutline(guard);guard->update();
+                });
             }
         }
         // Match the native outline to physical optical coverage, including AA.
@@ -227,6 +241,12 @@ bool PanelController::eventFilter(QObject *obj,QEvent *e) {
         return true;
     }
     return false;
+}
+
+void PanelController::invalidateMaterial(QWidget *w) {
+    m_materialDirty.insert(w);
+    if(auto *preparation=m_preparations.value(w))preparation->invalidate();
+    w->setProperty("liquidMaterialReady",false);
 }
 
 void PanelController::syncOutline(QWidget *w) {
@@ -277,7 +297,7 @@ void PanelController::refreshBackdrop(bool force) {
         const bool invalidate = result.second || m_wallpaperForce;
         m_wallpaperForce = false;
         if (invalidate)
-            for (auto i=m_cache.begin();i!=m_cache.end();++i) { i.value()={}; i.key()->update(); }
+            for (auto i=m_cache.begin();i!=m_cache.end();++i) { invalidateMaterial(i.key()); i.key()->update(); }
     });
 }
 void PanelController::updatePointer(QWidget *panel,const QPointF &pos) {

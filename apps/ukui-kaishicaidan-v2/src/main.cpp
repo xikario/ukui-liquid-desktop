@@ -1,4 +1,5 @@
 #include "LiquidPopup.h"
+#include "../../../shared/async-work/BackgroundTask.h"
 #include <QApplication>
 #include <QIcon>
 #include <QFile>
@@ -50,6 +51,7 @@ int main(int argc, char *argv[])
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
 
     QApplication app(argc, argv);
+    BackgroundTask::ApplicationScope backgroundTasks;
     LiquidPopup::install(app);
     QApplication::setQuitOnLastWindowClosed(false);
 #if defined(UKUI_KAISHICAIDAN_V2)

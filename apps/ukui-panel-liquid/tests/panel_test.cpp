@@ -136,8 +136,9 @@ int main(int argc,char **argv) {
         check(!saved.value("appearance/followWallpaper",true).toBool(),"adaptation switch persists");
         before=panel.grab().toImage();replaceWallpaper(QColor("#516dbb"));settle();
         check(panel.grab().toImage()==before,"disabled adaptation keeps cached wallpaper");
-        follow->setChecked(true);app.processEvents();
-        check(panel.grab().toImage()!=before,"reenabling adaptation immediately loads latest wallpaper");
+        follow->setChecked(true);settle();
+        check(panel.property("liquidMaterialReady").toBool() && panel.grab().toImage()!=before,
+              "reenabling adaptation asynchronously loads latest wallpaper");
         auto sliders=dialogs.first()->findChildren<QSlider *>();
         check(sliders.size()==7,"material and see-through sliders exist");
         dialogs.first()->findChild<QSlider *>("liquidPanelShade")->setValue(72);app.processEvents();saved.sync();
@@ -151,7 +152,7 @@ int main(int argc,char **argv) {
         check(clarity && strength && through && transparency,"clarity, liquid strength and window see-through available");
         check(clarity->value()==0 && strength->value()==100 && !through->isChecked() && !transparency->isEnabled(),
               "new settings preserve existing defaults");
-        clarity->setValue(60);strength->setValue(170);app.processEvents();saved.sync();
+        clarity->setValue(60);strength->setValue(170);settle();saved.sync();
         check(qAbs(saved.value("appearance/clarity").toDouble()-.6)<.001 &&
               qAbs(saved.value("appearance/liquidStrength").toDouble()-1.7)<.001,"new material settings persist");
         const auto opaque=panel.grab().toImage();

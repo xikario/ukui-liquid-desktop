@@ -282,6 +282,14 @@ void LiquidOpticsRenderer::setWallpaper(const QImage &source)
     m_clear = {};
 }
 
+void LiquidOpticsRenderer::setPreparedWallpaper(const LiquidMaterial::Prepared &material)
+{
+    m_source = material.source;
+    m_body = material.body;
+    m_clear = material.clear;
+    ++m_preparationCount;
+}
+
 QImage LiquidOpticsRenderer::renderPanel(const QRect &logicalRect, qreal radius, const QPainterPath &shape)
 {
     return renderSurface(logicalRect,radius,shape,0);

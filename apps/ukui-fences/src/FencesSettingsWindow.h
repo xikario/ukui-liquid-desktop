@@ -9,6 +9,7 @@ class LiquidOpticsRenderer;
 class QListWidget;
 class QStackedWidget;
 class QVBoxLayout;
+namespace LiquidMaterial { class Preparation; }
 
 class FencesSettingsWindow final : public QWidget {
     Q_OBJECT
@@ -34,8 +35,10 @@ private:
     QStackedWidget *m_stack;
     QMap<QString,QPointer<QWidget>> m_pages;
     std::unique_ptr<LiquidOpticsRenderer> m_optics;
+    LiquidMaterial::Preparation *m_preparation = nullptr;
     QImage m_material;
     QPoint m_dragOffset;
     bool m_dragging = false;
+    bool m_materialPreparing = false;
     int m_materialBuilds = 0;
 };

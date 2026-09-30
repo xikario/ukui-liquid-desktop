@@ -1,5 +1,6 @@
 #include "../../../shared/liquid-glass/src/LiquidMaterial.h"
 #include "NextKdeGlassView.h"
+#include "../../../shared/async-work/BackgroundTask.h"
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QPainter>
@@ -56,6 +57,7 @@ qreal NextKdeGlassView::luminanceAt(const QRectF &logicalRect) const
 
 void NextKdeGlassView::setBackdrop(const QImage &source)
 {
+    ++m_backdropRevision;m_requestedBackdrop={};m_backdropReady={};
     m_controls.clear();
     m_controlRenderCount=0;
     m_image={};
@@ -93,14 +95,10 @@ void NextKdeGlassView::setBackdrop(const QImage &source)
             << source.size() << "DPR" << dpr << m_lastRenderMs << "ms";
 }
 
-void NextKdeGlassView::setBackdropFast(const QImage &source)
+namespace {
+QImage fastBackdrop(const QImage &source, qreal radiusValue)
 {
-    m_controls.clear();
-    m_controlRenderCount=0;
-    m_image={};
-    m_usedGpu=false;
-    m_lastRenderMs=0;
-    if (source.isNull()) return;
+    if(source.isNull())return {};
     QElapsedTimer timer;
     timer.start();
     const qreal dpr=source.devicePixelRatio();
@@ -110,7 +108,7 @@ void NextKdeGlassView::setBackdropFast(const QImage &source)
     material.setDevicePixelRatio(1);
     const QImage clear=source.convertToFormat(QImage::Format_RGB32);
     const int w=material.width(), h=material.height();
-    const qreal radius=qMin(qreal(m_radius)*dpr, qMin(w,h)*0.5);
+    const qreal radius=qMin(qreal(radiusValue)*dpr, qMin(w,h)*0.5);
     const qreal rim=28*dpr;
     // The body needs only diffusion. Compute refraction on the narrow rim,
     // keeping icons/text outside this image and avoiding any GL resources.
@@ -149,10 +147,10 @@ void NextKdeGlassView::setBackdropFast(const QImage &source)
                         qBound(0,qRound(blue*(1-scrim)+light),255));
         }
     }
-    m_image=QImage(source.size(),QImage::Format_ARGB32_Premultiplied);
-    m_image.fill(Qt::transparent);
+    QImage image(source.size(),QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
     {
-        QPainter p(&m_image);
+        QPainter p(&image);
         p.setRenderHint(QPainter::Antialiasing);
         QPainterPath shape;
         shape.addRoundedRect(QRectF(0,0,w,h),radius,radius);
@@ -162,10 +160,68 @@ void NextKdeGlassView::setBackdropFast(const QImage &source)
         p.setPen(QPen(QColor(255,255,255,65),dpr));
         p.drawPath(shape);
     }
-    m_image.setDevicePixelRatio(dpr);
-    m_lastRenderMs=timer.elapsed();
+    image.setDevicePixelRatio(dpr);
     qInfo() << "[NextKdeGlass] fast CPU refraction" << source.size()
-            << "DPR" << dpr << m_lastRenderMs << "ms";
+            << "DPR" << dpr << timer.elapsed() << "ms";
+    return image;
+}
+
+}
+void NextKdeGlassView::setBackdropFast(const QImage &source)
+{
+    ++m_backdropRevision;m_requestedBackdrop={};m_backdropReady={};
+    m_controls.clear();m_controlRenderCount=0;m_usedGpu=false;
+    QElapsedTimer timer;timer.start();
+    m_image=fastBackdrop(source,m_radius);m_lastRenderMs=timer.elapsed();
+}
+
+void NextKdeGlassView::setBackdropAsync(const QImage &source, bool fast, std::function<void()> ready)
+{
+    ++m_backdropRevision;
+    m_requestedBackdrop=source;
+    m_requestedFast=fast || qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_NO_GL");
+    m_backdropReady=std::move(ready);
+    if(source.isNull()){m_image={};m_controls.clear();m_controlRenderCount=0;m_usedGpu=false;m_lastRenderMs=0;m_backdropReady={};return;}
+    startBackdropPreparation();
+}
+
+void NextKdeGlassView::startBackdropPreparation()
+{
+    if(m_backdropPending || m_requestedBackdrop.isNull())return;
+    m_backdropPending=true;
+    const QImage source=m_requestedBackdrop;
+    const bool fast=m_requestedFast;
+    const qreal radius=m_radius;
+    const auto revision=m_backdropRevision;
+    struct Result { LiquidMaterial::Prepared material; QImage image; };
+    BackgroundTask::run(this,[source,fast,radius]{
+        Result result;
+        if(fast)result.image=fastBackdrop(source,radius);
+        else result.material=LiquidMaterial::prepare(source);
+        return result;
+    },[this,revision,fast,source,radius](const Result &result){
+        m_backdropPending=false;
+        if(revision!=m_backdropRevision){startBackdropPreparation();return;}
+        QElapsedTimer timer;timer.start();
+        m_usedGpu=false;
+        if(fast)m_image=result.image;
+        else {
+            if(!m_optics){m_optics=std::make_unique<LiquidOpticsRenderer>();++m_gpuInitializationCount;}
+            m_optics->setOptics(3.5,.58,.70,1.1);m_optics->setMaterial(0,1.15);
+            m_optics->setPreparedWallpaper(result.material);
+            const qreal dpr=source.devicePixelRatio();
+            const QSize logical(qMax(1,qRound(source.width()/dpr)),qMax(1,qRound(source.height()/dpr)));
+            m_image=m_optics->renderPanel(QRect(QPoint(),logical),radius);
+            m_usedGpu=m_optics->usedGpu();
+            if(!m_usedGpu){m_requestedFast=true;startBackdropPreparation();return;}
+        }
+        m_controls.clear();m_controlRenderCount=0;
+        m_controlOptics.setWallpaper(m_image);
+        m_lastRenderMs=timer.elapsed();
+        m_requestedBackdrop={};
+        auto ready=std::move(m_backdropReady);
+        if(ready)ready();
+    });
 }
 
 QImage NextKdeGlassView::controlImage(const QRectF &rect, qreal radius, bool pressed)

@@ -65,7 +65,8 @@ protected:
             const int insets=qMax(0,m_popup->height()-view->viewport()->height());
             QScreen *screen=QGuiApplication::screenAt(m_popup->pos());
             if(!screen)screen=QGuiApplication::primaryScreen();
-            const QRect available=screen->availableGeometry();
+            // Screen removal can also leave primaryScreen() temporarily null.
+            const QRect available=screen?screen->availableGeometry():m_combo->window()->geometry();
             m_popup->resize(m_popup->width(),qMin(available.height(),rowsHeight+insets+2));
             m_popup->move(m_popup->x(),qBound(available.top(),m_popup->y(),available.bottom()-m_popup->height()+1));
             if(m_popup->layout())m_popup->layout()->activate();

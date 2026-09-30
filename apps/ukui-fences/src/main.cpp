@@ -1,4 +1,5 @@
 #include "LiquidPopup.h"
+#include "../../../shared/async-work/BackgroundTask.h"
 #include <QApplication>
 #include <QDebug>
 #include <QDBusError>
@@ -121,6 +122,7 @@ int main(int argc, char *argv[])
     QApplication::setAttribute(Qt::AA_DontShowIconsInMenus);
 
     QApplication app(argc, argv);
+    BackgroundTask::ApplicationScope backgroundTasks;
     LiquidPopup::installMenuGlyphStyle(app);
     LiquidPopup::install(app);
     QApplication::setQuitOnLastWindowClosed(false);

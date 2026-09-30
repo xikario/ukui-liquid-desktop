@@ -7,6 +7,8 @@
 #include <QTimer>
 #include <QProcess>
 #include <QKeyEvent>
+#include <QEventLoop>
+#include "../../../shared/async-work/BackgroundTask.h"
 #include <cmath>
 
 static int failures=0;
@@ -17,6 +19,7 @@ static void check(bool ok, const char *name) {
 int main(int argc,char **argv) {
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QApplication app(argc,argv);
+    BackgroundTask::ApplicationScope backgroundTasks;
     if (app.arguments().contains("--backdrop-preview")) {
         // Temporary native test window, never changes wallpaper or settings.
         class Backdrop : public QWidget {
@@ -202,5 +205,22 @@ int main(int argc,char **argv) {
     check(renderer.image().isNull() && !renderer.usedGpu() &&
           renderer.luminanceAt(QRectF(0,0,1,1))==0,"clear removes stale visible material");
     check(renderer.controlImage(QRectF(0,0,60,60),12).isNull(),"clearing backdrop also clears button cache");
+    for(bool cpu : {false,true}) {
+        NextKdeGlassView async;
+        QImage old(600,400,QImage::Format_RGB32);old.fill(Qt::red);
+        QImage latest(480,320,QImage::Format_RGB32);latest.fill(Qt::blue);latest.setDevicePixelRatio(1.5);
+        int stale=0,ready=0;
+        QEventLoop loop;QTimer::singleShot(5000,&loop,&QEventLoop::quit);
+        async.setBackdropAsync(old,cpu,[&]{++stale;});
+        async.setBackdropAsync(latest,cpu,[&]{++ready;loop.quit();});
+        check(ready==0,"async backdrop never computes material inline");
+        auto *deleted=new NextKdeGlassView;
+        deleted->setBackdropAsync(old,cpu,[&]{++stale;});delete deleted;
+        loop.exec();
+        check(ready==1 && stale==0,"async backdrop coalesces updates and drops destroyed recipients");
+        NextKdeGlassView reference;
+        if(cpu)reference.setBackdropFast(latest);else reference.setBackdrop(latest);
+        check(async.image()==reference.image(),"async backdrop keeps exact pixels and DPR");
+    }
     return failures ? 1 : 0;
 }
