@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QPoint>
+#include <QPointer>
 #include <QTimer>
 #include <QVector>
 #include <QWidget>
@@ -20,6 +21,13 @@ class QTemporaryFile;
 class QWheelEvent;
 class QMoveEvent;
 class QResizeEvent;
+class QDialog;
+class QComboBox;
+class QLineEdit;
+class QLabel;
+class QPushButton;
+class QNetworkAccessManager;
+class QUrl;
 
 struct ProcessInfo {
     QString name;
@@ -76,6 +84,7 @@ protected:
     void resizeEvent(QResizeEvent *) override;
 
 private:
+    friend struct SystemMonitorTestAccess;
     struct CpuTotals {
         quint64 total = 0;
         quint64 idle = 0;
@@ -190,6 +199,14 @@ private:
                        const QColor &accent);
     void appendHistory(QVector<double> &history, double value);
     void showSettingsDialog();
+    void showAiDetailsDialog();
+    void fetchAvailableModels(QComboBox *modelChoice, QLineEdit *customModel, QLineEdit *urlEdit,
+        QLineEdit *keyEdit, QPushButton *refresh, QLabel *status,
+        QNetworkAccessManager *network);
+    static void populateModelChoices(QComboBox *choice, QLineEdit *customModel,
+        const QStringList &ids, const QString &selected, bool custom);
+    static QUrl modelsEndpoint(const QString &endpoint);
+    static QStringList modelIds(const QByteArray &response);
     void startDiagnosis();
     void startProcessDiagnosis(const ProcessInfo &process);
     void beginDiagnosis(const ProcessInfo *targetProcess);
@@ -197,6 +214,7 @@ private:
     void sendDiagnosisRequest();
     bool prepareAiAuthHeader();
     void finishDiagnosis(int exitCode);
+    bool consumeDiagnosisResponse(const QByteArray &output);
     QByteArray buildDiagnosisPayload() const;
     QString diagnosticTelemetry() const;
     QString localHealthAssessment() const;
@@ -246,6 +264,9 @@ private:
     bool m_credentialFailed = false;
     int m_credentialRevision = 0;
     QString m_apiUrl = QStringLiteral("https://api.deepseek.com/chat/completions");
+    QString m_apiModel = QStringLiteral("deepseek-flash");
+    bool m_apiModelCustom = false;
+    QString m_customApiModel;
     QString m_widgetTitle = QStringLiteral("飞腾桌面资源监控");
     QString m_widgetFontFamily;
     int m_widgetFontSize = 9;
@@ -258,6 +279,12 @@ private:
     QString m_aiReasoning;
     QString m_aiError;
     QString m_aiProgressText;
+    QString m_aiRequestTelemetry;
+    QString m_aiRequestModel;
+    QString m_aiRequestEndpoint;
+    QString m_aiRequestKey;
+    int m_aiRetryCount = 0;
+    QPointer<QDialog> m_aiDetailsDialog;
     bool m_aiBusy = false;
     bool m_diagnosisSampling = false;
 
