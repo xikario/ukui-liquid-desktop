@@ -164,7 +164,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:fence-glass-test> --clipboard-only)
         set_tests_properties(desktop_clipboard_async PROPERTIES TIMEOUT 30 LABELS "integration;files")
         foreach(SCALE 1 1.5 2)
-            foreach(KIND appearance icon-appearance icon-damage smart-interaction settings-center)
+            foreach(KIND appearance icon-appearance icon-damage smart-interaction settings-center menu-shortcut)
                 add_test(NAME desktop_${KIND}_${SCALE}
                     COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
                         ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --${KIND}-only)
@@ -280,6 +280,7 @@ if(TARGET fence-glass-test)
     set_tests_properties(desktop_startup_wallpaper PROPERTIES TIMEOUT 30
         ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1" LABELS "integration;ui;wallpaper")
     target_link_libraries(fence-glass-test PRIVATE ukui-liquid-popup)
+    target_include_directories(fence-glass-test PRIVATE "${UKUI_LIQUID_POPUP_ROOT}/tests")
 endif()
 
 if(TARGET liquid-popup-preview)

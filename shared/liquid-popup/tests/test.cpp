@@ -1,6 +1,7 @@
 #include <QEventLoop>
 #include "LiquidPopup.h"
 #include "LiquidSurface.h"
+#include "MenuTextRecorder.h"
 #include <QLabel>
 #include <QListWidget>
 #include <QHelpEvent>
@@ -23,7 +24,57 @@ protected:
    return false;
  }
 };
+void checkTextColumns(QMenu &menu, QAction &action, const QString &label, const QString &shortcut) {
+ const QRect row=menu.actionGeometry(&action);
+ MenuTextRecorder recorder(menu);
+ const QRectF text=recorder.boundsFor(label,row), keys=recorder.boundsFor(shortcut,row);
+ qInfo()<<"painted menu columns"<<menu.layoutDirection()<<label<<text<<keys;
+ check(!text.isEmpty() && !keys.isEmpty(),"both label and shortcut actually paint");
+ check(row.contains(text.toAlignedRect()) && row.contains(keys.toAlignedRect()),"painted text fits the action row");
+ const qreal gap=menu.layoutDirection()==Qt::LeftToRight?keys.left()-text.right():text.left()-keys.right();
+ check(gap>=8,"painted shortcut and label keep a readable gap");
+}
+void testMenuText(QApplication &app) {
+ theme().reducedMotion=true;
+ setBackdropProvider([](const QRect &rect,qreal dpr){
+   QImage image(rect.size()*dpr,QImage::Format_RGB32);image.setDevicePixelRatio(dpr);
+   image.fill(QColor(40,55,70));return image;
+ });
+ QPixmap icon(16,16);icon.fill(Qt::red);
+ QDir().mkpath("artifacts");
+ for(int points:{10,18}) for(bool hidden:{true,false}) {
+   QMenu menu;
+   QFont font=app.font();font.setPointSize(points);menu.setFont(font);
+   menu.setStyleSheet("QMenu {color:white;padding:4px;} QMenu::item {padding:4px 24px 4px 12px;}");
+   auto *undo=menu.addAction(QIcon(icon),QString::fromUtf8("撤回"));
+   undo->setIconVisibleInMenu(!hidden);undo->setShortcut(QKeySequence::Undo);
+   menu.addAction(QString::fromUtf8("粘贴"))->setEnabled(false);
+   menu.addMenu(QString::fromUtf8("新建"))->addAction("child");
+   auto *explicitTab=menu.addAction(QString::fromUtf8("复制\tCtrl+C"));
+   explicitTab->setEnabled(false);
+   menu.popup(QPoint(30,30));app.processEvents();
+   checkTextColumns(menu,*undo,QString::fromUtf8("撤回"),undo->shortcut().toString(QKeySequence::NativeText));
+   checkTextColumns(menu,*explicitTab,QString::fromUtf8("复制"),"Ctrl+C");
+   undo->setText(QString::fromUtf8("撤回文件操作"));undo->setShortcut(QKeySequence("Ctrl+Shift+Z"));app.processEvents();
+   checkTextColumns(menu,*undo,QString::fromUtf8("撤回文件操作"),undo->shortcut().toString(QKeySequence::NativeText));
+   font.setPointSize(points+2);menu.setFont(font);app.processEvents();
+   checkTextColumns(menu,*undo,QString::fromUtf8("撤回文件操作"),undo->shortcut().toString(QKeySequence::NativeText));
+   // The widest label has no icon; it still needs the shared icon column.
+   explicitTab->setText(QString::fromUtf8("复制选中的文件\tCtrl+C"));app.processEvents();
+   checkTextColumns(menu,*explicitTab,QString::fromUtf8("复制选中的文件"),"Ctrl+C");
+   auto *extra=menu.addAction(QIcon(icon),"icon");extra->setIconVisibleInMenu(true);app.processEvents();
+   checkTextColumns(menu,*explicitTab,QString::fromUtf8("复制选中的文件"),"Ctrl+C");
+   menu.removeAction(extra);delete extra;app.processEvents();
+   checkTextColumns(menu,*undo,QString::fromUtf8("撤回文件操作"),undo->shortcut().toString(QKeySequence::NativeText));
+   menu.grab().save(QString("artifacts/menu-text-%1-%2-%3.png")
+     .arg(points).arg(hidden).arg(menu.devicePixelRatioF()));
+   menu.hide();
+   check(undo->isIconVisibleInMenu()==!hidden,"shortcut layout preserves action icon preference");
+ }
+}
 int main(int argc,char **argv){
+ QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+ QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
  QApplication app(argc,argv);auto *originalAppStyle=app.style();
  installMenuGlyphStyle(app);install(app);install(app);
  check(app.style()==originalAppStyle,"menu integration preserves application style");
@@ -33,6 +84,7 @@ int main(int argc,char **argv){
    check(!app.property("liquidMenuGlyphStyleInstalled").toBool(),"environment switch disables glyph style");
    return 0;
  }
+ if(app.arguments().contains("--menu-text-only")){testMenuText(app);return 0;}
  theme().reducedMotion=true;
  const QRect screen(-1280,0,1280,800);
  for(QPoint pt:{QPoint(-1270,8),QPoint(-5,795),QPoint(-600,350)})

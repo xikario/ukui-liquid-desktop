@@ -14,6 +14,7 @@
 #include <QStyleOption>
 #include <QToolTip>
 #include <QTextDocument>
+#include <QWidgetAction>
 #include <QtMath>
 #include <algorithm>
 
@@ -117,22 +118,49 @@ public:
             }
             menu->setAttribute(Qt::WA_TranslucentBackground);
             menu->setAutoFillBackground(false);
-            // Explicit item padding reserves the indicator/arrow columns when
-            // stylesheet selection takes over native menu layout.
+            updateItemMetrics();
+            menu->ensurePolished();
+    }
+    void updateItemMetrics() {
+            if (!styled || updatingMetrics) return;
+            updatingMetrics = true;
+            int labelWidth = 0, iconWidth = 0, shortcutGap = 0;
+            for (QAction *action : menu->actions()) {
+                if (!action->isVisible() || action->isSeparator() || qobject_cast<QWidgetAction *>(action)) continue;
+                const QFontMetrics metrics(action->font().resolve(menu->font()));
+                const QString label = action->text().section(QLatin1Char('\t'), 0, 0);
+                labelWidth = qMax(labelWidth, metrics.boundingRect(QRect(),
+                    Qt::TextSingleLine | Qt::TextShowMnemonic, label).width());
+                // Qt 5 QMenu allocates this column even for hidden icons. Its
+                // stylesheet sizeFromContents only counts the current item's
+                // visible icon, but painting always subtracts the whole column.
+                if (!action->icon().isNull())
+                    iconWidth = menu->style()->pixelMetric(QStyle::PM_SmallIconSize, nullptr, menu) + 4;
+                if (!action->shortcut().isEmpty() || action->text().contains(QLatin1Char('\t')))
+                    shortcutGap = qMax(shortcutGap, qMax(12, metrics.horizontalAdvance(QStringLiteral("  "))));
+            }
+            // QMenu adds the shortcut width separately. Reserve only the label,
+            // shared icon column and gap here; padding keeps checks/arrows clear.
             const QString override=QStringLiteral(
                 "\nQMenu { background: transparent; border: 1px solid transparent; }\n"
                 "QMenu::indicator { width: 14px; height: 14px; }\n"
-                "QMenu::item { padding: 6px 28px; margin: 2px 6px; }\n"
+                "QMenu::item { padding: 6px 28px; margin: 2px 6px; min-width: %1px; }\n"
                 "QMenu::item:selected:enabled { background-color: palette(highlight); color: palette(highlighted-text); border-radius: 6px; }\n"
-                "QMenu::separator { height: 1px; background-color: rgba(128,128,128,70); margin: 4px 10px; }\n");
-            if(!menu->styleSheet().endsWith(override)) menu->setStyleSheet(menu->styleSheet()+override);
-            menu->ensurePolished();
+                "QMenu::separator { height: 1px; background-color: rgba(128,128,128,70); margin: 4px 10px; }\n")
+                .arg(labelWidth + iconWidth + shortcutGap);
+            const QString style = originalStyle + override;
+            if (menu->styleSheet() != style) menu->setStyleSheet(style);
+            updatingMetrics = false;
     }
 protected:
     bool eventFilter(QObject *,QEvent *e) override {
         if (!enabled) {
             restore();
             return false;
+        }
+        if (styled && (e->type()==QEvent::ActionAdded || e->type()==QEvent::ActionRemoved ||
+                       e->type()==QEvent::ActionChanged || e->type()==QEvent::FontChange)) {
+            updateItemMetrics();
         }
         if(e->type()==QEvent::Show) {
             prepare();
@@ -228,7 +256,7 @@ private:
     QPointer<QStyle> glyphStyle, originalWidgetStyle;
     QString originalStyle;
     QRegion originalMask;
-    bool styled = false, originalTranslucent = false, originalAutoFill = false;
+    bool styled = false, updatingMetrics = false, originalTranslucent = false, originalAutoFill = false;
     QMenu *menu;
     QImage material, backdrop;
     QRect backdropArea, availableArea;
