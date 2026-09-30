@@ -143,6 +143,31 @@ exec mv -- "$3" "$XDG_DATA_HOME/Trash/files/relative-fixture"
     // Exercise the real Fence -> Canvas signal and Ctrl+Z path, including partial failure.
     DesktopCanvas canvas;
     auto *fence = canvas.createFence("trash source", QRect(400, 150, 320, 260));
+    const QString prior = desktop + "/prior-real-operation.txt";
+    write(prior, "previous creation"); fence->addItem(DesktopItem::fromPath(prior)); fence->fileCreated(prior);
+    fence->filesTrashed(untracked);
+    QKeyEvent emptyUndo(QEvent::KeyPress, Qt::Key_Z, Qt::ControlModifier);
+    QApplication::sendEvent(fence, &emptyUndo);
+    QElapsedTimer emptyWait; emptyWait.start();
+    do { settle(20); } while (FileClipboard::busy() && emptyWait.elapsed() < 8000);
+    check(!QFileInfo::exists(prior) && read(altered) == "backend source without receipt",
+        "untracked trash adds no empty undo step; first Ctrl+Z undoes previous real creation");
+    const QString lifo = desktop + "/canvas-lifo.txt";
+    for (const QByteArray &generation : {QByteArray("first canvas generation"), QByteArray("second canvas generation")}) {
+        write(lifo, generation); fence->addItem(DesktopItem::fromPath(lifo));
+        fence->filesTrashed(trash({lifo}));
+    }
+    auto canvasUndo = [&] {
+        QKeyEvent event(QEvent::KeyPress, Qt::Key_Z, Qt::ControlModifier);
+        QApplication::sendEvent(fence, &event);
+        QElapsedTimer timer; timer.start();
+        do { settle(20); } while (FileClipboard::busy() && timer.elapsed() < 8000);
+    };
+    canvasUndo();
+    check(read(lifo) == "second canvas generation", "same-path successive canvas deletions retain newest receipt");
+    canvasUndo();
+    check(read(desktop + "/canvas-lifo (1).txt") == "first canvas generation"
+        && read(lifo) == "second canvas generation", "same-path canvas undo preserves both generations in LIFO order");
     const QString good = desktop + "/good.txt", bad = desktop + "/bad.txt";
     write(good, "good own generation"); write(bad, "bad own generation");
     fence->addItem(DesktopItem::fromPath(good)); fence->addItem(DesktopItem::fromPath(bad));
@@ -165,7 +190,7 @@ exec mv -- "$3" "$XDG_DATA_HOME/Trash/files/relative-fixture"
     check(read(good) == "good own generation" && fence->hasItem(good), "real canvas undo restores exact file and source fence");
     check(!QFileInfo::exists(bad) && read(externalBad.trashedPath) == "external bad", "partial undo leaves unrelated generation untouched");
     undo();
-    check(read(good) == "good own generation" && read(externalBad.trashedPath) == "external bad" && warnings.size() == 2,
+    check(read(good) == "good own generation" && read(externalBad.trashedPath) == "external bad" && warnings.size() == 3,
         "retry retains failed exact receipt and does not repeat successful entries");
     return failures ? 1 : 0;
 }

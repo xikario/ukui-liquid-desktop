@@ -365,16 +365,6 @@ DesktopIcon::DesktopIcon(const DesktopItem &item, QWidget *parent)
     connect(&m_renameTimer, &QTimer::timeout,
             this, [this] { startInlineRename(); });
 
-    m_refreshBlinkTimer.setInterval(15);
-    connect(&m_refreshBlinkTimer, &QTimer::timeout, this, [this] {
-        m_refreshBlinkProgress += 0.08;
-        if (m_refreshBlinkProgress >= 1.0) {
-            m_refreshBlink = false;
-            m_refreshBlinkProgress = 0.0;
-            m_refreshBlinkTimer.stop();
-        }
-        update();
-    });
 }
 
 DesktopIcon::~DesktopIcon()
@@ -779,20 +769,6 @@ void DesktopIcon::paintEvent(QPaintEvent *)
     p.setPen(textColor);
     p.drawText(textRect, flags, m_item.displayName);
 
-    if (m_refreshBlink) {
-        p.save();
-        p.setPen(Qt::NoPen);
-        int alpha = 0;
-        double t = m_refreshBlinkProgress;
-        if (t < 0.25) {
-            alpha = qRound(150.0 * (t / 0.25));
-        } else {
-            alpha = qRound(150.0 * (1.0 - (t - 0.25) / 0.75));
-        }
-        p.setBrush(QColor(255, 255, 255, qBound(0, alpha, 150)));
-        p.drawRoundedRect(rect(), 8, 8);
-        p.restore();
-    }
 }
 
 // ── 鼠标事件 ─────────────────────────────────────────────
@@ -1187,12 +1163,4 @@ void DesktopIcon::refreshTrashIcon()
         proc->deleteLater();
     });
     proc->start("gio", QStringList() << "list" << "trash:///");
-}
-
-void DesktopIcon::triggerRefreshBlink()
-{
-    m_refreshBlink = true;
-    m_refreshBlinkProgress = 0.0;
-    m_refreshBlinkTimer.start();
-    update();
 }

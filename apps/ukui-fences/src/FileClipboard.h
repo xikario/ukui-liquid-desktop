@@ -27,6 +27,13 @@ struct TrashEntry
     QByteArray infoIdentity;
     QByteArray fileIdentity;
     QByteArray infoDigest;
+
+    bool operator==(const TrashEntry &other) const
+    {
+        return originalPath == other.originalPath && infoPath == other.infoPath
+            && trashedPath == other.trashedPath && infoIdentity == other.infoIdentity
+            && fileIdentity == other.fileIdentity && infoDigest == other.infoDigest;
+    }
 };
 
 struct PasteResult

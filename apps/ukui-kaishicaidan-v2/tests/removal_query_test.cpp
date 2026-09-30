@@ -27,7 +27,7 @@ public:
 if [ "$1" = "-S" ]; then
   printf '%s\n' "$2" >> "$UKUI_QUERY_CALLS"
   : > "$UKUI_QUERY_STARTED"
-  sleep 0.4
+  while [ ! -f "$UKUI_QUERY_RELEASE" ]; do sleep 0.01; done
   case "$2" in
     *fixture-b.desktop) exit 1 ;;
     *fixture-a.desktop) printf 'fixture-a-package: %s\n' "$2" ;;
@@ -39,11 +39,12 @@ fi
 if [ "$1" = "-W" ]; then printf 'ii '; exit 0; fi
 exit 1
 )";
-        check(write(bin + "/dpkg-query", script), "delayed lookup backend created");
+        check(write(bin + "/dpkg-query", script), "lookup backend with explicit release signal created");
         QFile::setPermissions(bin + "/dpkg-query", QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
         qputenv("PATH", bin.toUtf8() + ':' + qgetenv("PATH"));
         qputenv("UKUI_QUERY_CALLS", (root + "/calls").toUtf8());
         qputenv("UKUI_QUERY_STARTED", (root + "/started").toUtf8());
+        qputenv("UKUI_QUERY_RELEASE", (root + "/release").toUtf8());
         AppEntry a; a.name = "Fixture A"; a.desktopPath = applications + "/fixture-a.desktop";
         a.exec = "fixture-nonexistent-command";
         AppEntry b = a; b.name = "Fixture B"; b.desktopPath = applications + "/fixture-b.desktop";
@@ -66,13 +67,15 @@ exit 1
         });
         first.start(); menu.showAppContextMenu(a, QPoint(150, 150));
         check(menu.m_removalQueryPending, "first query remains active after menu closes");
-        QTimer::singleShot(20, [&] {
+        QTimer second; second.setInterval(10); deadline.restart();
+        QObject::connect(&second, &QTimer::timeout, [&] {
             if (auto *popup = current()) {
                 discardedAction = popup->actions().last();
                 check(discardedAction->text() == "正在检查安装来源…", "second menu queues its own lookup without blocked label");
-                popup->close();
+                popup->close(); second.stop();
             }
         });
+        second.start();
         menu.showAppContextMenu(b, QPoint(150, 150));
         check(!oldAction && !discardedAction, "closed menus destroy their callback recipients");
         // An actual uninstall impact simulation must not suppress read-only lookup.
@@ -81,7 +84,8 @@ exit 1
         QTimer poll; poll.setInterval(10); deadline.restart();
         QObject::connect(&poll, &QTimer::timeout, [&] {
             auto *popup = current(); if (!popup) return;
-            if (!captured) { initialGeometry = popup->geometry(); captured = true; }
+            if (!captured) { initialGeometry = popup->geometry(); captured = true;
+                check(write(root + "/release", "release"), "release first worker after latest popup is shown"); }
             auto *action = popup->actions().last();
             if (action->isEnabled() || deadline.elapsed() > 5000) {
                 resolved = action->isEnabled();
@@ -98,7 +102,7 @@ exit 1
         check(history.count("fixture-a.desktop") == 1 && history.count("fixture-c.desktop") == 1
             && !history.contains("fixture-b.desktop"), "one active worker coalesces closed pending menus to latest request");
         menu.m_removalPending = false;
-        QFile::remove(root + "/started");
+        QFile::remove(root + "/started"); QFile::remove(root + "/release");
         QTimer closeAgain; closeAgain.setInterval(10); deadline.restart();
         QObject::connect(&closeAgain, &QTimer::timeout, [&] {
             if (auto *popup = current()) {
@@ -109,9 +113,10 @@ exit 1
         });
         closeAgain.start(); menu.showAppContextMenu(a, QPoint(150, 150));
         check(menu.m_removalQueryPending && !oldAction, "same-app reopen starts with older recipient destroyed");
-        QTimer reopened; reopened.setInterval(10); deadline.restart(); resolved = false;
+        QTimer reopened; reopened.setInterval(10); deadline.restart(); resolved = false; bool released = false;
         QObject::connect(&reopened, &QTimer::timeout, [&] {
             if (auto *popup = current()) {
+                if (!released) { write(root + "/release", "release"); released = true; }
                 auto *action = popup->actions().last();
                 if (action->isEnabled() || deadline.elapsed() > 5000) {
                     resolved = action->isEnabled() && action->toolTip().contains("fixture-a-package");
@@ -121,6 +126,20 @@ exit 1
         });
         reopened.start(); menu.showAppContextMenu(a, QPoint(150, 150));
         check(resolved && !menu.m_removalQueryPending, "same-app new menu completes its own query");
+        QFile::remove(root + "/started"); QFile::remove(root + "/release");
+        deadline.restart(); first.start(); menu.showAppContextMenu(a, QPoint(150, 150));
+        check(menu.m_removalQueryPending, "orphan fixture keeps first worker active");
+        deadline.restart(); second.start(); menu.showAppContextMenu(b, QPoint(150, 150));
+        check(!oldAction && !discardedAction, "both orphan fixture recipients destroyed");
+        check(write(root + "/release", "release"), "release worker after queued menu is destroyed");
+        deadline.restart();
+        while (menu.m_removalQueryPending && deadline.elapsed() < 5000) {
+            QEventLoop loop; QTimer::singleShot(10, &loop, &QEventLoop::quit); loop.exec();
+        }
+        QFile orphanCalls(root + "/calls"); orphanCalls.open(QIODevice::ReadOnly);
+        const auto orphanHistory = orphanCalls.readAll();
+        check(!menu.m_removalQueryPending && !menu.m_nextRemovalQuery
+            && !orphanHistory.contains("fixture-b.desktop"), "closed latest request is discarded without starting orphan dpkg query");
         return failures ? 1 : 0;
     }
 };

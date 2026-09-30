@@ -154,11 +154,28 @@ if(BUILD_TESTING)
                     ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --appearance-only)
         set_tests_properties(desktop_appearance PROPERTIES TIMEOUT 30 LABELS "integration;ui;appearance"
             ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1;QT_SCREEN_SCALE_FACTORS=1")
+        foreach(REFRESH_SCALE 1 1.5 2)
+            add_test(NAME desktop_refresh_${REFRESH_SCALE}
+                COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
+                    ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --refresh-only)
+            set_tests_properties(desktop_refresh_${REFRESH_SCALE} PROPERTIES
+                TIMEOUT 30 LABELS "integration;ui;files;wallpaper"
+                ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1;QT_SCREEN_SCALE_FACTORS=1;QT_SCALE_FACTOR=${REFRESH_SCALE}")
+        endforeach()
         add_test(NAME desktop_folder_drop_undo
             COMMAND ${XVFB_RUN_EXECUTABLE} -a ${DBUS_RUN_SESSION_EXECUTABLE} --
                 $<TARGET_FILE:fence-glass-test> --folder-drop-undo-only)
         set_tests_properties(desktop_folder_drop_undo PROPERTIES TIMEOUT 45 LABELS "integration;files"
             ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1")
+        add_library(trash-inotify-stub MODULE tests/trash_inotify_stub.cpp)
+        foreach(WATCH_MODE unavailable overflow)
+            add_test(NAME desktop_trash_undo_${WATCH_MODE}
+                COMMAND ${XVFB_RUN_EXECUTABLE} -a ${DBUS_RUN_SESSION_EXECUTABLE} --
+                    ${CMAKE_COMMAND} -E env "LD_PRELOAD=$<TARGET_FILE:trash-inotify-stub>"
+                    "UKUI_TRASH_TEST_INOTIFY=${WATCH_MODE}" "UKUI_FENCES_GLASS_NO_GL=1"
+                    $<TARGET_FILE:fence-glass-test> --trash-undo-only)
+            set_tests_properties(desktop_trash_undo_${WATCH_MODE} PROPERTIES TIMEOUT 45 LABELS "integration;files")
+        endforeach()
         add_test(NAME desktop_trash_undo
             COMMAND ${XVFB_RUN_EXECUTABLE} -a ${DBUS_RUN_SESSION_EXECUTABLE} --
                 $<TARGET_FILE:fence-glass-test> --trash-undo-only)

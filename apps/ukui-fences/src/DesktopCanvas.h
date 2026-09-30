@@ -329,6 +329,8 @@ private:
     WallpaperMode       m_wallpaperMode = WallpaperMode::System;
     QString             m_wallpaperPath;
     bool                m_wallpaperUsingCustom = false;
+    QImage              m_wallpaperSourceImage;
+    WallpaperMode       m_appliedWallpaperMode = WallpaperMode::System;
     QList<FenceWidget*> m_fences;
     QList<DesktopIcon*> m_looseIcons;
     QSet<DesktopIcon*>  m_selectedIcons;

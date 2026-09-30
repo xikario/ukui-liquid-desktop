@@ -119,13 +119,9 @@ private:
     bool        m_finishingRename = false;
 
     // 刷新闪烁动画
-    bool        m_refreshBlink = false;
-    qreal       m_refreshBlinkProgress = 0.0;
-    QTimer      m_refreshBlinkTimer;
 
     static constexpr int ICON_SIZE = 48;
     static constexpr int CELL_W    = 80;
     static constexpr int CELL_H    = 104;
 public:
-    void triggerRefreshBlink();
 };

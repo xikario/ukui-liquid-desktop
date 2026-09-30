@@ -16,7 +16,11 @@
 #include <QStorageInfo>
 #include <QCryptographicHash>
 #include <sys/stat.h>
+#include <sys/inotify.h>
 #include <unistd.h>
+#include <cerrno>
+#include <cstring>
+#include <QSet>
 #include <memory>
 #include <atomic>
 #include <QMessageBox>
@@ -121,30 +125,105 @@ QStringList trashInfoPaths(const TrashLocation &location)
     return paths;
 }
 
+struct TrashCandidate { TrashLocation location; QString infoPath; QByteArray identity; };
+
+// One baseline per trash directory per batch. Subsequent refreshes stat only
+// event names; lost/unavailable watches fall back to a complete reconciliation.
+class TrashCatalog
+{
+public:
+    explicit TrashCatalog(const TrashLocation &location) : m_location(location),
+        m_fd(::inotify_init1(IN_NONBLOCK | IN_CLOEXEC)) {}
+    ~TrashCatalog() { if (m_fd >= 0) ::close(m_fd); }
+    QList<TrashCandidate> refresh()
+    {
+        struct stat root;
+        if (::lstat(QFile::encodeName(m_location.root).constData(), &root) != 0
+            || !S_ISDIR(root.st_mode) || root.st_uid != ::getuid()) {
+            invalidate(); m_known.clear(); return {};
+        }
+        bool fullScan = m_watch < 0;
+        QSet<QString> dirty;
+        if (m_fd >= 0) {
+            alignas(inotify_event) char buffer[16384];
+            for (;;) {
+                const ssize_t count = ::read(m_fd, buffer, sizeof(buffer));
+                if (count < 0 && errno == EINTR) continue;
+                if (count < 0 && errno == EAGAIN) break;
+                if (count <= 0) { invalidate(); ::close(m_fd); m_fd = -1; fullScan = true; break; }
+                for (ssize_t offset = 0; offset + ssize_t(sizeof(inotify_event)) <= count;) {
+                    const auto *event = reinterpret_cast<const inotify_event *>(buffer + offset);
+                    if (offset + ssize_t(sizeof(inotify_event) + event->len) > count) { fullScan = true; break; }
+                    if (event->mask & IN_Q_OVERFLOW) fullScan = true;
+                    else if (event->wd == m_watch) {
+                        if (event->mask & (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT)) {
+                            invalidate(); fullScan = true;
+                        } else if (event->len) {
+                            const QString name = QFile::decodeName(event->name);
+                            if (name.endsWith(".trashinfo")) dirty.insert(m_location.root + "/info/" + name);
+                        }
+                    }
+                    offset += sizeof(inotify_event) + event->len;
+                }
+            }
+        }
+        const QString infoDir = m_location.root + "/info";
+        if (m_watch >= 0 && fileIdentity(infoDir, false) != m_watchIdentity) { invalidate(); fullScan = true; }
+        if (m_watch < 0 && m_fd >= 0) {
+            m_watch = ::inotify_add_watch(m_fd, QFile::encodeName(infoDir).constData(),
+                IN_CREATE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE | IN_CLOSE_WRITE | IN_ATTRIB
+                | IN_MODIFY | IN_DELETE_SELF | IN_MOVE_SELF | IN_ONLYDIR | IN_DONT_FOLLOW);
+            m_watchIdentity = fileIdentity(infoDir, false);
+            fullScan = true;
+        }
+        if (fullScan) {
+            const auto paths = trashInfoPaths(m_location);
+            dirty.clear();
+            for (const QString &path : paths) dirty.insert(path);
+            // Include removed records so the cache cannot retain stale names.
+            for (auto it = m_known.cbegin(); it != m_known.cend(); ++it) dirty.insert(it.key());
+        }
+        QList<TrashCandidate> changed;
+        for (const QString &path : dirty) {
+            const QByteArray identity = QFileInfo(path).isSymLink() ? QByteArray() : fileIdentity(path);
+            if (identity == m_known.value(path)) continue;
+            if (identity.isEmpty()) m_known.remove(path);
+            else { m_known.insert(path, identity); changed.append({m_location, path, identity}); }
+        }
+        return changed;
+    }
+private:
+    Q_DISABLE_COPY(TrashCatalog)
+    void invalidate() { if (m_fd >= 0 && m_watch >= 0) ::inotify_rm_watch(m_fd, m_watch); m_watch = -1; }
+    TrashLocation m_location;
+    int m_fd = -1, m_watch = -1;
+    QByteArray m_watchIdentity;
+    QMap<QString, QByteArray> m_known;
+};
+
 FileClipboard::TrashEntry findTrashEntry(const QString &original,
-    const QByteArray &sourceIdentity, const QList<TrashLocation> &locations,
-    const QMap<QString, QByteArray> &before)
+    const QByteArray &sourceIdentity, const QList<TrashCandidate> &candidates)
 {
     FileClipboard::TrashEntry receipt;
     if (sourceIdentity.isEmpty()) return receipt;
-    for (const auto &location : locations) {
-        for (const auto &infoPath : trashInfoPaths(location)) {
-            const QByteArray infoId = fileIdentity(infoPath);
-            if (infoId.isEmpty() || before.value(infoPath) == infoId) continue;
-            QFile info(infoPath);
-            if (!info.open(QIODevice::ReadOnly)) continue;
-            const QByteArray metadata = info.readAll();
-            if (resolvedParentPath(trashOriginal(metadata, location.relativeBase))
-                != resolvedParentPath(original)) continue;
-            QString name = QFileInfo(infoPath).fileName();
-            name.chop(QString(".trashinfo").size());
-            const QString payload = location.root + "/files/" + name;
-            if (fileIdentity(payload, false) != sourceIdentity) continue;
-            // Never guess if a backend leaves more than one possible receipt.
-            if (!receipt.infoPath.isEmpty()) return {};
-            receipt = {original, infoPath, payload, infoId, fileIdentity(payload),
-                QCryptographicHash::hash(metadata, QCryptographicHash::Sha256)};
-        }
+    for (const auto &candidate : candidates) {
+        const auto &location = candidate.location;
+        const QString &infoPath = candidate.infoPath;
+        const QByteArray infoId = fileIdentity(infoPath);
+        if (infoId.isEmpty() || candidate.identity != infoId) continue;
+        QFile info(infoPath);
+        if (!info.open(QIODevice::ReadOnly)) continue;
+        const QByteArray metadata = info.readAll();
+        if (resolvedParentPath(trashOriginal(metadata, location.relativeBase))
+            != resolvedParentPath(original)) continue;
+        QString name = QFileInfo(infoPath).fileName();
+        name.chop(QString(".trashinfo").size());
+        const QString payload = location.root + "/files/" + name;
+        if (fileIdentity(payload, false) != sourceIdentity) continue;
+        // Never guess if a backend leaves more than one possible receipt.
+        if (!receipt.infoPath.isEmpty()) return {};
+        receipt = {original, infoPath, payload, infoId, fileIdentity(payload),
+            QCryptographicHash::hash(metadata, QCryptographicHash::Sha256)};
     }
     return receipt;
 }
@@ -443,20 +522,27 @@ bool trashFilesAsync(const QStringList &paths, QWidget *owner, Completion comple
     const QPointer<QWidget> guard(owner);
     return submit(owner, [paths](const auto &cancel) {
         PasteResult result; result.sourcePaths = paths; result.move = true;
+        QMap<QString, std::shared_ptr<TrashCatalog>> catalogs;
+        QMap<QString, QList<TrashLocation>> parentLocations;
         for (const auto &path : paths) {
             if (cancel->load() || QThread::currentThread()->isInterruptionRequested()) {
                 result.cancelled = true; result.failedPaths << path; continue;
             }
             const QString original = normalizedLocalPath(path);
-            const auto locations = trashLocations(original);
-            QMap<QString, QByteArray> before;
-            for (const auto &location : locations)
-                for (const auto &info : trashInfoPaths(location))
-                    before.insert(info, fileIdentity(info));
+            const QString parent = QFileInfo(original).absolutePath();
+            if (!parentLocations.contains(parent)) parentLocations.insert(parent, trashLocations(original));
+            const auto locations = parentLocations.value(parent);
+            for (const auto &location : locations) {
+                auto &catalog = catalogs[location.root];
+                if (!catalog) catalog = std::make_shared<TrashCatalog>(location);
+                catalog->refresh(); // Commit external changes before this deletion.
+            }
             const QByteArray sourceIdentity = fileIdentity(original, false);
             if (QProcess::execute("gio", {"trash", "--", original}) == 0) {
                 result.placedPaths << original;
-                const auto entry = findTrashEntry(original, sourceIdentity, locations, before);
+                QList<TrashCandidate> candidates;
+                for (const auto &location : locations) candidates.append(catalogs.value(location.root)->refresh());
+                const auto entry = findTrashEntry(original, sourceIdentity, candidates);
                 if (!entry.infoPath.isEmpty()) result.trashEntries.insert(original, entry);
                 else result.undoUnavailablePaths << original;
             } else result.failedPaths << path;

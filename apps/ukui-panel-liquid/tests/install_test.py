@@ -1,6 +1,7 @@
 """Installer transactions against an isolated home and fake system files."""
 import importlib.util
 import os
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -136,7 +137,8 @@ class InstallTest(unittest.TestCase):
         self.assertIn('Exec="' + str(self.targets[1]) + '"', self.targets[0].read_text())
         self.assertIn('Exec="' + str(self.targets[4]) + '"', self.targets[3].read_text())
         self.assertEqual(self.targets[-1].stat().st_mode & 0o777, 0o755)
-        self.assertTrue((Path(manifest['backup']) / 'ukui-panel-liquid-restore').is_symlink())
+        before = json.loads((Path(manifest['backup']) / 'before.json').read_text())
+        self.assertTrue(Path(before[str(self.targets[-1])]).is_symlink())
         self.assertTrue((Path(manifest['backup']) / 'installed.json').exists())
         self.assertEqual(self.binary.read_bytes(), b'packaged binary')
         self.assert_clean()
@@ -173,9 +175,59 @@ class InstallTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'rollback incomplete') as error:
                 self.run_install()
         self.assertIn(str(self.targets[0]), str(error.exception))
-        backups = list((self.root / 'releases').glob('*/ukui-panel.desktop'))
+        backups = list((self.root / 'releases').glob('*/managed/00-ukui-panel.desktop'))
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_bytes(), b'old target 0')
+        self.assert_clean()
+
+
+    def test_rollback_error_reporting_without_missing_ok_support(self):
+        self.seed()
+        before = self.snapshot()
+        real_replace, real_unlink = os.replace, Path.unlink
+        count = 0
+        def fail(source, destination):
+            nonlocal count
+            count += 1
+            if count == 2:
+                raise OSError('injected publish error')
+            return real_replace(source, destination)
+        # Python 3.7's unlink capability: deliberately accepts no missing_ok.
+        def unlink_37(path):
+            return real_unlink(path)
+        with patch.object(installer.os, 'replace', side_effect=fail), patch.object(Path, 'unlink', unlink_37):
+            with self.assertRaisesRegex(RuntimeError, 'original files restored') as error:
+                self.run_install()
+        self.assertIsInstance(error.exception.__cause__, OSError)
+        self.assertEqual(self.snapshot(), before)
+        self.assert_clean()
+
+    def test_same_basename_targets_have_distinct_recovery_backups(self):
+        self.seed()
+        before = self.snapshot()
+        extra = self.home / '.local/share/ukui-panel-liquid'
+        extra.parent.mkdir(parents=True)
+        extra.write_bytes(b'distinct old extra')
+        plan, digest = installer.prepare(self.root, self.home, self.desktop, self.binary)
+        plan.append((extra, b'new extra', 0o755))
+        real = os.replace
+        count = 0
+        def fail(source, destination):
+            nonlocal count
+            count += 1
+            if count == 7:
+                raise OSError('injected publish error')
+            return real(source, destination)
+        with patch.object(installer, 'prepare', return_value=(plan, digest)), patch.object(installer.os, 'replace', side_effect=fail):
+            with self.assertRaisesRegex(RuntimeError, 'original files restored'):
+                self.run_install()
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(extra.read_bytes(), b'distinct old extra')
+        maps = list((self.root / 'releases').glob('*/before.json'))
+        mapping = json.loads(maps[0].read_text())
+        self.assertNotEqual(mapping[str(extra)], mapping[str(self.targets[1])])
+        self.assertEqual(Path(mapping[str(extra)]).read_bytes(), b'distinct old extra')
+        self.assertEqual(Path(mapping[str(self.targets[1])]).read_bytes(), b'old target 1')
         self.assert_clean()
 
 

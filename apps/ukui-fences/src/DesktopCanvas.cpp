@@ -912,23 +912,6 @@ void DesktopCanvas::refreshAll()
     forceSyncDesktopIcons();
     refreshTrashState();
     applyFontToAll();
-    if (m_monitor)
-        m_monitor->refreshWallpaperTheme();
-
-    // Windows 风格刷新：触发所有图标（包含 fences 里的）闪烁
-    for (DesktopIcon *icon : m_looseIcons) {
-        if (icon) icon->triggerRefreshBlink();
-    }
-    for (FenceWidget *fence : m_fences) {
-        if (fence) {
-            for (DesktopIcon *icon : fence->icons()) {
-                if (icon) icon->triggerRefreshBlink();
-            }
-        }
-    }
-
-    // 同步刷新完成后用 repaint 确保 compositor 立即合成最终帧
-    repaint();
 }
 
 void DesktopCanvas::activateOnSessionStartup()
@@ -1378,10 +1361,16 @@ void DesktopCanvas::loadWallpaper()
     }, [this, path, mode](const QPair<QImage, bool> &loaded) {
         m_wallpaperLoading = false;
         if (m_wallpaperReloadPending || path != m_wallpaperPath || mode != m_wallpaperMode) { loadWallpaper(); return; }
-        m_wallpaper = QPixmap::fromImage(loaded.first);
-        m_wallpaperUsingCustom = loaded.second;
-        clearWallpaperCache(); rebuildWallpaperCache(); update();
-        if (m_monitor) m_monitor->refreshWallpaperTheme();
+        const WallpaperMode renderMode = loaded.second ? mode : WallpaperMode::Fill;
+        if (!m_initialWallpaperReady || m_wallpaperSourceImage != loaded.first
+            || m_wallpaperUsingCustom != loaded.second || m_appliedWallpaperMode != renderMode) {
+            m_wallpaperSourceImage = loaded.first;
+            m_appliedWallpaperMode = renderMode;
+            m_wallpaper = QPixmap::fromImage(loaded.first);
+            m_wallpaperUsingCustom = loaded.second;
+            clearWallpaperCache(); rebuildWallpaperCache(); update();
+            if (m_monitor) m_monitor->refreshWallpaperTheme();
+        }
         if (!m_initialWallpaperReady) {
             // Failed decoding must also release the gate so a missing image
             // cannot leave the desktop and its controls inaccessible forever.
@@ -3099,21 +3088,6 @@ void DesktopCanvas::syncDesktopIcons(bool force)
             knownLoosePaths.insert(it.key());
     }
 
-    if (force) {
-        for (int i = m_looseIcons.size() - 1; i >= 0; --i) {
-            DesktopIcon *icon = m_looseIcons[i];
-            if (!icon || icon->item().isSystemIcon)
-                continue;
-            m_selectedIcons.remove(icon);
-            if (m_selectionAnchor == icon)
-                m_selectionAnchor = nullptr;
-            icon->hide();
-            icon->deleteLater();
-            m_looseIcons.removeAt(i);
-        }
-        changed = true;
-    }
-
     // 清理已经不存在的散落图标坐标。旧版本只删除控件，没有清理那些
     // “启动前就已被移走”的路径，配置文件会长期残留幽灵坐标。
     for (auto it = m_looseIconPositions.begin();
@@ -3153,6 +3127,13 @@ void DesktopCanvas::syncDesktopIcons(bool force)
             if (!storedItemExists(item)) {
                 fence->removeItem(item.filePath);
                 changed = true;
+            }
+        }
+        if (force) {
+            for (DesktopIcon *icon : fence->icons()) {
+                if (!icon || icon->item().isSystemIcon) continue;
+                const DesktopItem refreshed = DesktopItem::fromPath(icon->item().filePath);
+                if (refreshed.isValid()) icon->setItem(refreshed);
             }
         }
     }
@@ -3635,7 +3616,7 @@ void DesktopCanvas::revealLooseIcons()
         icon->raise();
         icon->update();
     }
-    repaint();
+    update();
 }
 
 void DesktopCanvas::layoutLooseIcons()
@@ -3996,7 +3977,8 @@ void DesktopCanvas::pushUndo(const UndoOperation &op)
         if (last.type == op.type &&
             last.sourcePaths == op.sourcePaths &&
             last.targetPaths == op.targetPaths &&
-            last.fenceIds == op.fenceIds)
+            last.fenceIds == op.fenceIds &&
+            last.trashEntries == op.trashEntries)
             return;
     }
 
@@ -4896,7 +4878,8 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
         menuIcon(QStringList() << "view-refresh" << "reload",
                  "↻", QColor("#0ea5e9")),
         "刷新桌面");
-    actRefresh->setToolTip("刷新壁纸、桌面文件与图标，同步最新变化。");
+    actRefresh->setObjectName("desktopRefreshAction");
+    actRefresh->setToolTip("同步桌面文件、图标和壁纸，保留现有位置与选中状态。");
     connect(actRefresh, &QAction::triggered,
             this, &DesktopCanvas::refreshAll);
 

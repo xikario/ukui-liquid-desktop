@@ -57,10 +57,12 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "music_test.h"
 #include "calendar_test.h"
 #include "appearance_test.h"
+#include "desktop_refresh_test.h"
 #include "settings_center_test.h"
 #include "icon_appearance_test.h"
 #include "clipboard_test.h"
 #include "trash_undo_test.h"
+#include "trash_benchmark_test.h"
 #include "folder_drop_undo_test.h"
 #include "icon_damage_test.h"
 #include "smart_interaction_test.h"
@@ -76,7 +78,8 @@ int main(int argc, char **argv)
     QTemporaryDir isolated("/tmp/fences-global-glass-test-XXXXXX");
     if (!isolated.isValid()) return 2;
     for (int i = 1; i < argc; ++i) {
-        if (QString::fromLocal8Bit(argv[i]) == "--trash-undo-only") {
+        if (QString::fromLocal8Bit(argv[i]) == "--trash-undo-only"
+            || QString::fromLocal8Bit(argv[i]) == "--trash-benchmark-only") {
             // GIO chooses home vs volume trash using the home filesystem.
             // Keep both home and XDG data isolated on the fixture filesystem.
             qputenv("HOME", isolated.path().toUtf8());
@@ -111,6 +114,8 @@ int main(int argc, char **argv)
         return runIconDamageTest(isolated.path());
     if (app.arguments().contains("--folder-drop-undo-only"))
         return runFolderDropUndoTest(isolated.path());
+    if (app.arguments().contains("--trash-benchmark-only"))
+        return runTrashBenchmarkTest(isolated.path());
     if (app.arguments().contains("--trash-undo-only"))
         return runTrashUndoTest(isolated.path());
     if (app.arguments().contains("--clipboard-only"))
@@ -121,6 +126,8 @@ int main(int argc, char **argv)
         return runSettingsCenterTest(isolated.path());
     if (app.arguments().contains("--appearance-only"))
         return runAppearanceTest(isolated.path());
+    if (app.arguments().contains("--refresh-only"))
+        return runDesktopRefreshTest(isolated.path());
     if (app.arguments().contains("--read-wallpaper")) {
         const int index = app.arguments().indexOf("--read-wallpaper") + 1;
         if (index >= app.arguments().size()) return 2;

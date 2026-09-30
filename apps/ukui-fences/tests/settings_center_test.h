@@ -98,7 +98,11 @@ static int runSettingsCenterTest(const QString &root) {
     QTimer::singleShot(30,window,[]{if(auto *box=qobject_cast<QDialog *>(QApplication::activeModalWidget()))box->reject();});
     window->close();check(window && window->isVisible(),"canceling close keeps the draft available");
     QTimer::singleShot(30,window,[]{if(auto *box=qobject_cast<QDialog *>(QApplication::activeModalWidget()))box->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Discard)->click();});
-    window->close();settle(100);check(window.isNull(),"discard closes and destroys draft controls");
+    window->close();settle(100);
+    // Model the outer event-loop boundary; nested settle() alone need not
+    // deliver the WA_DeleteOnClose deferred deletion scheduled by close().
+    QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+    check(window.isNull(),"discard closes and destroys draft controls");
     check(IconAppearance::load().strength==original,"discard does not persist draft appearance");
     canvas.showSettingsPage("icons");window=settingsWindow();settle(80);
     iconForm=window->findChild<QWidget *>("iconAppearanceDialog");

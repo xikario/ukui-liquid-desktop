@@ -104,6 +104,13 @@ def restore_backup(backup, destination):
             staged.unlink()
 
 
+def remove_if_exists(path):
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def install(root, home, system_desktop=Path('/etc/xdg/autostart/ukui-panel.desktop'),
             system_binary=Path('/usr/bin/ukui-panel')):
     root, home = Path(root), Path(home)
@@ -118,11 +125,12 @@ def install(root, home, system_desktop=Path('/etc/xdg/autostart/ukui-panel.deskt
                     'system_binary_sha256': binary_hash}
         try:
             # Back up every managed target, including the recovery helper.
-            for destination, _, _ in plan:
+            for index, (destination, _, _) in enumerate(plan):
                 if os.path.lexists(str(destination)):
                     if destination.is_dir():
                         raise IsADirectoryError(str(destination))
-                    backup = release / destination.name
+                    backup = release / 'managed' / ('%02d-' % index + destination.name)
+                    backup.parent.mkdir(exist_ok=True)
                     shutil.copy2(destination, backup, follow_symlinks=False)
                     backups[destination] = backup
                 else:
@@ -130,7 +138,9 @@ def install(root, home, system_desktop=Path('/etc/xdg/autostart/ukui-panel.deskt
             for name in ['panel.conf', 'panel-commission.ini', 'liquid-panel.ini']:
                 source = home / '.config/ukui' / name
                 if source.is_file():
-                    shutil.copy2(source, release / name)
+                    config_backup = release / 'config' / name
+                    config_backup.parent.mkdir(exist_ok=True)
+                    shutil.copy2(source, config_backup)
             (release / 'before.json').write_text(json.dumps(
                 {str(p): str(b) if b else None for p, b in backups.items()}, indent=2))
             for destination, data, mode in plan:
@@ -151,7 +161,7 @@ def install(root, home, system_desktop=Path('/etc/xdg/autostart/ukui-panel.deskt
                         restore_backup(backup, destination)
                 except BaseException as rollback_error:
                     rollback_errors.append(str(destination) + ': ' + str(rollback_error))
-            (release / 'installed.json').unlink(missing_ok=True)
+            remove_if_exists(release / 'installed.json')
             if rollback_errors:
                 raise RuntimeError('installation failed; rollback incomplete; backup: ' + str(release)
                                    + '\n' + '\n'.join(rollback_errors)) from error

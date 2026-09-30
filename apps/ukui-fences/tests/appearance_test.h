@@ -46,6 +46,8 @@ static int runAppearanceTest(const QString &root)
     { QFile changed(imagePath);changed.open(QIODevice::ReadWrite);
       changed.setFileTime(QDateTime::currentDateTime().addSecs(2),QFileDevice::FileModificationTime); }
     canvas.refreshAll();
+    QElapsedTimer refreshed; refreshed.start();
+    while (probe.liquidAccent() == previousAccent && refreshed.elapsed() < 3000) settle(20);
     check(probe.liquidAccent()!=previousAccent,"wallpaper refresh updates existing icon tint without recreating icon");
     check(readWallpaperPixmap(imagePath).toImage().pixelColor(10,10).blue()>150,"same-path wallpaper replacement invalidates decoded cache");
     bool inspected = false;
