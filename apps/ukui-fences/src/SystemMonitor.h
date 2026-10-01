@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QVector>
 #include <QWidget>
+#include "MonitorDiagnosisDialog.h"
 
 class QContextMenuEvent;
 class QHideEvent;
@@ -200,6 +201,8 @@ private:
     void appendHistory(QVector<double> &history, double value);
     void showSettingsDialog();
     void showAiDetailsDialog();
+    void refreshAiDetailsDialogIfOpen();
+    void clearDiagnosisDisplay();
     void fetchAvailableModels(QComboBox *modelChoice, QLineEdit *customModel, QLineEdit *urlEdit,
         QLineEdit *keyEdit, QPushButton *refresh, QLabel *status,
         QNetworkAccessManager *network);
@@ -283,6 +286,9 @@ private:
     QString m_aiRequestModel;
     QString m_aiRequestEndpoint;
     QString m_aiRequestKey;
+    MonitorDiagnosisReport m_aiReport;
+    QString m_aiTelemetryPretty, m_aiTelemetrySource;
+    QDateTime m_aiStartedAt, m_aiCompletedAt;
     int m_aiRetryCount = 0;
     QPointer<QDialog> m_aiDetailsDialog;
     bool m_aiBusy = false;

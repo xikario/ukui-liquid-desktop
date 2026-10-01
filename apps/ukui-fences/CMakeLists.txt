@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ukui-fences VERSION 0.5.0 LANGUAGES CXX)
+project(ukui-fences VERSION 0.5.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CTest)
@@ -46,7 +46,9 @@ add_executable(ukui-fences
     src/LiquidWheelPicker.cpp
     src/SettingsComboPopup.cpp
     src/DesktopWidgets.cpp
-    src/StrawberryPlayer.cpp
+    src/MprisPlayer.cpp
+    src/MusicClientIntegration.cpp
+    src/MusicClientsSettings.cpp
     src/MusicDesklet.cpp
     src/CalendarDesklet.cpp
     src/DeskletModels.cpp
@@ -59,6 +61,7 @@ add_executable(ukui-fences
     src/DesktopIcon.cpp
     src/FileClipboard.cpp
     src/SystemMonitor.cpp
+    src/MonitorDiagnosisDialog.cpp
     src/SmartSpaceWidget.cpp
     src/MenuStyle.h
     resources.qrc
@@ -110,7 +113,7 @@ if(BUILD_TESTING)
     if(XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
         get_target_property(FENCE_TEST_SOURCES ukui-fences SOURCES)
         list(REMOVE_ITEM FENCE_TEST_SOURCES src/main.cpp)
-        add_executable(fence-glass-test tests/fence_glass_test.cpp tests/music_fixture.h ${FENCE_TEST_SOURCES})
+        add_executable(fence-glass-test tests/fence_glass_test.cpp tests/music_window_test.cpp tests/music_fixture.h ${FENCE_TEST_SOURCES})
         target_include_directories(fence-glass-test PRIVATE src ${UKUI_FENCES_X11_INCLUDE_DIR} ${UKUI_FENCES_GL_INCLUDE_DIR})
         target_compile_definitions(fence-glass-test PRIVATE $<TARGET_PROPERTY:ukui-fences,COMPILE_DEFINITIONS>)
         target_link_libraries(fence-glass-test PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets Qt5::DBus Qt5::Network ZLIB::ZLIB ${UKUI_FENCES_X11_LIBRARY})

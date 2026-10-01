@@ -1929,8 +1929,8 @@ QString DesktopCanvas::settingsHelpHtml() const
             "完成后选择“退出布局编辑”。分区标题栏右键可重命名、锁定并单独设置字体。</p>"
             "<h3>六类桌面小组件</h3>"
             "<p>右键 → 桌面小组件，可切换智能空间、系统监视、时钟与倒计时、活动统计、"
-            "Strawberry 音乐、日历与系统待办。对号表示已启用；智能空间可收起成贴边星标。</p>"
-            "<p>活动统计记录前台应用停留时间；音乐组件通过 MPRIS 控制 Strawberry。"
+            "音乐播放器、日历与系统待办。对号表示已启用；智能空间可收起成贴边星标。</p>"
+            "<p>活动统计记录前台应用停留时间；音乐组件通过 MPRIS 自动接入已配置、最近启动的播放器。"
             "日历支持农历、节假日、年月滚轮和待办折叠；内置中国调休数据为 2026 年，日历右键可同步最新农历和已发布的节假日；系统待办只读。</p>"
             "<h3>自启动与外观</h3>"
             "<p>右键 → Fences 设置 → 桌面小组件，独立设置各组件随 Fences 启动。"
@@ -1953,7 +1953,7 @@ QString DesktopCanvas::settingsAboutHtml() const
     return QStringLiteral(
                 "<h3>ukui-fences · UKUI Liquid Desktop</h3>"
                 "<p>核心版本：%1 · Qt 5 / UKUI X11</p>"
-                "<p>桌面分区、智能空间、系统监视，以及时钟/倒计时、活动统计、Strawberry 音乐、"
+                "<p>桌面分区、智能空间、系统监视，以及时钟/倒计时、活动统计、音乐播放器、"
                 "日历与系统待办，共享液态材质与弹出菜单模块。</p>"
                 "<p>部分液态玻璃代码沿用并适配 NextKde 相关代码，直接 shader 来源为 NextKde-kylinos；"
                 "时钟、活动和日历参考 NextKde DeskCenter 设计，以 Qt 5 重新实现。感谢上游作者与贡献者。</p>"
@@ -4970,7 +4970,7 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     };
     addDesktopWidget("clock", "时钟与倒计时", clockWidgetVisible(), &DesktopCanvas::setClockWidgetVisible);
     addDesktopWidget("activity", "活动统计", activityWidgetVisible(), &DesktopCanvas::setActivityWidgetVisible);
-    addDesktopWidget("music", "Strawberry 音乐", musicWidgetVisible(), &DesktopCanvas::setMusicWidgetVisible);
+    addDesktopWidget("music", "音乐播放器", musicWidgetVisible(), &DesktopCanvas::setMusicWidgetVisible);
     addDesktopWidget("calendar", "日历与系统待办", calendarWidgetVisible(), &DesktopCanvas::setCalendarWidgetVisible);
 
     auto *arrangeGroup = new QActionGroup(&menu);

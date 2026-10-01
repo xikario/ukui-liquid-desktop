@@ -129,7 +129,7 @@ int main(int argc, char *argv[])
     app.setApplicationName("ukui-fences");
     app.setApplicationDisplayName("ukui-fences");
     app.setOrganizationName("kylin");
-    app.setApplicationVersion("0.5.0");
+    app.setApplicationVersion("0.5.1");
     app.setDesktopFileName("ukui-fences");
 
     app.setStyleSheet(MenuStyle::venturaContextMenuStyleSheet());

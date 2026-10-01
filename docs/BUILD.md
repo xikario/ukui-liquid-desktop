@@ -7,10 +7,12 @@
 Debian/Ubuntu 系的包名参考（麒麟请使用匹配系统 Qt 的开发包）：
 
 ```sh
-sudo apt install build-essential cmake qtbase5-dev libx11-dev libxtst-dev libgl1-mesa-dev zlib1g-dev python3 xvfb xauth dbus-x11 xdotool x11-utils
+sudo apt install build-essential cmake qtbase5-dev libx11-dev libxtst-dev libgl1-mesa-dev zlib1g-dev python3 xvfb xauth dbus-x11 xdotool x11-utils libgtk-3-bin
 ```
 
 UI 测试需要 `xvfb-run`、`dbus-run-session`、`xdotool`、`xwininfo`、`xprop`。部分 Python/图像验证需要 Pillow。日历农历使用 ICU 运行库；智能空间 PDF/OCR 按需使用 poppler-utils、tesseract-ocr、tesseract-ocr-chi-sim。系统日历、UKUI、Strawberry 等功能还需相应应用。
+
+音乐客户端需要提供 MPRIS。自动识别的桌面启动入口使用 `gtk-launch`（Debian/Ubuntu 的 `libgtk-3-bin`）；直接配置可执行文件时不依赖该入口。音乐回归包含实际桌面入口启动，需要安装此运行工具。
 
 构建命令见根 README。默认每次独立配置一个应用，不将三个 CMake 子项目直接放进同一个 add_subdirectory 超级工程，以免重复定义公共库 target。
 

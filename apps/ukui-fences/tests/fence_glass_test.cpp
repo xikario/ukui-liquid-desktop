@@ -99,6 +99,33 @@ int main(int argc, char **argv)
     LiquidPopup::install(app);
     app.setOrganizationName("kylin");
     app.setApplicationName("ukui-fences");
+    if(app.arguments().contains("--music-server-fixture")) {
+        const QString service=app.arguments().value(app.arguments().indexOf("--music-server-fixture")+1);
+        MusicFixture fixture; fixture.song=service;
+        MusicRootFixture root(&fixture);
+        auto bus=QDBusConnection::sessionBus();
+        if(!bus.registerObject("/org/mpris/MediaPlayer2",&fixture,QDBusConnection::ExportAllSlots|QDBusConnection::ExportAllProperties|QDBusConnection::ExportAdaptors)
+           || !bus.registerService(service))return 2;
+        fprintf(stdout,"READY\n"); fflush(stdout);
+        return app.exec();
+    }
+    if(app.arguments().contains("--music-read-only") || app.arguments().contains("--music-open-window")) {
+        const bool open=app.arguments().contains("--music-open-window");
+        const QString service=app.arguments().value(app.arguments().indexOf(open?"--music-open-window":"--music-read-only")+1);
+        if(!MprisPlayer::saveProfiles({{"只读验证客户端",service,{}, {},true}}))return 2;
+        MprisPlayer player;
+        bool checked=false;
+        QObject::connect(&player,&MprisPlayer::changed,&app,[&]{
+            if(!player.connected() || checked)return;checked=true;
+            qInfo()<<"MPRIS read-only connected"<<player.activeService()<<"title_present"<<!player.title().isEmpty()<<"seek"<<player.capability("CanSeek")<<"raise"<<player.canRaise();
+            const auto profile=player.detectedProfile(service);
+            qInfo()<<"MPRIS process identification"<<"program_available"<<!profile.program.isEmpty()<<"desktop_available"<<!profile.desktopFile.isEmpty();
+            if(open){player.openPlayer();QTimer::singleShot(300,&app,[&]{app.exit(player.error().isEmpty()?0:1);});}
+            else app.exit(0);
+        });
+        QTimer::singleShot(5000,&app,[&]{app.exit(1);});
+        return app.exec();
+    }
     if (app.arguments().contains("--menu-shortcut-only"))
         return runMenuShortcutTest();
     if (app.arguments().contains("--startup-wallpaper-only"))

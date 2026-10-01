@@ -1,5 +1,5 @@
 #include "MusicDesklet.h"
-#include "StrawberryPlayer.h"
+#include "MprisPlayer.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
@@ -32,27 +32,28 @@ QIcon transportIcon(int kind) {
     return QIcon(pix);
 }
 }
-MusicDesklet::MusicDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"music","Strawberry · 音乐",QSize(360,180)),m_player(new StrawberryPlayer(this)) {
+MusicDesklet::MusicDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"music","音乐",QSize(360,180)),m_player(new MprisPlayer(this)) {
     m_previous=button("","musicPrevious");m_play=button("","musicPlayPause");m_next=button("","musicNext");
     m_open=button("打开播放器","musicOpen");m_cover=button("","musicCover");
     m_cover->setStyleSheet("QPushButton{background:transparent;border:0;border-radius:10px;}QPushButton:hover{background:rgba(255,255,255,20);}");
     m_previous->setIcon(transportIcon(2));m_next->setIcon(transportIcon(3));
-    m_previous->setToolTip("上一首");m_next->setToolTip("下一首");m_cover->setToolTip("打开 Strawberry");
+    m_previous->setToolTip("上一首");m_next->setToolTip("下一首");m_cover->setToolTip("打开当前播放器");
     for(auto *b:{m_previous,m_play,m_next})b->setIconSize(QSize(20,20));
     m_seek=new QSlider(Qt::Horizontal,this);m_seek->setObjectName("musicSeek");m_seek->setRange(0,1000);m_seek->setAccessibleName("播放进度");
     m_volume=new QSlider(Qt::Horizontal,this);m_volume->setObjectName("musicVolume");m_volume->setRange(0,100);m_volume->setAccessibleName("音量");
     for(auto *slider:{m_seek,m_volume})slider->setStyleSheet("QSlider::groove:horizontal{height:4px;background:rgba(240,250,255,35);border-radius:2px;}QSlider::sub-page:horizontal{background:#9ae8db;border-radius:2px;}QSlider::handle:horizontal{background:#e6fff7;width:10px;margin:-3px 0;border-radius:5px;}QSlider:disabled{color:#718086;}");
-    connect(m_previous,&QPushButton::clicked,m_player,&StrawberryPlayer::previous);
-    connect(m_play,&QPushButton::clicked,m_player,&StrawberryPlayer::playPause);
-    connect(m_next,&QPushButton::clicked,m_player,&StrawberryPlayer::next);
-    connect(m_open,&QPushButton::clicked,m_player,&StrawberryPlayer::openPlayer);
-    connect(m_cover,&QPushButton::clicked,m_player,&StrawberryPlayer::openPlayer);
-    connect(m_seek,&QSlider::sliderPressed,this,[this]{m_seekTrack=m_player->trackId();});
-    connect(m_seek,&QSlider::sliderReleased,this,[this]{if(m_seekTrack==m_player->trackId())m_player->seek(m_player->length()*m_seek->value()/1000);});
+    connect(m_previous,&QPushButton::clicked,m_player,&MprisPlayer::previous);
+    connect(m_play,&QPushButton::clicked,m_player,&MprisPlayer::playPause);
+    connect(m_next,&QPushButton::clicked,m_player,&MprisPlayer::next);
+    connect(m_open,&QPushButton::clicked,m_player,&MprisPlayer::openPlayer);
+    connect(m_cover,&QPushButton::clicked,m_player,&MprisPlayer::openPlayer);
+    connect(m_seek,&QSlider::sliderPressed,this,[this]{m_seekTrack=m_player->trackId();m_seekConnection=m_player->connectionId();});
+    connect(m_seek,&QSlider::sliderReleased,this,[this]{if(m_seekTrack==m_player->trackId() && m_seekConnection==m_player->connectionId())m_player->seek(m_player->length()*m_seek->value()/1000);});
     connect(m_seek,&QSlider::valueChanged,this,[this](int v){if(!m_updating && !m_seek->isSliderDown())m_player->seek(m_player->length()*v/1000);});
-    connect(m_volume,&QSlider::sliderReleased,this,[this]{m_player->setVolume(m_volume->value()/100.0);});
+    connect(m_volume,&QSlider::sliderPressed,this,[this]{m_volumeConnection=m_player->connectionId();});
+    connect(m_volume,&QSlider::sliderReleased,this,[this]{if(m_volumeConnection==m_player->connectionId())m_player->setVolume(m_volume->value()/100.0);});
     connect(m_volume,&QSlider::valueChanged,this,[this](int v){if(!m_updating && !m_volume->isSliderDown())m_player->setVolume(v/100.0);});
-    connect(m_player,&StrawberryPlayer::changed,this,&MusicDesklet::updateControls);
+    connect(m_player,&MprisPlayer::changed,this,&MusicDesklet::updateControls);
     m_notesTimer.setInterval(33);
     connect(&m_notesTimer,&QTimer::timeout,this,[this]{update(notesArea());});
     arrangeControls();updateControls();
@@ -111,7 +112,13 @@ void MusicDesklet::updateControls(){
     if(!m_volume->isSliderDown())m_volume->setValue(qRound(m_player->volume()*100));
     m_volume->setToolTip(QString("音量 %1%").arg(m_volume->value()));
     m_open->setText(m_player->connected()?"打开播放器":"启动播放器");
-    m_open->setToolTip(m_player->error());m_updating=false;
+    m_open->setEnabled(!m_player->connected() || m_player->canOpen());
+    const QString client=m_player->clientName();
+    m_open->setToolTip(!m_player->error().isEmpty()?m_player->error():m_player->connected()
+        ? (m_player->canOpen()?"打开 "+client:"客户端不支持前置窗口，请从任务栏打开") : "启动已配置的播放器");
+    m_cover->setEnabled(m_open->isEnabled()); m_cover->setToolTip(m_open->toolTip());
+    m_title=client.isEmpty()?QString("音乐"):client+" · 音乐";
+    setWindowTitle(m_title); setAccessibleName(m_title); m_updating=false;
     syncNotesAnimation();
     if(isVisible())update(QRect(12,18,width()-24,height()-22));
 }
@@ -124,9 +131,12 @@ void MusicDesklet::paintContent(QPainter &p){
         const int side=qMin(cover.width(),cover.height());p.drawImage(art,cover,QRectF((cover.width()-side)/2,(cover.height()-side)/2,side,side));
     }else{text(p,art,"♫",36,QColor("#9ae8db"));}p.restore();
     paintFloatingNotes(p);
-    const QString title=m_player->connected()?(m_player->title().isEmpty()?"尚未选择歌曲":m_player->title()):"Strawberry 未启动";
+    const QString title=m_player->connected()?(m_player->title().isEmpty()?"尚未选择歌曲":m_player->title())
+        : m_player->discovering()?"正在发现播放器…"
+        : !m_player->activeService().isEmpty()?"正在连接 "+m_player->clientName():"暂无已配置的播放器运行";
     QString subtitle=m_player->artist();if(subtitle.isEmpty())subtitle=m_player->connected()?"在播放器中选择音乐":"点击右侧按钮，开始听音乐";
     if(!m_player->error().isEmpty())subtitle=m_player->error();
+    if(!m_player->clientName().isEmpty())subtitle=m_player->clientName()+" · "+subtitle;
     QFont f=font();f.setPixelSize(14);f.setBold(true);
     text(p,QRectF(112,21,width()-128,24),QFontMetrics(f).elidedText(title,Qt::ElideRight,width()-128),14,QColor("#f4f7ff"),true,Qt::AlignLeft|Qt::AlignVCenter);
     f.setPixelSize(11);f.setBold(false);
@@ -137,4 +147,4 @@ void MusicDesklet::paintContent(QPainter &p){
 }
 void MusicDesklet::showEvent(QShowEvent *event){LiquidDesklet::showEvent(event);m_player->setVisible(true);syncNotesAnimation();}
 void MusicDesklet::hideEvent(QHideEvent *event){m_player->setVisible(false);syncNotesAnimation();LiquidDesklet::hideEvent(event);}
-void MusicDesklet::extendMenu(QMenu &menu){connect(menu.addAction("打开 Strawberry"),&QAction::triggered,m_player,&StrawberryPlayer::openPlayer);}
+void MusicDesklet::extendMenu(QMenu &menu){connect(menu.addAction(m_player->connected()?"打开 "+m_player->clientName():QString("启动已配置的播放器")),&QAction::triggered,m_player,&MprisPlayer::openPlayer);}

@@ -8,7 +8,10 @@
 #include <QNetworkReply>
 #include <QPushButton>
 #include <QScrollBar>
-#include <QTextEdit>
+#include <QPlainTextEdit>
+#include <QTabWidget>
+#include <QProgressBar>
+#include <QScrollArea>
 #include <QAbstractTextDocumentLayout>
 #include <QProcess>
 #include <QElapsedTimer>
@@ -92,12 +95,14 @@ struct SystemMonitorTestAccess {
                 check(label->palette().color(QPalette::WindowText).lightness()
                       - dialog->palette().color(QPalette::Window).lightness() > 70,
                       "dark-theme scope and advisory labels remain readable");
-            auto *text = dialog->findChild<QTextEdit *>("monitorDiagnosisText");
+            auto *text = dialog->findChild<QPlainTextEdit *>("monitorDiagnosisText");
+            check(dialog->findChildren<QTimer *>().isEmpty(), "details owns no polling timer");
+            dialog->findChild<QTabWidget *>("monitorDiagnosisTabs")->setCurrentIndex(1);
             check(text && text->isReadOnly() && text->toPlainText() == fullText, "long answer is untruncated read-only plain text");
             check(!monitor.m_compact, "opening details does not collapse monitor");
             doubleClick(monitor.m_aiContentRect.center());
             check(monitor.m_aiDetailsDialog == dialog, "repeat expansion reuses window");
-            auto *sample = dialog->findChild<QTextEdit *>("monitorDiagnosisTelemetry");
+            auto *sample = dialog->findChild<QPlainTextEdit *>("monitorDiagnosisTelemetry");
             check(sample && sample->isReadOnly() && sample->toPlainText().contains("diagnosis_scope"), "sampling data is inspectable read-only text");
             // Long QTextDocuments lay out lazily; finish initial reflow before scrolling.
             text->document()->documentLayout()->documentSize(); settle(80);
@@ -108,20 +113,23 @@ struct SystemMonitorTestAccess {
             check(QApplication::clipboard()->text() == fullText, "copy retains complete diagnosis");
             QDir().mkpath("artifacts");
             if (scale == 1.0) dialog->grab().save(QString("artifacts/monitor-details-%1.png").arg(dialog->devicePixelRatioF()));
-            dialog->close(); settle(30);
-            check(monitor.m_aiDetailsDialog.isNull(), "close releases window and timer");
+            dialog->close(); QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); settle(30);
+            check(monitor.m_aiDetailsDialog.isNull(), "close releases the event-driven window");
         }
         monitor.setEditMode(true); doubleClick(monitor.m_aiContentRect.center());
         check(!monitor.m_aiDetailsDialog, "layout editing does not open details");
         monitor.setEditMode(false); monitor.m_scale = 1;
         monitor.resize(monitor.baseSize()); monitor.updateHitRects();
         doubleClick(monitor.m_aiContentRect.center());
-        auto *text = monitor.m_aiDetailsDialog->findChild<QTextEdit *>("monitorDiagnosisText");
-        monitor.m_aiBusy = true; monitor.m_aiProgressText = "测试采样 3/15"; settle(550);
-        check(text->toPlainText() == monitor.m_aiProgressText, "details follows sampling progress");
-        monitor.m_aiBusy = false; monitor.m_aiText = "完成：下一步建议"; settle(550);
+        auto *text = monitor.m_aiDetailsDialog->findChild<QPlainTextEdit *>("monitorDiagnosisText");
+        monitor.m_aiBusy = true; monitor.m_diagnosisSampling = true; monitor.m_diagnosisSamplesTaken = 3;
+        monitor.m_aiProgressText = "测试采样 3/15"; monitor.refreshAiDetailsDialogIfOpen();
+        check(monitor.m_aiDetailsDialog->findChild<QLabel *>("monitorDiagnosisProgressText")->text() == monitor.m_aiProgressText
+              && monitor.m_aiDetailsDialog->findChild<QProgressBar *>("monitorDiagnosisProgress")->value() == 3,
+              "explicit sample event immediately updates progress without a polling timer");
+        monitor.m_aiBusy = false; monitor.m_diagnosisSampling = false; monitor.m_aiText = "完成：下一步建议"; monitor.refreshAiDetailsDialogIfOpen();
         check(text->toPlainText() == monitor.m_aiText, "details follows completed response");
-        monitor.m_aiDetailsDialog->close(); settle(30);
+        monitor.m_aiDetailsDialog->close(); QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); settle(30);
 
         auto *form = monitor.createSettingsPage(&host);
         auto *model = form->findChild<QComboBox *>("monitorApiModel");
@@ -294,7 +302,119 @@ struct SystemMonitorTestAccess {
         check(!monitor.consumeDiagnosisResponse(response(fence+"json\n"+answer+"\n"+fence))
               && monitor.m_aiText.contains("整体状态") && !monitor.m_aiText.contains(fence),
               "fenced structured answer is decoded instead of exposing JSON markup");
-        return runTransport(monitor);
+        runReportView(monitor);
+        runDiagnosisEvents(monitor);
+        runTransport(monitor);
+        runMaterialView();
+        return failures ? 1 : 0;
+    }
+
+    static void runReportView(SystemMonitor &monitor) {
+        const QString literal = "<a href=\"https://example.com\">literal & untrusted</a>";
+        const QString command = "printf '<script>literal</script>'";
+        const QJsonObject report{{"overall_status","关注"},{"summary",literal},{"sampling_scope","整机 15 秒"},
+            {"resource_assessment",QJsonArray{"CPU 均值 22%"}}, {"bottlenecks",QJsonArray{"内存余量"}},
+            {"evidence",QJsonArray{"峰值 91%"}}, {"immediate_actions",QJsonArray{"先保存工作"}},
+            {"long_term_actions",QJsonArray{"长期建议不应丢失"}}, {"risk_notes",QJsonArray{"风险说明不应丢失"}},
+            {"command_suggestions",QJsonArray{QJsonObject{{"command",command},{"explanation","仅输出文字"},
+                {"conditions","手动核对环境"},{"risk","命令示例未执行"}}}}};
+        monitor.m_aiReport = MonitorDiagnosisReport::fromJson(report);
+        monitor.m_hasDiagnosisTarget = false;
+        monitor.m_aiStartedAt = QDateTime::currentDateTime().addSecs(-16);
+        monitor.m_aiCompletedAt = QDateTime::currentDateTime();
+        monitor.m_aiText = monitor.formatDiagnosisJson(report); monitor.m_aiBusy = false;
+        monitor.m_aiRequestModel = "fixture-model";
+        monitor.m_aiRequestTelemetry = monitor.diagnosticTelemetry();
+        monitor.showAiDetailsDialog();
+        auto *dialog = qobject_cast<MonitorDiagnosisDialog *>(monitor.m_aiDetailsDialog.data());
+        auto *tabs = dialog->findChild<QTabWidget *>("monitorDiagnosisTabs");
+        check(tabs && tabs->count()==3 && tabs->currentIndex()==0, "overview is the default of three distinct reading pages");
+        auto *summary = dialog->findChild<QLabel *>("monitorDiagnosisSummary");
+        check(summary->text()==literal && summary->textFormat()==Qt::PlainText && !summary->openExternalLinks(),
+              "untrusted model labels and links remain literal, selectable text");
+        check(dialog->findChild<QLabel *>("monitorDiagnosisBadge")->text().contains("关注"), "status badge includes the model rating");
+        check(dialog->findChild<QLabel *>("monitorDiagnosisScope")->text().contains("fixture-model"), "header uses actual request model");
+        tabs->setCurrentIndex(1);
+        auto *code = dialog->findChild<QPlainTextEdit *>("monitorDiagnosisCommand");
+        check(code && code->isReadOnly() && code->toPlainText()==command, "command is a dedicated read-only code block");
+        dialog->findChild<QPushButton *>("monitorCopyCommand")->click();
+        check(QApplication::clipboard()->text()==command, "command button only copies exact text");
+        dialog->findChild<QPushButton *>("monitorCopyDiagnosis")->click();
+        check(QApplication::clipboard()->text().contains(command)
+              && QApplication::clipboard()->text().contains("长期建议不应丢失")
+              && QApplication::clipboard()->text().contains("风险说明不应丢失"), "copy all includes commands, long-term advice and risks");
+        dialog->findChild<QPushButton *>("monitorCopySummary")->click();
+        check(QApplication::clipboard()->text().contains(literal) && !QApplication::clipboard()->text().contains(command), "summary copy excludes detailed commands");
+        auto *scroll = dialog->findChild<QScrollArea *>("monitorAnalysisScroll");
+        settle(30);
+        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        const int scrollPosition = scroll->verticalScrollBar()->value();
+        auto cursor = code->textCursor(); cursor.select(QTextCursor::Document); code->setTextCursor(cursor);
+        auto *retainedCode = code;
+        monitor.refreshAiDetailsDialogIfOpen();
+        check(dialog->findChild<QPlainTextEdit *>("monitorDiagnosisCommand")==retainedCode
+              && code->textCursor().selectedText()==command && scroll->verticalScrollBar()->value()==scrollPosition,
+              "unchanged state retains command controls, selection and scroll position");
+        QTemporaryDir exports;
+        const QString txt=exports.path()+"/report.txt", json=exports.path()+"/sample.json";
+        QString error;
+        check(dialog->saveExport(txt,false,&error) && dialog->saveExport(json,true,&error), "text and telemetry export atomically");
+        QFile textFile(txt), jsonFile(json); textFile.open(QIODevice::ReadOnly); jsonFile.open(QIODevice::ReadOnly);
+        check(QString::fromUtf8(textFile.readAll())==monitor.m_aiText, "export retains the entire diagnosis verbatim");
+        check(QJsonDocument::fromJson(jsonFile.readAll()) == QJsonDocument::fromJson(monitor.m_aiRequestTelemetry.toUtf8()), "JSON export is exactly the retained request snapshot");
+        check(!dialog->saveExport(exports.path()+"/missing/report.txt",false,&error) && !error.isEmpty(), "failed export reports error without fabricating success");
+        tabs->setCurrentIndex(2); dialog->findChild<QPushButton *>("monitorCopyTelemetry")->click();
+        check(QJsonDocument::fromJson(QApplication::clipboard()->text().toUtf8()) == QJsonDocument::fromJson(monitor.m_aiRequestTelemetry.toUtf8()), "JSON copy retains actual request data");
+        tabs->setCurrentIndex(0);
+        QDir().mkpath("artifacts"); dialog->grab().save(QString("artifacts/monitor-overview-%1.png").arg(dialog->devicePixelRatioF()));
+        tabs->setCurrentIndex(1); dialog->grab().save(QString("artifacts/monitor-analysis-%1.png").arg(dialog->devicePixelRatioF()));
+        tabs->setCurrentIndex(2); dialog->grab().save(QString("artifacts/monitor-telemetry-%1.png").arg(dialog->devicePixelRatioF()));
+        monitor.setSkin(SystemMonitor::Skin::Light); settle(30);
+        tabs->setCurrentIndex(0);
+        const QImage lightText=dialog->grab().toImage(); int darkPixels=0;
+        for (int y=0;y<lightText.height();++y) for (int x=0;x<lightText.width();++x)
+            if (lightText.pixelColor(x,y).alpha()>200 && lightText.pixelColor(x,y).lightness()<90) ++darkPixels;
+        check(darkPixels>20 && lightText.pixelColor(5,5).lightness()>220, "light theme renders dark readable text on a light panel");
+        dialog->grab().save(QString("artifacts/monitor-overview-light-%1.png").arg(dialog->devicePixelRatioF()));
+        for (auto *page : {dialog->findChild<QScrollArea *>("monitorOverviewScroll"), scroll})
+            check(page->horizontalScrollBar()->maximum()==0, "report cards fit the screen at each desktop DPI");
+        monitor.setSkin(SystemMonitor::Skin::Dark);
+        tabs->setCurrentIndex(0);
+        monitor.m_aiError="测试错误：检查配置"; monitor.refreshAiDetailsDialogIfOpen();
+        check(!summary->isVisibleTo(dialog) && !dialog->findChild<QPlainTextEdit *>("monitorDiagnosisCommand") && !dialog->findChild<QPushButton *>("monitorCopyDiagnosis")->isEnabled(),
+              "error state suppresses old conclusions and prevents copying a stale report");
+        check(dialog->findChild<QPushButton *>("monitorDiagnosisCheckSettings")->isVisibleTo(dialog), "error offers a settings entry");
+        check(!dialog->saveExport(txt,false,&error), "error cannot overwrite an export with stale advice");
+        monitor.clearDiagnosisDisplay();
+        check(dialog->findChild<QLabel *>("monitorDiagnosisBadge")->text()=="待诊断"
+              && dialog->findChild<QPlainTextEdit *>("monitorDiagnosisTelemetry")->toPlainText().contains("暂无"), "clear removes result and retained sample together");
+        dialog->close(); QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete); settle(20);
+    }
+
+    static void runDiagnosisEvents(SystemMonitor &monitor) {
+        monitor.clearDiagnosisDisplay(); monitor.showAiDetailsDialog();
+        auto *dialog=monitor.m_aiDetailsDialog.data();
+        auto *badge=dialog->findChild<QLabel *>("monitorDiagnosisBadge");
+        monitor.m_aiText="旧诊断"; monitor.m_aiRequestTelemetry=monitor.diagnosticTelemetry();
+        monitor.m_aiCompletedAt=QDateTime::currentDateTime();
+        ProcessInfo target; target.name="requested-process"; target.pid=4321;
+        monitor.m_apiKey.clear(); monitor.beginDiagnosis(&target);
+        check(badge->text()=="诊断失败" && !monitor.m_aiBusy, "missing credential immediately updates the open error card");
+        check(monitor.m_aiText.isEmpty() && monitor.m_aiRequestTelemetry.isEmpty() && !monitor.m_aiCompletedAt.isValid()
+              && dialog->findChild<QLabel *>("monitorDiagnosisScope")->text().contains("requested-process"),
+              "failed new diagnosis does not retain the previous report, sample, timestamp or target");
+        monitor.m_apiKey="fixture-only-key"; monitor.beginDiagnosis(nullptr);
+        check(badge->text()=="采样中" && dialog->findChild<QProgressBar *>("monitorDiagnosisProgress")->maximum()==15,
+              "begin diagnosis immediately exposes determinate sampling progress");
+        QElapsedTimer time; time.start();
+        while (monitor.m_diagnosisSamplesTaken<1 && time.elapsed()<3500) settle(20);
+        check(monitor.m_diagnosisSamplesTaken>=1
+              && dialog->findChild<QProgressBar *>("monitorDiagnosisProgress")->value()==monitor.m_diagnosisSamplesTaken,
+              "actual asynchronous sample delivery updates an open report");
+        // Stop this isolated sampling fixture before any network request is made.
+        monitor.m_diagnosisTimer.stop(); ++monitor.m_diagnosisRevision;
+        monitor.m_diagnosisSampling=false; monitor.m_aiBusy=false; monitor.clearDiagnosisDisplay();
+        dialog->close(); QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete); settle(20);
     }
 
     static int runTransport(SystemMonitor &monitor) {
@@ -322,9 +442,12 @@ print(json.dumps({'choices':[{'message':message,'finish_reason':'length' if empt
         for (bool alwaysEmpty : {false,true}) {
             QFile::remove(calls);
             qputenv("MONITOR_FIXTURE_EMPTY",alwaysEmpty?"1":"0");
+            monitor.clearDiagnosisDisplay(); monitor.showAiDetailsDialog();
+            auto *dialog = qobject_cast<MonitorDiagnosisDialog *>(monitor.m_aiDetailsDialog.data());
             monitor.m_aiRetryCount=0; monitor.m_aiRequestTelemetry.clear(); monitor.m_aiRequestModel.clear();
             monitor.m_apiKey="fixture-only-key"; monitor.m_apiUrl="https://api.deepseek.com/chat/completions";
             monitor.m_aiBusy=true; monitor.sendDiagnosisRequest();
+            check(dialog->findChild<QLabel *>("monitorDiagnosisBadge")->text()=="分析中", "sending a request updates an open report immediately");
             // Edits made while waiting must not retarget the recovery request.
             monitor.m_apiModel="other-model"; monitor.m_apiUrl="https://other.example.com/chat/completions";
             QElapsedTimer time; time.start();
@@ -342,9 +465,59 @@ print(json.dumps({'choices':[{'message':message,'finish_reason':'length' if empt
             }
             check(alwaysEmpty ? !monitor.m_aiError.isEmpty() : monitor.m_aiText.contains("测试进程"),
                   "transport reports final empty failure or displays successful retry");
+            check(dialog->findChild<QLabel *>("monitorDiagnosisBadge")->text()==(alwaysEmpty ? "诊断失败" : "已完成")
+                  && !dialog->findChild<QProgressBar *>("monitorDiagnosisProgress")->isVisibleTo(dialog),
+                  "real QProcess completion updates the report state without polling");
+            if (!alwaysEmpty)
+                check(dialog->findChild<QPlainTextEdit *>("monitorDiagnosisText")->toPlainText()==monitor.m_aiText
+                      && monitor.m_aiCompletedAt.isValid(), "successful retry displays the complete fallback text and completion time");
+            check(QJsonDocument::fromJson(dialog->findChild<QPlainTextEdit *>("monitorDiagnosisTelemetry")->toPlainText().toUtf8())
+                  == QJsonDocument::fromJson(monitor.m_aiRequestTelemetry.toUtf8()), "open report retains exactly the sent telemetry during recovery");
             check(monitor.m_aiRequestKey.isEmpty() && !monitor.m_aiAuthFile, "completed request releases credential snapshot and header file");
+            dialog->close(); QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete); settle(20);
         }
         qputenv("PATH",originalPath);qunsetenv("MONITOR_FIXTURE_CALLS");qunsetenv("MONITOR_FIXTURE_EMPTY");
         return failures ? 1 : 0;
+    }
+
+    static void runMaterialView() {
+        QSettings settings;
+        settings.setValue("systemMonitor/autoStart", false);
+        settings.setValue("smartSpace/autoStart", false);
+        for (const auto *key : {"clock", "activity", "music", "calendar"})
+            settings.setValue(QString("desklets/%1/autoStart").arg(key), false);
+        settings.sync();
+        const QString config = qEnvironmentVariable("XDG_CONFIG_HOME")+"/kyfences";
+        QDir().mkpath(config);
+        const QString path=config+"/diagnosis-wallpaper.png";
+        QImage brightWallpaper(QSize(1440,900),QImage::Format_RGB32);
+        brightWallpaper.fill(Qt::white); brightWallpaper.save(path);
+        QFile layout(config+"/layout.json"); layout.open(QIODevice::WriteOnly);
+        layout.write(QJsonDocument(QJsonObject{{"wallpaperPath",path},{"wallpaperMode",2},{"fences",QJsonArray()}}).toJson()); layout.close();
+        DesktopCanvas canvas; canvas.showAndActivate();
+        QElapsedTimer time; time.start();
+        while (!canvas.isVisible() && time.elapsed()<5000) settle(20);
+        check(canvas.isVisible(), "material fixture loads an isolated wallpaper");
+        SystemMonitor monitor(&canvas); monitor.m_timer.stop(); monitor.setSkin(SystemMonitor::Skin::Liquid);
+        monitor.m_aiText="液态诊断只读预览"; monitor.showAiDetailsDialog();
+        auto *dialog=qobject_cast<MonitorDiagnosisDialog *>(monitor.m_aiDetailsDialog.data());
+        time.restart(); while (dialog->property("materialBuilds").toInt()==0 && time.elapsed()<5000) settle(20);
+        check(dialog->property("materialBuilds").toInt()==1, "diagnosis liquid panel prepares the actual wallpaper asynchronously");
+        const QImage preview=dialog->grab().toImage();
+        auto *scope=dialog->findChild<QLabel *>("monitorDiagnosisScope");
+        auto *notice=dialog->findChild<QLabel *>("monitorDiagnosisNotice");
+        const qreal dpr=dialog->devicePixelRatioF();
+        check(preview.pixelColor(qRound((scope->geometry().right()-2)*dpr),qRound(scope->geometry().center().y()*dpr)).lightness()<100
+              && preview.pixelColor(qRound((notice->geometry().right()-2)*dpr),qRound(notice->geometry().center().y()*dpr)).lightness()<100,
+              "liquid header and footer retain contrast over a white wallpaper");
+        preview.save(QString("artifacts/monitor-liquid-%1.png").arg(dpr));
+        dialog->move(dialog->pos()+QPoint(10,10)); dialog->resize(dialog->size()-QSize(30,20));
+        monitor.refreshAiDetailsDialogIfOpen(); settle(50); dialog->grab();
+        check(dialog->property("materialBuilds").toInt()==1, "moving, resizing and refreshing reuse the cached material");
+        dialog->close(); QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete); settle(20);
+        monitor.showAiDetailsDialog();
+        QPointer<QDialog> pending=monitor.m_aiDetailsDialog;
+        pending->close(); QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete); settle(150);
+        check(pending.isNull(), "closing during asynchronous material preparation safely drops delivery");
     }
 };

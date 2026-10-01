@@ -56,10 +56,6 @@
 #include <QThread>
 #include <QTimer>
 #include <QToolTip>
-#include <QTextEdit>
-#include <QTabWidget>
-#include <QTabBar>
-#include <QStyleFactory>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 
@@ -1558,7 +1554,7 @@ void SystemMonitor::runCredentialJob(const QString &operation, const QString &ke
         if (!success && !m_credentialWritePending)
             m_aiError = QStringLiteral("系统密钥环操作失败：旧凭据保持不变；新输入的密钥仅在本次运行有效，请解锁密钥环后重试。");
         job->deleteLater();
-        update();
+        update(); refreshAiDetailsDialogIfOpen();
         if (m_credentialWritePending) {
             const QString pending = m_pendingCredential;
             m_credentialWritePending = false;
@@ -1799,7 +1795,10 @@ QByteArray SystemMonitor::buildDiagnosisPayload() const
         "overall_status（健康/关注/异常）、summary（2到4句）、"
         "sampling_scope（字符串）、resource_assessment（字符串数组）、"
         "bottlenecks、evidence、immediate_actions、long_term_actions、"
-        "risk_notes；这些项均为字符串数组。immediate_actions只表示下一步建议，不表示自动动作。"
+        "risk_notes；这些项均为字符串数组。另包含command_suggestions（最多3个对象，"
+        "每个对象包含command、explanation、conditions、risk字符串；无命令时为空数组）。"
+        "命令只写在command_suggestions中，其作用、适用条件与风险不得省略。"
+        "immediate_actions只表示下一步建议，不表示自动动作。"
         "每个数组最多3项，总体控制在1800个中文字符以内；命令与风险说明不能省略。"
         "不得建议清理缓存、强杀关键系统进程或盲目修改内核参数。")
         .arg(scopePrompt);
@@ -1887,48 +1886,11 @@ QString SystemMonitor::localHealthAssessment() const
 
 QString SystemMonitor::formatDiagnosisJson(const QJsonObject &result) const
 {
-    const QString status =
-        result.value(QStringLiteral("overall_status")).toString(
-            QStringLiteral("未知"));
-    const QString summary =
-        result.value(QStringLiteral("summary")).toString().trimmed();
-    const auto section = [](const QString &title, const QStringList &items) {
-        if (items.isEmpty())
-            return QString();
-        QStringList lines;
-        lines << title;
-        for (const QString &item : items)
-            lines << QStringLiteral("• ") + item;
-        return lines.join(QLatin1Char('\n'));
-    };
-
     QStringList blocks;
-    if (m_hasDiagnosisTarget) {
-        blocks << QStringLiteral("进程深度诊断：%1（PID %2）")
-                      .arg(m_diagnosisTarget.name)
-                      .arg(m_diagnosisTarget.pid);
-    }
+    if (m_hasDiagnosisTarget)
+        blocks << QStringLiteral("进程深度诊断：%1（PID %2）").arg(m_diagnosisTarget.name).arg(m_diagnosisTarget.pid);
     blocks << QStringLiteral("本地评级：%1").arg(localHealthAssessment());
-    blocks << QStringLiteral("整体状态：%1").arg(status);
-    const QString scope = result.value(QStringLiteral("sampling_scope")).toString().trimmed();
-    if (!scope.isEmpty()) blocks << QStringLiteral("采样对象与范围：%1").arg(scope);
-    if (!summary.isEmpty())
-        blocks << summary;
-    blocks << section(QStringLiteral("资源占用判断"),
-                      jsonStringList(result.value(QStringLiteral("resource_assessment"))));
-    blocks << section(QStringLiteral("主要瓶颈"),
-                      jsonStringList(result.value(QStringLiteral("bottlenecks"))));
-    blocks << section(QStringLiteral("判断依据"),
-                      jsonStringList(result.value(QStringLiteral("evidence"))));
-    blocks << section(QStringLiteral("下一步建议（需自行确认）"),
-                      jsonStringList(result.value(
-                          QStringLiteral("immediate_actions"))));
-    blocks << section(QStringLiteral("长期建议"),
-                      jsonStringList(result.value(
-                          QStringLiteral("long_term_actions"))));
-    blocks << section(QStringLiteral("风险提示"),
-                      jsonStringList(result.value(QStringLiteral("risk_notes"))));
-    blocks.removeAll(QString());
+    blocks << MonitorDiagnosisReport::fromJson(result).toPlainText();
     blocks << QStringLiteral("温馨提示：本窗口只提供建议，不执行任何操作。涉及结束进程时，请再次确认进程身份、保存工作、确认影响，再自行决定是否手动执行。");
     return compactAiText(blocks.join(QStringLiteral("\n\n")), 0);
 }
@@ -2032,102 +1994,64 @@ void SystemMonitor::showAiDetailsDialog()
 {
     LiquidPopup::hideText();
     if (m_aiDetailsDialog) {
-        m_aiDetailsDialog->showNormal();
-        m_aiDetailsDialog->raise();
-        m_aiDetailsDialog->activateWindow();
+        m_aiDetailsDialog->showNormal(); m_aiDetailsDialog->raise(); m_aiDetailsDialog->activateWindow();
         return;
     }
-    auto *dialog = new QDialog(this, Qt::Window | Qt::WindowStaysOnTopHint);
+    auto *dialog = new MonitorDiagnosisDialog(this, qobject_cast<DesktopCanvas *>(parentWidget()));
     m_aiDetailsDialog = dialog;
-    dialog->setObjectName(QStringLiteral("monitorDiagnosisDetails"));
-    dialog->setWindowTitle(QStringLiteral("完整诊断 · 只读建议"));
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setSizeGripEnabled(true);
-    const Palette colors = paletteForSkin();
-    QPalette palette = dialog->palette();
-    QColor background = colors.panel;
-    background.setAlpha(255);
-    palette.setColor(QPalette::Window, background);
-    palette.setColor(QPalette::Base, background);
-    palette.setColor(QPalette::Text, colors.text);
-    palette.setColor(QPalette::WindowText, colors.text);
-    palette.setColor(QPalette::ButtonText, colors.text);
-    dialog->setPalette(palette);
-    dialog->setStyleSheet(QStringLiteral(
-        "QLabel { color: %2; background: transparent; }"
-        "QTabWidget::pane { border: 1px solid %1; border-radius: 8px; }"
-        "QTabBar::tab { color: %2; background: %3; padding: 9px 18px; margin-right: 4px; border-radius: 6px; }"
-        "QTabBar::tab:selected { color: %2; background: %4; border-bottom: 2px solid %5; }"
-        "QTextEdit { color: %2; background: %3; border: none; padding: 8px; }"
-        "QPushButton { color: %2; background: %4; border: 1px solid %1; border-radius: 6px; padding: 7px 16px; }"
-        "QPushButton:hover { border-color: %5; }"
-        "QScrollBar:vertical { background: %3; width: 10px; margin: 0; }"
-        "QScrollBar::handle:vertical { background: %1; min-height: 24px; border-radius: 4px; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-        "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }")
-        .arg(colors.border.name(), colors.text.name(), background.name(), colors.card.name(), colors.cpu.name()));
-    auto *layout = new QVBoxLayout(dialog);
-    auto *scope = new QLabel(dialog);
-    scope->setTextFormat(Qt::PlainText);
-    scope->setWordWrap(true);
-    layout->addWidget(scope);
-    auto *tabs = new QTabWidget(dialog);
-    auto *tabStyle = QStyleFactory::create(QStringLiteral("Fusion"));
-    tabStyle->setParent(dialog);
-    tabs->setStyle(tabStyle);
-    tabs->tabBar()->setStyle(tabStyle);
-    auto *result = new QTextEdit(tabs);
-    result->setObjectName(QStringLiteral("monitorDiagnosisText"));
-    result->setReadOnly(true);
-    auto *sample = new QTextEdit(tabs);
-    sample->setReadOnly(true);
-    sample->setObjectName(QStringLiteral("monitorDiagnosisTelemetry"));
-    tabs->addTab(result, QStringLiteral("完整诊断"));
-    tabs->addTab(sample, QStringLiteral("采样数据"));
-    layout->addWidget(tabs, 1);
-    auto *notice = new QLabel(QStringLiteral("仅供参考，不执行任何操作。结束进程前请再三确认：进程身份正确、工作已保存、影响已了解。"), dialog);
-    notice->setWordWrap(true);
-    layout->addWidget(notice);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
-    buttons->button(QDialogButtonBox::Close)->setText(QStringLiteral("关闭"));
-    buttons->button(QDialogButtonBox::Close)->setIcon(QIcon());
-    auto *copy = buttons->addButton(QStringLiteral("复制当前页"), QDialogButtonBox::ActionRole);
-    copy->setObjectName(QStringLiteral("monitorCopyDiagnosis"));
-    connect(copy, &QPushButton::clicked, dialog, [tabs, result, sample] {
-        QApplication::clipboard()->setText(tabs->currentIndex() == 0
-            ? result->toPlainText() : sample->toPlainText());
-    });
-    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
-    layout->addWidget(buttons);
-    auto refresh = [this, scope, result, sample] {
-        scope->setText(QStringLiteral("%1 · 模型：%2")
-            .arg(m_hasDiagnosisTarget ? QStringLiteral("进程 %1（PID %2）").arg(m_diagnosisTarget.name).arg(m_diagnosisTarget.pid)
-                                     : QStringLiteral("整机健康诊断"),
-                 m_aiRequestModel.isEmpty() ? m_apiModel : m_aiRequestModel));
-        const QString text = m_aiBusy
-            ? (m_aiProgressText.isEmpty() ? QStringLiteral("正在分析遥测数据…") : m_aiProgressText)
-            : !m_aiError.isEmpty() ? m_aiError
-            : m_aiText.isEmpty() ? QStringLiteral("暂无诊断结果。请返回组件启动一次诊断。") : m_aiText;
-        // Preserve selection and scroll position while the result is unchanged.
-        if (result->toPlainText() != text) result->setPlainText(text);
-        const QString telemetry = m_diagnosisSamplesTaken > 0
-            ? QString::fromUtf8(QJsonDocument::fromJson((m_aiRequestTelemetry.isEmpty()
-                ? diagnosticTelemetry() : m_aiRequestTelemetry).toUtf8()).toJson(QJsonDocument::Indented))
-            : QStringLiteral("暂无有效诊断采样数据。");
-        if (sample->toPlainText() != telemetry) sample->setPlainText(telemetry);
-    };
-    auto *timer = new QTimer(dialog);
-    connect(timer, &QTimer::timeout, dialog, refresh);
-    timer->start(500);
-    refresh();
+    connect(dialog, &MonitorDiagnosisDialog::settingsRequested, this, &SystemMonitor::showSettingsDialog);
+    connect(this, &SystemMonitor::appearanceChanged, dialog, [this] { refreshAiDetailsDialogIfOpen(); });
+    refreshAiDetailsDialogIfOpen();
     QScreen *screen = QGuiApplication::screenAt(mapToGlobal(rect().center()));
     if (!screen) screen = QApplication::primaryScreen();
     const QRect available = screen ? screen->availableGeometry() : QRect(0, 0, 1280, 800);
-    dialog->resize(qMin(900, available.width() - 40), qMin(680, available.height() - 40));
+    dialog->resize(qMin(980, available.width() - 40), qMin(740, available.height() - 40));
     dialog->move(available.center() - dialog->rect().center());
-    dialog->show();
-    dialog->raise();
-    dialog->activateWindow();
+    dialog->show(); dialog->raise(); dialog->activateWindow();
+}
+
+void SystemMonitor::refreshAiDetailsDialogIfOpen()
+{
+    auto *dialog = qobject_cast<MonitorDiagnosisDialog *>(m_aiDetailsDialog.data());
+    if (!dialog) return;
+    const auto colors = paletteForSkin();
+    dialog->setColors({colors.panel, colors.card, colors.border, colors.text, colors.muted, colors.cpu},
+        m_skin == Skin::Liquid || m_skin == Skin::Glass);
+    const QString source = !m_aiRequestTelemetry.isEmpty() ? m_aiRequestTelemetry
+        : m_diagnosisSamplesTaken > 0 ? diagnosticTelemetry() : QString();
+    if (source != m_aiTelemetrySource) {
+        m_aiTelemetrySource = source;
+        m_aiTelemetryPretty = source.isEmpty() ? QString()
+            : QString::fromUtf8(QJsonDocument::fromJson(source.toUtf8()).toJson(QJsonDocument::Indented));
+    }
+    MonitorDiagnosisSnapshot view;
+    view.report = m_aiReport; view.text = m_aiText; view.error = m_aiError; view.progress = m_aiProgressText;
+    view.scope = m_hasDiagnosisTarget ? QStringLiteral("进程 %1（PID %2）").arg(m_diagnosisTarget.name).arg(m_diagnosisTarget.pid)
+        : QStringLiteral("整机健康诊断");
+    view.model = m_aiRequestModel.isEmpty() ? m_apiModel : m_aiRequestModel;
+    view.localRating = localHealthAssessment(); view.started = m_aiStartedAt; view.completed = m_aiCompletedAt;
+    view.samples = m_diagnosisSamplesTaken; view.total = DIAGNOSIS_SAMPLE_COUNT;
+    view.busy = m_aiBusy; view.sampling = m_diagnosisSampling;
+    view.telemetry = m_aiTelemetryPretty; view.telemetryFrozen = !m_aiRequestTelemetry.isEmpty();
+    if (m_hasDiagnosisTarget) {
+        view.targetState = m_diagnosisTargetExited ? QStringLiteral("目标在采样期间退出或身份变化，保留已有采样")
+            : m_diagnosisSampling ? (m_diagnosisTargetDetails.valid ? QStringLiteral("正在采样，启动身份一致") : QStringLiteral("正在核验目标身份"))
+            : m_diagnosisSamplesTaken == 0 ? QStringLiteral("尚未采样目标进程")
+            : QStringLiteral("进程状态仅代表本次采样，执行任何建议前须重新核对身份");
+    }
+    dialog->setSnapshot(view);
+}
+
+void SystemMonitor::clearDiagnosisDisplay()
+{
+    m_aiText.clear(); m_aiReasoning.clear(); m_aiError.clear(); m_aiReport = {};
+    if (!m_aiBusy) {
+        m_aiRequestTelemetry.clear(); m_aiRequestModel.clear(); m_aiTelemetrySource.clear(); m_aiTelemetryPretty.clear();
+        m_aiStartedAt = {}; m_aiCompletedAt = {}; m_diagnosisSamplesTaken = 0;
+        m_aiProgressText.clear();
+        m_hasDiagnosisTarget = false; m_diagnosisTargetExited = false;
+    }
+    updateAiLayoutHeight(); update(); refreshAiDetailsDialogIfOpen();
 }
 
 QUrl SystemMonitor::modelsEndpoint(const QString &endpoint)
@@ -2464,9 +2388,13 @@ void SystemMonitor::beginDiagnosis(const ProcessInfo *targetProcess)
         return;
 
     if (m_apiKey.trimmed().isEmpty()) {
+        clearDiagnosisDisplay();
+        m_hasDiagnosisTarget = targetProcess != nullptr;
+        m_diagnosisTarget = targetProcess ? *targetProcess : ProcessInfo{};
+        m_diagnosisTargetDetails = {};
         m_aiError = QStringLiteral("未配置 API Key。请先在设置中输入 DeepSeek API Key。");
         updateAiLayoutHeight();
-        update();
+        update(); refreshAiDetailsDialogIfOpen();
         return;
     }
 
@@ -2481,6 +2409,8 @@ void SystemMonitor::beginDiagnosis(const ProcessInfo *targetProcess)
     m_aiRequestEndpoint.clear();
     m_aiRequestKey.clear();
     m_aiRetryCount = 0;
+    m_aiReport = {}; m_aiTelemetrySource.clear(); m_aiTelemetryPretty.clear();
+    m_aiStartedAt = QDateTime::currentDateTime(); m_aiCompletedAt = {};
     m_aiText.clear();
     m_aiReasoning.clear();
     m_aiError.clear();
@@ -2512,7 +2442,7 @@ void SystemMonitor::beginDiagnosis(const ProcessInfo *targetProcess)
     m_diagnosisSamplesTaken = 0;
     m_diagnosisPrevCpu = {}; m_diagnosisPrevDiskIo = {};
     ++m_diagnosisRevision;
-    updateAiLayoutHeight(); update();
+    updateAiLayoutHeight(); update(); refreshAiDetailsDialogIfOpen();
     m_diagnosisTimer.start();
     collectDiagnosisSample();
 }
@@ -2538,12 +2468,13 @@ void SystemMonitor::collectDiagnosisSample()
                 if (m_hasDiagnosisTarget && (!sample.details.valid || sample.details.startTicks != m_diagnosisTarget.startTicks)) {
                     m_aiBusy = false; m_diagnosisSampling = false; m_diagnosisTimer.stop();
                     m_aiError = "目标进程已退出或 PID 已变化，请刷新后重试。";
-                    updateAiLayoutHeight(); update(); return;
+                    updateAiLayoutHeight(); update(); refreshAiDetailsDialogIfOpen(); return;
                 }
                 m_diagnosisPrevCpu = sample.cpu; m_diagnosisPrevDiskIo = sample.io;
                 m_diagnosisPrevProcTicks = sample.ticks; m_diagnosisTargetDetails = sample.details;
                 m_diagnosisTargetPreviousReadBytes = sample.details.readBytes;
                 m_diagnosisTargetPreviousWriteBytes = sample.details.writeBytes;
+                refreshAiDetailsDialogIfOpen();
                 return;
             }
             applyDiagnosisSample(sample);
@@ -2697,7 +2628,7 @@ void SystemMonitor::applyDiagnosisSample(const Sample &sample)
             .arg(m_diagnosisIowaitSamples.value(
                      m_diagnosisIowaitSamples.size() - 1), 0, 'f', 1);
     }
-    update();
+    update(); refreshAiDetailsDialogIfOpen();
 
     if (m_diagnosisSamplesTaken >= DIAGNOSIS_SAMPLE_COUNT) {
         m_diagnosisTimer.stop();
@@ -2727,11 +2658,12 @@ void SystemMonitor::sendDiagnosisRequest()
 
     if (m_aiRetryCount > 0)
         m_aiProgressText = QStringLiteral("上次未生成完整正文，正在补取一次诊断结果…");
+    refreshAiDetailsDialogIfOpen();
     const QUrl endpoint(m_aiRequestEndpoint);
     if (!endpoint.isValid() || endpoint.scheme() != "https" || endpoint.host().isEmpty() || !endpoint.userInfo().isEmpty()) {
         m_aiError = QStringLiteral("AI 诊断地址必须使用有效的 HTTPS URL，且不能包含用户名或密码。");
         m_aiRequestKey.clear();
-        m_aiBusy = false; m_aiProgressText.clear(); updateAiLayoutHeight(); update(); return;
+        m_aiBusy = false; m_aiProgressText.clear(); updateAiLayoutHeight(); update(); refreshAiDetailsDialogIfOpen(); return;
     }
     if (!prepareAiAuthHeader()) {
         m_aiError = QStringLiteral("无法创建受保护的临时认证头。");
@@ -2739,7 +2671,7 @@ void SystemMonitor::sendDiagnosisRequest()
         m_aiBusy = false;
         m_aiProgressText.clear();
         updateAiLayoutHeight();
-        update();
+        update(); refreshAiDetailsDialogIfOpen();
         return;
     }
     m_curl = new QProcess(this);
@@ -2788,7 +2720,7 @@ void SystemMonitor::sendDiagnosisRequest()
         m_aiRequestKey.clear();
         m_aiBusy = false; m_aiProgressText.clear(); request->deleteLater(); m_curl = nullptr;
         delete m_aiAuthFile; m_aiAuthFile = nullptr;
-        updateAiLayoutHeight(); update();
+        updateAiLayoutHeight(); update(); refreshAiDetailsDialogIfOpen();
     });
     request->start(QStringLiteral("curl"), arguments);
 }
@@ -2826,6 +2758,7 @@ void SystemMonitor::finishDiagnosis(int exitCode)
         m_aiBusy = false;
         m_diagnosisSampling = false;
         m_aiProgressText.clear();
+        refreshAiDetailsDialogIfOpen();
         return;
     }
 
@@ -2858,7 +2791,7 @@ void SystemMonitor::finishDiagnosis(int exitCode)
             m_aiError = QStringLiteral("网络错误或 API 服务无法访问，请检查 Endpoint 与 API Key。");
         }
         updateAiLayoutHeight();
-        update();
+        update(); refreshAiDetailsDialogIfOpen();
         return;
     }
 
@@ -2870,13 +2803,14 @@ void SystemMonitor::finishDiagnosis(int exitCode)
         m_aiRequestKey.clear();
     }
     updateAiLayoutHeight();
-    update();
+    update(); refreshAiDetailsDialogIfOpen();
 }
 
 bool SystemMonitor::consumeDiagnosisResponse(const QByteArray &output)
 {
     m_aiError.clear();
     m_aiText.clear();
+    m_aiReport = {}; m_aiCompletedAt = {};
     QJsonParseError err;
     const QJsonDocument doc = QJsonDocument::fromJson(output, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) {
@@ -2942,6 +2876,8 @@ bool SystemMonitor::consumeDiagnosisResponse(const QByteArray &output)
                 ? QStringLiteral("模型只返回了思考内容，补取一次后仍无诊断正文；请更换支持直接回答的模型后重试。")
                 : QStringLiteral("服务两次均未返回有效诊断正文，请检查模型与服务状态后重试；没有执行任何操作。");
     } else {
+        if (contentDocument.isObject()) m_aiReport = MonitorDiagnosisReport::fromJson(contentDocument.object());
+        m_aiCompletedAt = QDateTime::currentDateTime();
         m_aiText = contentDocument.isObject() ? formatDiagnosisJson(contentDocument.object())
             : QStringLiteral("%1\n\n%2\n\n温馨提示：本窗口只提供建议，不执行任何操作。结束进程前请核实身份、保存工作并确认影响。")
                 .arg(localHealthAssessment(), compactAiText(content, 0));
@@ -3014,11 +2950,7 @@ void SystemMonitor::mousePressEvent(QMouseEvent *event)
             return;
         }
         if (m_aiClearRect.contains(logicalPos)) {
-            m_aiText.clear();
-            m_aiReasoning.clear();
-            m_aiError.clear();
-            updateAiLayoutHeight();
-            update();
+            clearDiagnosisDisplay();
             event->accept();
             return;
         }

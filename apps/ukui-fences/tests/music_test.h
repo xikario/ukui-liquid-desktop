@@ -1,11 +1,12 @@
 #include "music_fixture.h"
 #include "MusicDesklet.h"
-#include "StrawberryPlayer.h"
+#include "MprisPlayer.h"
 #include "DesktopIcon.h"
 #include <QSlider>
 #include <QPushButton>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include "music_multi_test.h"
 static int runMusicTest(const QString &root){
     QSettings settings;settings.setValue("smartSpace/autoStart",false);settings.setValue("systemMonitor/autoStart",false);
     settings.setValue("desklets/clock/autoStart",false);settings.setValue("desklets/activity/autoStart",false);settings.sync();
@@ -102,5 +103,5 @@ static int runMusicTest(const QString &root){
         check(card && card->isVisible() && card->pos()==QPoint(0,0),"host restart restores music startup and exact placement");
     }
     bus.unregisterService(name);bus.unregisterObject(object);
-    return failures?1:0;
+    return runMusicMultiTest(root);
 }

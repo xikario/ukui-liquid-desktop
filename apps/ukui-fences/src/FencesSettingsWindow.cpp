@@ -5,7 +5,8 @@
 #include "SystemMonitor.h"
 #include "CalendarDesklet.h"
 #include "MusicDesklet.h"
-#include "StrawberryPlayer.h"
+#include "MprisPlayer.h"
+#include "MusicClientsSettings.h"
 #include "ActivityRecorder.h"
 #include "FenceWidget.h"
 #include "LiquidOpticsRenderer.h"
@@ -56,7 +57,7 @@ struct Page { const char *id; const char *name; };
 const Page pages[] = {{"appearance","液态外观"},{"wallpaper","壁纸与配色"},
     {"icons","图标与文字"},{"layout","分区与布局"},{"widgets","桌面小组件"},
     {"smart","    智能空间"},{"monitor","    系统监视"},{"clock","    时钟与倒计时"},
-    {"activity","    活动统计"},{"music","    Strawberry 音乐"},{"calendar","    日历与待办"},
+    {"activity","    活动统计"},{"music","    音乐播放器"},{"calendar","    日历与待办"},
     {"sync","文件同步"},{"help","帮助与维护"}};
 QPushButton *button(QVBoxLayout *layout, const QString &text, const std::function<void()> &fn,
                     const QString &id = {}) {
@@ -128,7 +129,7 @@ FencesSettingsWindow::FencesSettingsWindow(DesktopCanvas *canvas)
         QPushButton:hover { background:rgba(119,215,209,65); }
         QPushButton:pressed { background:rgba(90,190,185,95); }
         QPushButton:disabled { color:#758598; }
-        QLineEdit,QSpinBox,QComboBox,QListWidget,QTextEdit,QTextBrowser { background:rgba(12,22,38,180); color:#edf5ff; border:1px solid rgba(225,245,255,42); border-radius:7px; padding:5px; selection-background-color:#367f86; }
+        QLineEdit,QSpinBox,QComboBox,QListWidget,QTextEdit,QPlainTextEdit,QTextBrowser { background:rgba(12,22,38,180); color:#edf5ff; border:1px solid rgba(225,245,255,42); border-radius:7px; padding:5px; selection-background-color:#367f86; }
         QComboBox QAbstractItemView { background:#243749; color:#edf5ff; }
         QComboBox { padding-right:26px; }
         QComboBox::drop-down { width:24px; border:0; background:transparent; }
@@ -272,6 +273,7 @@ void FencesSettingsWindow::attachForm(QVBoxLayout *layout,QWidget *form) {
         if(auto *apply=box->button(QDialogButtonBox::Apply)){apply->setText("应用");apply->setIcon(QIcon());}
         if(auto *restore=box->button(QDialogButtonBox::RestoreDefaults)){restore->setText("恢复默认");restore->setIcon(QIcon());}
     }
+    if(form->property("settingsManagesDraft").toBool())return;
     auto dirty=[form]{form->setProperty("settingsDirty",true);};
     for(auto *c:form->findChildren<QCheckBox *>())connect(c,&QCheckBox::toggled,form,dirty);
     for(auto *c:form->findChildren<QComboBox *>())connect(c,QOverload<int>::of(&QComboBox::currentIndexChanged),form,dirty);
@@ -407,8 +409,12 @@ QWidget *FencesSettingsWindow::buildPage(const QString &id) {
         connect(recording,&QCheckBox::toggled,page,[this](bool on){if(auto *r=m_canvas->findChild<ActivityRecorder *>())r->setRecording(on);else QSettings().setValue("desklets/activity/recording",on);});
         hint(c,"只统计前台应用停留时间，锁屏、暂停及没有前台窗口时不累计应用时间。");
     } else if(id=="music") {
-        auto *c=card(layout,"Strawberry 音乐");hint(c,"通过 MPRIS 控制 Strawberry。播放、音量和进度保留在音乐组件中，液态材质沿用公共模块。");
-        button(c,"打开 Strawberry",[this]{if(auto *music=m_canvas->findChild<MusicDesklet *>())music->player()->openPlayer();else QProcess::startDetached("strawberry",QStringList());});
+        auto *c=card(layout,"音乐客户端与自动接入");
+        auto *editor=new MusicClientsSettings(page);
+        connect(editor,&MusicClientsSettings::configurationApplied,page,[this]{
+            if(auto *music=m_canvas->findChild<MusicDesklet *>())music->player()->reloadConfiguration();
+        });
+        attachForm(c,editor);
     } else if(id=="clock") {
         hint(card(layout,"时钟与倒计时"),"时钟跟随系统时间。倒计时的时长、开始、暂停和取消保留在组件本体中；显示与自启动在“桌面小组件”统一设置。");
     } else if(id=="help") {
