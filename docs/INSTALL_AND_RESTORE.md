@@ -1,49 +1,83 @@
-# 安装与恢复
+# 安装、登录启动与恢复
 
-构建与发布不自动启用组件。以下命令会改变用户安装状态，应在自己决定启用时执行。桌面现有实例不自动切换到新二进制；退出旧实例后再启动，避免单实例总线或锁占用。
+[项目主页](../README.md) · [构建依赖](BUILD.md)
 
-## Fences 与全部小组件
+所有命令默认从**仓库根目录**执行。主桌面组件安装到用户目录，不需要 sudo；构建不会自动安装或重启。已有单实例仍使用旧二进制，升级时先保存工作与设置草稿、正常退出，再重新启动。
+
+## Fences 与六类小组件
+
+### 安装和启动
 
 ```sh
 sh apps/ukui-fences/packaging/install-user.sh
+~/.local/bin/ukui-fences-launcher --autostart
 ```
 
-默认使用 `apps/ukui-fences/build`，安装到 `~/.local`，并建立 Fences 用户自启动。请确保会话 PATH 包含 `~/.local/bin`。自定义构建目录可作为脚本第一个参数。
+脚本默认使用 `apps/ukui-fences/build`，可将其他构建目录作为第一个参数；安装前缀默认 `~/.local`，可用 `UKUI_FENCES_USER_PREFIX` 更改。脚本安装程序、启动器、预览及索引/知识库/日历资源，写入用户应用菜单入口和 `~/.config/autostart/ukui-fences.desktop`。会话 PATH 应包含对应安装前缀的 bin 目录。
 
-完整安装同时包含液态预览程序、索引/知识库脚本、日历脚本、农历模块和 2026 节假日 JSON。组件各自的显示、自启动、布局通过 Fences 右键菜单管理。
+六类小组件是否随 Fences 启动由 **Fences 设置 → 桌面小组件**分别控制。显示开关与自启动开关独立；音乐不会主动启动播放器，智能空间打开不自动扫描。配置与布局路径见 [Fences 首页](../apps/ukui-fences/README.md#启动器与配置路径)。
 
-回退：先用 `~/.local/bin/ukui-fences-launcher --quit` 退出，关闭或移除用户的 Fences 自启动项；系统 Peony 桌面保留。升级前若已有版本，请自行备份安装文件及布局/配置；该安装脚本不保存历史二进制。
+### 升级和回退
+
+安装脚本不保存历史二进制，也不是跨文件的事务安装器。升级前备份已有程序及资源、`~/.config/kylin/ukui-fences.ini`、`~/.config/kyfences/layout.json`；需要保留知识库/统计时另备份用户数据。布局导出不备份桌面文件或其他数据。
+
+正常退出旧实例：
+
+```sh
+~/.local/bin/ukui-fences-launcher --quit
+```
+
+退出后安装并重新启动。临时切回原桌面可用 `--hide`，Fences 进程仍保留；完全恢复系统桌面则退出并禁用/移除 Fences 自启动项。回退旧版本需恢复自己的二进制/资源备份，系统 Peony 桌面没有被替换。
 
 ## 开始菜单 V2
 
+### 安装和启用
+
 ```sh
 cmake --install apps/ukui-kaishicaidan-v2/build-v2 --prefix "$HOME/.local"
+~/.local/bin/ukui-kaishicaidan-launcher --autostart
 ```
 
-安装二进制、启动器与菜单入口，**不会自动注册自启动或替换 D-Bus 服务文件**。`~/.local/bin/ukui-kaishicaidan-launcher` 可手动启动；自动启动可用桌面环境的启动应用设置选择这个完整路径，并加参数 `--autostart`。`packaging/ukui-kaishicaidan-autostart.desktop` 为 PATH 启动模板；会话需能找到 `ukui-kaishicaidan-launcher`。
+首次启动保持隐藏，点击系统开始按钮或短按 Win 键显示。首次启动就显示可直接用 `~/.local/bin/ukui-kaishicaidan-v2 --show`；包装器 `--show` 只操作已有实例，不启动缺失实例。
 
-程序运行时占用 `org.ukui.kaishicaidan.v2` 并尝试兼容 `org.ukui.menu`，创建 Win 键监听与开始按钮覆盖层。其他已注册该总线名称的菜单程序可能冲突。
+CMake 安装二进制、启动器与应用菜单入口，**不自动注册登录启动，不替换 D-Bus 服务文件**。在桌面环境的启动应用设置中添加启动器完整路径及 `--autostart`；仓库 `packaging/ukui-kaishicaidan-autostart.desktop` 是依赖 PATH 的模板，不会自动安装启用。
 
-回退：退出 V2，移除自己建立的启动项，恢复原菜单启动方式。当前 XRecord 线程退出仍有已知挂起情况；可使用进程管理器结束确认属于 V2 的进程。不要泛用 killall 终止整个桌面。
+主服务为 `org.ukui.kaishicaidan.v2`，兼容别名 `org.ukui.menu` 仅在可注册时取得；不要假定原系统菜单退出或别名一定可用。
+
+### 恢复
+
+```sh
+~/.local/bin/ukui-kaishicaidan-launcher --quit
+```
+
+正常退出覆盖层与 Win 键监听，移除自己建立的登录启动项，恢复原菜单启动方式。历史文档中的 XRecord 退出挂起已修复，不再作为日常退出流程。更多控制参数见 [开始菜单首页](../apps/ukui-kaishicaidan-v2/README.md#启动隐藏和退出)。
 
 ## 系统任务栏液态主题
 
-完成默认 `apps/ukui-panel-liquid/build` 构建后：
+### 安装和切换
 
 ```sh
 python3 apps/ukui-panel-liquid/scripts/install.py
+~/.local/bin/ukui-panel-liquid-session
 ```
 
-脚本备份现有用户配置/覆盖文件到该模块的 `releases/<时间>/`，安装 Qt 插件和独立登录检查入口。不会替换 `/usr/bin/ukui-panel`，不会立即停止现有面板。下一次登录由 session-start 检查原面板是否已加载插件并在需要时切换；OEM 会话接口不同可能需要调整。
+需先完成默认构建目录 `apps/ukui-panel-liquid/build` 的构建。安装器备份全部受管目标到本模块 `releases/<时间>-<随机后缀>/`，安装用户插件、包装器、恢复工具和两个自启动入口。它不替换 `/usr/bin/ukui-panel`，不立即停止当前面板。
 
-恢复原系统启动方式：
+session 入口显式切换当前面板，登录时也执行一次检查：已加载则退出，否则通过会话管理器正常停止旧实例再启动包装器。带互斥、等待上限和失败回退；OEM 会话接口不同需另行验证。不要同时启动第二个面板实例。
+
+### 关闭或恢复
+
+只关闭效果：任务栏右键 → **外观与特效**取消液态主题。撤销自启动并立即启动原面板：
 
 ```sh
 ~/.local/bin/ukui-panel-liquid-restore --restart
 ```
 
-恢复脚本撤销本项目标记的自启动覆盖并启动原面板；它不自动还原安装前的所有自定义用户覆盖。需要原有定制文件时从 `releases/` 备份恢复。只想关闭效果可在面板菜单关闭液态主题。
+不加 `--restart` 仅撤销受管入口。不会自动还原安装前所有自定义覆盖，需从 `before.json` 对应备份恢复；也不会删除全部插件、包装器或备份。可捕获的安装失败会回滚，强制中止造成的半状态仍可能需要手工恢复。详见 [任务栏首页](../apps/ukui-panel-liquid/README.md)。
 
-## 可选 FTG340 策略
+## 独立可选模块
 
-独立参见 `extras/ukui-desktop-performance/README.md`。仅适用于匹配的 FTG340 和 simple_ondemand 驱动，涉及管理员权限、电源策略和可能的空闲功耗增加，不随主应用自动安装。
+- [系统应用模糊兼容](../integration/peony/README.md)：需要 X11、Python Xlib 和用户 systemd；安装会立即启用用户服务并处理目标窗口属性，停用后重开窗口恢复其原模糊请求。
+- [FTG340 策略](../extras/ukui-desktop-performance/README.md)：管理员安装，明确传入 `600000` 或 `800000`；会写系统服务/规则和匹配驱动参数，不随任何主应用安装，也不适用于其他显卡。
+
+不使用可选模块不影响三个主应用的构建与安装。

@@ -1,188 +1,88 @@
-# ukui-kaishicaidan — UKUI 开始菜单透明覆盖层
+# 开始菜单 V2 · ukui-kaishicaidan
 
-当前为 V2 液态主线。开始按钮通过 X11 面板事件更新位置，面板退出时隐藏、重新出现时跟随恢复；背景与玻璃控件采用 NextKde shader 的 Qt5 适配。历史验证记录在 V2_TEST.md。
+面向 UKUI X11 的独立开始菜单。透明覆盖层放在系统开始按钮上方，保留原按钮外观；点击按钮或短按 Win 键打开菜单。它不替换系统面板二进制或原 ukui-menu 插件。
 
-## 产品概述
+本组件属于仓库 v0.5.1 发布集合，程序自身版本仍为 0.1.0。
 
-**ukui-kaishicaidan**（UKUI 开始菜单）是一款为 **UKUI 桌面环境**（银河麒麟桌面操作系统）设计的开始菜单替代方案。它采用创新的**透明覆盖层**架构——不替换原生的 `ukui-menu` 面板插件，而是作为一个独立无边框窗口悬浮在开始按钮上方，提供现代化、视觉增强的开始菜单体验。
+[项目主页](../../README.md) · [构建](../../docs/BUILD.md) · [安装与恢复](../../docs/INSTALL_AND_RESTORE.md)
 
-### 架构设计
+## 构建和试用
 
-- 通过 X11 检测 UKUI 面板位置（查找 `_NET_WM_WINDOW_TYPE_DOCK` 且 `WM_CLASS` 为 `ukui-panel` 的窗口）
-- 在原生开始按钮上方创建一个完全透明的覆盖层小部件
-- 用户点击或按 Win 键时，在按钮上方弹出增强型开始菜单
-- 原生开始按钮保持完全可见——透明覆盖层仅仅叠加在其上方
+从**仓库根目录**执行：
 
----
-
-## 核心功能
-
-### 1. 开始菜单面板
-
-| 特性 | 描述 |
-|---|---|
-| **面板尺寸** | 680×720px，带左侧导航栏和主内容区 |
-| **玻璃态设计** | 磨砂玻璃背景 + 边缘高光效果 |
-| **6 种主题皮肤** | 深色、浅色、赛博、玻璃、壁纸色、极简液态（Eco Liquid） |
-| **自绘引擎** | 所有按钮、图标、头像和电源符号均通过 QPainter 手绘，无外部图片资源 |
-| **流畅动画** | QVariantAnimation 实现悬停效果（150ms OutCubic 缓动），显示时淡入/上滑动画（QPropertyAnimation） |
-
-### 2. 固定应用网格
-
-- **6 列网格**展示固定/收藏的应用程序
-- **拖拽重排**：支持拖拽调整固定应用顺序，带可视化的拖放目标指示器
-- **右键菜单**：固定/取消固定、打开、打开文件位置、修改图标、卸载
-- **安装来源查询**：独立于卸载影响预检查；一个后台查询加一个最新菜单请求，连续换目标或重开同一应用会自动完成当前菜单的查询。已关闭菜单不接收结果，查询结束不改变菜单尺寸
-
-### 3. 全部应用视图
-
-- 在"固定应用"和"全部应用"视图间切换
-- **三种排序方式**：按字母序、按安装时间、按最近使用
-- 返回按钮（箭头）返回固定应用视图
-
-### 4. 应用搜索
-
-- **实时搜索**：输入时自动过滤，140ms 防抖
-- **多字段匹配**：按应用名称、描述（Comment）和执行命令搜索
-- **一键启动**：回车直接启动第一个搜索结果
-
-### 5. 最近文件
-
-| 功能 | 描述 |
-|---|---|
-| **数据来源** | `~/.local/share/recently-used.xbel`（XDG 标准格式） |
-| **显示信息** | 文件名、距离现在的时间、MIME 类型 |
-| **更多按钮** | 切换到按应用分组的最近使用视图 |
-
-### 6. 左侧导航栏
-
-| 按钮 | 功能 |
-|---|---|
-| **头像按钮** | 通过 AccountsService（D-Bus `org.freedesktop.Accounts`）获取用户头像，点击打开账户设置 |
-| **文档按钮** | 打开文档文件夹 |
-| **设置按钮** | 右键菜单：系统设置、关于麒麟、开始菜单设置 |
-| **电源按钮** | 完整电源菜单：锁定屏幕、挂起、休眠、混合睡眠、注销、重启、关机 |
-| **悬停提示** | 带箭头指示的悬浮工具提示 |
-
-### 7. 全局快捷键（Win 键）
-
-- **XRecord 扩展**：通过 libXtst 的 XRecord 扩展全局拦截 Super_L / Super_R 键
-- **智能判断**：仅响应**短按**（< 400ms 且无其他键同时按下）
-- **组合键穿透**：Super+E 等组合键正常穿透，应用仅拦截裸 Win 键
-- **双显示连接**：控制连接和数据连接分离，确保录制的实时性
-
-### 8. 单实例 D-Bus
-
-- **主服务**：`org.ukui.kaishicaidan.v2`
-- **兼容别名**：同时注册 `org.ukui.menu` 兼容端口
-- **命令参数**：`--toggle`（默认）、`--show`、`--hide`、`--quit`
-
-### 9. 活动窗口追踪
-
-- 每 1.2 秒轮询 `_NET_ACTIVE_WINDOW`
-- 通过 WM_CLASS、进程名和执行令牌匹配识别用户当前使用的应用
-- 记录应用启动时间，用于"最近使用"排序
-
-### 10. 自动关闭逻辑
-
-- **双重机制**：X11 ActivationChange 事件 + 轮询定时器
-- 轮询定时器通过读取 X11 指针按钮状态检测用户是否在菜单外点击
-- 开始按钮周围的缓冲区域防止闪烁误关
-
-### 11. 卸载支持
-
-- **用户级应用**：直接删除 `~/.local/share/applications/` 中的 `.desktop` 文件
-- **系统级应用**：通过 `dpkg -S` 查找包名，调用 `pkexec apt-get purge` 在终端中卸载
-
-### 12. 设置对话框
-
-| 设置项 | 选项 |
-|---|---|
-| 皮肤选择 | 深色 / 浅色 / 赛博 / 玻璃 / 壁纸色 |
-| 字体族 | 系统全部字体（QFontComboBox） |
-| 字号 | 9–22pt |
-| 面板透明度 | 0% / 30% / 50% / 70% / 100% |
-| 恢复默认 | 一键重置所有设置为初始值 |
-
-### 13. 自动应用发现
-
-- 使用 `QFileSystemWatcher` 监控应用目录变化
-- 扫描范围：XDG 数据目录、Flatpak、Snap、`~/Desktop`、`~/桌面`、`~/应用/*/usr/share/applications/`
-
----
-
-## 技术栈
-
-| 层次 | 技术 |
-|---|---|
-| UI 框架 | Qt 5（Core / Gui / Widgets / DBus） |
-| 窗口管理 | libX11（Xlib 直接调用） |
-| 键盘拦截 | libXtst（XRecord 扩展） |
-| 构建系统 | CMake ≥ 3.16，AUTOMOC |
-| 编程语言 | C++17 |
-| 显示协议 | X11（`_NET_WM` 规范） |
-
----
-
-## 项目结构
-
-```
-ukui-kaishicaidan/
-├── CMakeLists.txt              # CMake 构建配置
-├── packaging/
-│   ├── ukui-kaishicaidan-launcher        # Shell 启动器（D-Bus 单例）
-│   ├── ukui-kaishicaidan.desktop         # 桌面入口文件
-│   └── ukui-kaishicaidan-autostart.desktop  # XDG 自动启动（5 秒延迟）
-├── src/
-│   ├── main.cpp                # 入口点、D-Bus 单例
-│   ├── StartMenu.h/.cpp        # 开始菜单面板核心 (~2600 行)
-│   ├── StartButton.h/.cpp      # 透明覆盖层按钮
-│   ├── StartMenuTheme.h        # 主题/皮肤系统、调色板、配置存储
-│   ├── AppRegistry.h/.cpp      # 应用发现、固定/最近管理
-│   ├── RecentFiles.h/.cpp      # 最近文件追踪（读取 XBEL）
-│   ├── KeyInterceptor.h/.cpp   # 全局 Win 键拦截（XRecord）
-│   ├── TaskbarDetector.h/.cpp  # 任务栏位置检测（X11）
-│   └── SettingsDialog.h/.cpp   # 设置对话框
-├── os.tsx                      # React/TS 设计原型（非构建代码）
-└── UI美化.md                   # UI 美化设计文档
+```sh
+cmake -S apps/ukui-kaishicaidan-v2 -B apps/ukui-kaishicaidan-v2/build-v2 -DCMAKE_BUILD_TYPE=Release -DBUILD_GLASS_TESTS=ON
+cmake --build apps/ukui-kaishicaidan-v2/build-v2 -j2
+./apps/ukui-kaishicaidan-v2/run-v2.sh
 ```
 
-## 依赖项
+开发脚本以 `--show` 启动菜单，不安装或登记自启动。直接运行二进制且不带参数时，首次启动保持隐藏，等待开始按钮或 Win 键触发。
 
-| 依赖 | 类型 | 用途 |
-|---|---|---|
-| Qt 5（Core, Gui, Widgets, DBus） | 构建时链接 | UI 框架 |
-| libX11 | 构建时链接 | X11 窗口属性、活动窗口追踪 |
-| libXtst | 构建时链接 | XRecord 扩展（全局键盘钩子） |
-| pkexec / apt-get / dpkg | 运行时 | 应用卸载 |
-| systemctl | 运行时 | 挂起/休眠/重启/关机 |
-| gsettings | 运行时 | 壁纸路径读取 |
-| gtk-launch | 运行时 | 从 .desktop 文件启动应用 |
-| gdbus | 运行时 | 启动器脚本中的 D-Bus 通信 |
+用户安装：
 
----
+```sh
+cmake --install apps/ukui-kaishicaidan-v2/build-v2 --prefix "$HOME/.local"
+```
 
-## 技术亮点
+安装不会自动登记登录启动或替换系统 D-Bus 服务文件。可在桌面环境的启动应用设置中添加 `~/.local/bin/ukui-kaishicaidan-launcher --autostart` 的完整路径。
 
-- **零侵入覆盖层**：不修改、不替换原生 `ukui-menu`，通过透明窗口覆盖实现功能增强
-- **XRecord 键盘拦截**：使用 XRecord 扩展而非 XGrabKey，实现全局 Win 键捕获同时允许组合键正常穿透
-- **全自绘 UI**：所有视觉元素使用 QPainter 手绘，无任何外部图片依赖，支持动态主题切换
-- **壁纸取色皮肤**：实时分析当前壁纸主色调，动态生成配色方案
-- **多桌面环境兼容**：主要针对 UKUI，同时具备对 MATE 和 GNOME 的部分回退支持
+## 日常操作
 
----
+| 入口 | 用法 |
+| --- | --- |
+| 开始按钮 / 裸 Win 键 | 显示或隐藏菜单；Win 组合键继续交给系统 |
+| 固定应用 | 点击启动，拖动调整顺序；图标右键固定/取消固定、打开目录、修改图标或按来源移除 |
+| 全部应用 | 查看完整应用列表；可按字母、安装时间或最近使用排序，返回固定应用视图 |
+| 搜索框 | 输入名称、描述或执行命令相关文字；Enter 启动第一个匹配项 |
+| 最近文件 | 读取当前用户的 XDG 最近文件记录，打开文件；“更多”进入按应用分组视图 |
+| 左侧文档与头像 | 打开文档目录或账户设置，头像可由 AccountsService 提供 |
+| 左侧剪贴板 | 查看当前会话的文本/图片历史，点击重新复制；最多保留 20 项，菜单展示最近 10 项，可清空 |
+| 左侧主题 / 设置 | 主题按钮切换皮肤；设置按钮菜单进入系统设置、关于麒麟或开始菜单设置 |
+| 电源菜单 | 锁屏、睡眠、休眠、混合睡眠、注销、重启、关机；可用性依赖系统服务与权限 |
 
-## 构建与安装
+单独短按 Super_L / Super_R 才触发菜单；长按或组合键不触发。菜单外点击会收起菜单。开始按钮覆盖层通过 X11 面板事件跟随位置，面板退出时隐藏，重新出现时恢复。
 
-在完整仓库中构建，命令见 [根 README](../../README.md)。CMake 提供显式用户级安装规则，构建不启用自启动。启动/恢复见 [安装说明](../../docs/INSTALL_AND_RESTORE.md)。
+应用目录变化会重新扫描，支持 XDG 应用目录、Flatpak、Snap 及用户便携应用入口。发现应用不代表支持自动卸载所有来源。剪贴板历史仅存在于当前进程，不写入历史文件；最近应用与最近文件则使用本地记录。
 
+## 应用右键与卸载边界
 
-## 共享液态材质（2026-09-29）
+右键时先显示 **正在检查安装来源…**，后台查询结束后给出对应操作。连续换目标只保留最新排队请求；已关闭菜单不接收结果，文字变化不会改变菜单尺寸。
 
-“生态液态”皮肤默认使用 `shared/liquid-glass` 的 Snell 折射、高光及原分辨率材质；按钮和胶囊复用同一公共渲染器的控件模式。此前常驻开始菜单默认选择简化 CPU 材质，旧 GPU 路径还将大画面降低到 0.67 比例后放大，因此与 Fences/音乐小组件的细节不同。
+| 识别来源 | 实际操作 |
+| --- | --- |
+| 可确认的用户便携应用目录 | 确认后使用 `gio trash` 将对应应用目录送入回收站；成功后清理用户入口与固定项 |
+| 仅用户快捷方式 | 只移除对应 `.desktop` 入口，不删除程序文件 |
+| DEB 包 | 查找所属包并模拟移除影响；受保护的系统/桌面包被阻止；确认后使用 pkexec 授权执行 `apt-get remove`，保留配置文件 |
+| Flatpak、Snap、未知来源 | 显示不支持自动卸载或无法确认的说明，需用对应应用管理工具 |
 
-主体保留扩散以保证背景文字不干扰菜单；增强边缘光学，不把整张背景锐化。仍然只在显式打开且隐藏时采样背景，相同截图不重建，控件材质有 8 MiB 有界缓存。未实现后方窗口实时折射或与任务栏参数跨应用联动。
+源码不会通过 `purge` 清理包配置，也不把所有用户 `.desktop` 都当作应用本体。操作前查看确认窗口中的目标路径、包名和影响；来源查询本身不会删除内容。
 
-启动时在隐藏状态执行一次 64×64 合成图预热，准备主体和控件着色器；不采集桌面、不显示合成图，也没有新增循环。硬件首次编译仍可能耗时；这一步将成本前移，不能保证所有设备第一次点击都零延迟。GPU 不可用时保留 CPU 回退；`KAISHICAIDAN_GLASS_FAST=1` 可明确选择旧的低成本路径，`KAISHICAIDAN_GLASS_NO_GL=1` 也会跳过预热并禁用开始菜单 GPU 材质。原 `KAISHICAIDAN_GLASS_HQ` 不再需要。
+## 皮肤与外观
 
-验证及本机安装记录见 [材质升级记录](../../docs/MATERIAL_CONTROLS_20260929.md)。
+支持深色、浅色、赛博、玻璃、壁纸色和生态液态（Eco Liquid）六种皮肤；开始菜单设置可调整字体、字号、不透明度并恢复默认。应用图标和头像使用系统/用户资源，控件与电源符号主要由 QPainter 绘制。
+
+生态液态使用 [公共光学材质](../../shared/liquid-glass/README.md)，打开时取背景快照，按钮和胶囊复用缓存。不会逐帧截图，也不与任务栏参数实时同步。GPU 不可用时使用 CPU 回退；`KAISHICAIDAN_GLASS_NO_GL=1` 禁用该组件的 GPU 材质，`KAISHICAIDAN_GLASS_FAST=1` 选择旧低成本路径。预热会前移首次 shader 编译成本，但不承诺所有硬件首次打开零延迟。
+
+## 启动、隐藏和退出
+
+安装后的启动器与直接运行二进制有不同的首次启动行为：
+
+| 启动器命令 | 行为 |
+| --- | --- |
+| `~/.local/bin/ukui-kaishicaidan-launcher` | 已运行则切换菜单；未运行则启动驻留进程，首次仍隐藏 |
+| `~/.local/bin/ukui-kaishicaidan-launcher --autostart` | 启动驻留进程；已运行则隐藏菜单 |
+| `~/.local/bin/ukui-kaishicaidan-launcher --show` | 显示已有实例；没有实例时不启动程序 |
+| `~/.local/bin/ukui-kaishicaidan-launcher --hide` | 隐藏已有菜单，进程保留 |
+| `~/.local/bin/ukui-kaishicaidan-launcher --quit` | 正常退出已有实例，包括 Win 键监听及覆盖层 |
+
+要首次启动就显示，可直接运行 `~/.local/bin/ukui-kaishicaidan-v2 --show`。恢复系统菜单时先用启动器 `--quit` 退出，再移除自己添加的自启动项。
+
+主会话总线名称为 `org.ukui.kaishicaidan.v2`，对象 `/ukuiKaishicaidanV2`；同时尝试注册兼容别名 `org.ukui.menu`。别名已被系统菜单占用时不保证取得该名称，主服务仍可用。
+
+## 配置、依赖与开发文档
+
+配置位于 `~/.config/ukui-kaishicaidan-v2/`：`settings.conf` 保存外观，`pinned.conf` 保存固定应用，`recent-apps.conf` 保存最近应用。最近文件来自 `~/.local/share/recently-used.xbel`。XDG 环境变量会影响用户目录。
+
+构建需要 Qt 5、X11、Xtst 和 OpenGL 开发环境；运行集成按需使用 gdbus、gtk-launch、gsettings、GIO、dpkg-query、apt-get、pkexec 及系统电源服务。完整 Wayland 支持尚未实现。
+
+[历史 UI 设计](UI美化.md) · [历史 V2 验证](V2_TEST.md) · [右键菜单尺寸修复](../../docs/LAUNCHER_CONTEXT_MENU_RESIZE_20260930.md) · [安装来源查询整改](../../docs/REVIEW_ROUND2_FIXES_20261001.md) · [来源与许可](../../THIRD_PARTY_NOTICES.md)

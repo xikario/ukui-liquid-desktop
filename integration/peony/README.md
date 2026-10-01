@@ -1,36 +1,50 @@
-# UKUI 系统应用魔壶动画的模糊兼容处理
+# UKUI 系统应用模糊兼容
 
-在本机 UKUI KWin OEM 版本中，Peony 普通窗口请求整窗模糊。魔壶变形时，整块矩形模糊缓存仍留在原位置。真实 Peony 最小化/恢复录像确认：清除 `_KDE_NET_WM_BLUR_BEHIND_REGION` 后，矩形消失而魔壶继续正常变形。
+可选的用户服务，针对部分 OEM KWin 中魔壶动画后残留的矩形模糊区域，清除指定应用普通窗口的 `_KDE_NET_WM_BLUR_BEHIND_REGION` 请求。不会修改 KWin / Peony 二进制，也不调整 GPU 频率。
 
-```sh
-python3 integration/peony/install-user.py
-```
+[项目主页](../../README.md) · [安装与恢复](../../docs/INSTALL_AND_RESTORE.md)
 
-安装为用户服务 `ukui-peony-blur-compat.service`，随 `graphical-session.target` 启动。保留原服务名与安装路径，复用同一个进程。仅处理以下已确认受影响应用的普通窗口（X11 WM_CLASS 第一段精确匹配）：
+## 范围与取舍
+
+仅处理 X11 WM_CLASS 第一段精确匹配的以下应用，且只处理普通窗口：
 
 | 应用 | WM_CLASS |
 | --- | --- |
 | 文件管理器 | `peony` |
 | 软件商店 | `kylin-software-center` |
-| 设置 | `ukui-control-center` |
+| 系统设置 | `ukui-control-center` |
 | 麒麟管家 | `kylin-os-manager` |
 
-不按 `ukui-*` / `kylin-*` 通配，避免误改 Fences、开始菜单及其他液态表面；不处理桌面、任务栏、弹出菜单类型。通过 X11 PropertyNotify 和客户端列表事件处理现有及新窗口，无定时轮询。窗口销毁竞态会被忽略。
+不按 ukui/kylin 通配，不处理桌面、任务栏和弹出菜单。通过窗口/属性事件处理现有与新窗口，不定时轮询，忽略窗口销毁竞态。
 
-**效果取舍：** 以上应用的普通窗口不再使用 KWin 背景模糊，透明区域仍可透出下层；其魔壶、圆角不变。其他应用、桌面小组件的液态与模糊不受影响。此兼容处理没有修改系统 KWin 或 Peony 安装文件，也没有改 GPU 频率。系统升级修复原问题后可停用。
+效果取舍是这些普通窗口不再使用 KWin 背景模糊，透明区域仍可透出下层；魔壶、圆角和其他窗口的模糊不由本服务关闭。只在目标 OEM 存在该问题时需要启用，系统修复后可停用。
 
-回滚：`systemctl --user disable --now ukui-peony-blur-compat.service`，随后重新打开受影响应用窗口，让其重新申请模糊。服务安装脚本不会开启或关闭系统全局特效。
+## 安装与停用
 
-验证：`python3 integration/peony/test_blur_compat.py`。本机还向实际 Peony 窗口重新写入空模糊属性，200ms 后确认被清除；这覆盖应用再次申请属性的路径。未执行整机重启。
+需要 X11 会话、Python 3、Python Xlib（发行版包通常为 python3-xlib）及可用的用户 systemd。在**仓库根目录**执行：
 
+```sh
+python3 integration/peony/install-user.py
+systemctl --user status ukui-peony-blur-compat.service
+```
 
-## 2026-09-29 扩展验证
+安装器把脚本复制到 `~/.local/libexec/ukui-liquid-desktop/peony-blur-compat.py`，写用户服务，导入 DISPLAY/XAUTHORITY，并立即启用/重启。登录后随 graphical-session.target 运行。该动作会处理当前目标窗口的模糊请求，不是仅复制文件。
 
-软件商店、设置、麒麟管家的实际窗口都带有空 `_KDE_NET_WM_BLUR_BEHIND_REGION` 属性，即整窗模糊请求。复用 Peony 已验证的清除路径，安装后核对三个应用和 Peony 当前窗口均已清除；用 Xlib 对实际窗口重新写入空属性后，事件服务再次自动清除。
+停用并取消自启动：
 
-- `python3 integration/peony/test_blur_compat.py`：应用范围与窗口类型单元测试通过。
-- `xvfb-run -a python3 integration/peony/test_blur_compat_x11.py`：现有/新建窗口、反复请求、延迟设置 WM_CLASS/窗口类型、销毁竞态及非目标表面保留模糊全部通过。
-- 服务 active/enabled，复用原自启动单元；没有新增定时轮询。安装后内存约 4.8 MiB，2 秒空闲采样未观察到 CPU tick 增长；不是长期资源基准。
-- 本轮确认了实际窗口属性生效，没有录制三个应用新的最小化过程或执行整机重启。
+```sh
+systemctl --user disable --now ukui-peony-blur-compat.service
+```
 
-备份：`~/.local/state/ukui-liquid-desktop/system-blur-compat-20260929-184459`；安装哈希和实机验证记录：`system-blur-compat-installed.json`。
+随后重新打开目标应用窗口，让应用重新申请原模糊属性；停服务本身不会重新写回之前清除的属性。需要移除安装文件时，在停用后自行删除对应用户服务和脚本，并运行 `systemctl --user daemon-reload`。
+
+## 隔离检查与历史证据
+
+```sh
+python3 integration/peony/test_blur_compat.py
+xvfb-run -a python3 integration/peony/test_blur_compat_x11.py
+```
+
+单元测试核对目标范围与窗口类型；X11 测试验证现有/新窗口、重复申请、延迟属性、销毁竞态和非目标表面保留模糊，不改个人桌面窗口。
+
+2026-09-29 的实机记录确认四个目标应用的属性清除与再次申请后的自动清除；Peony 的最小化/恢复观察确认矩形残留消失。该结果不等于其他 OEM 或全部应用动画均已验证，也没有为该轮执行整机重启。更多背景见 [交互修复记录](../../docs/SMART_SPACE_INTERACTION_REVIEW.md)。
