@@ -1432,6 +1432,22 @@ void FenceWidget::drawSnapGuides(QPainter &p)
     p.restore();
 }
 
+void FenceWidget::prepareGlassCache()
+{
+    if (!m_liquidGlassEnabled) return;
+    const QPainterPath bgPath = fenceShapePath();
+    const bool shaped = m_magneticEdge != MagneticEdge::None && m_magneticContour.size() >= 2;
+    if (m_glassImage.isNull() || m_glassGeometry != geometry() || m_glassShape != bgPath) {
+        if (auto *canvas = qobject_cast<DesktopCanvas *>(parentWidget())) {
+            m_glassImage = canvas->renderLiquidGlass(
+                geometry(), 10.0, shaped ? bgPath : QPainterPath());
+            setProperty("glassBuilds", property("glassBuilds").toInt() + 1);
+            m_glassGeometry = geometry();
+            m_glassShape = bgPath;
+        }
+    }
+}
+
 void FenceWidget::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
@@ -1458,15 +1474,7 @@ void FenceWidget::paintEvent(QPaintEvent *)
     bool glass = m_liquidGlassEnabled;
     const bool shaped = m_magneticEdge != MagneticEdge::None && m_magneticContour.size() >= 2;
     if (glass) {
-        if (m_glassImage.isNull() || m_glassGeometry != geometry() || m_glassShape != bgPath) {
-            if (auto *canvas = qobject_cast<DesktopCanvas *>(parentWidget())) {
-                m_glassImage = canvas->renderLiquidGlass(
-                    geometry(), 10.0, shaped ? bgPath : QPainterPath());
-                setProperty("glassBuilds", property("glassBuilds").toInt() + 1);
-                m_glassGeometry = geometry();
-                m_glassShape = bgPath;
-            }
-        }
+        prepareGlassCache();
         glass = !m_glassImage.isNull();
     }
     if (glass) {

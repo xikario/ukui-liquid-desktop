@@ -102,6 +102,7 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    void prepareGlassCache();
     enum class SortMode {
         Name,
         Type,

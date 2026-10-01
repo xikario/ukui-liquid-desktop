@@ -61,6 +61,7 @@ struct SmartSpaceEntry {
 class SmartSpaceWidget : public QWidget
 {
     Q_OBJECT
+    friend class SmartSpaceStartupTestAccess;
 public:
     explicit SmartSpaceWidget(bool fenceEmbedded = false,
                               QWidget *parent = nullptr);
@@ -160,6 +161,16 @@ private:
     void launchIndexer(bool fastFull, bool ocrBackfill = false);
     void stopIdleFullIndex();
     bool loadIndex();
+    struct IndexSnapshot {
+        QVector<SmartSpaceEntry> entries;
+        QString statusPrefix, statusSuffix, error;
+        bool valid = false;
+    };
+    static IndexSnapshot readIndexSnapshot(const QString &canonicalPath, const QString &streamFilename,
+        const QString &ocrPath, const QString &resumePath, const QStringList &excludedFolders, int maxItems);
+    bool applyIndexSnapshot(IndexSnapshot snapshot);
+    void loadIndexAsync();
+    quint64 m_indexLoadRevision = 0;
     void handleIndexerOutput();
     void finishIndexing(int exitCode, int exitStatus);
     void rebuildWatches();

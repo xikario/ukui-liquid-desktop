@@ -9,6 +9,7 @@
 #include <QPoint>
 #include <QSet>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QString>
 #include <QStringList>
 #include <QFont>
@@ -316,6 +317,10 @@ private:
     QPixmap             m_wallpaper;
     bool m_glassPreparing = false;
     bool m_initialWallpaperReady = false;
+    QElapsedTimer m_startupElapsed;
+    void traceStartup(const char *phase) const;
+    void prepareFenceGlass();
+    void finishInitialWallpaper();
     bool m_wallpaperLoading = false;
     bool m_wallpaperReloadPending = false;
     QList<QProcess *>   m_wallpaperMonitors;

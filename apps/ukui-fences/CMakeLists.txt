@@ -301,6 +301,11 @@ if(TARGET fence-glass-test)
             ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --startup-wallpaper-only)
     set_tests_properties(desktop_startup_wallpaper PROPERTIES TIMEOUT 30
         ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1" LABELS "integration;ui;wallpaper")
+    add_test(NAME smart_space_startup_async
+        COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
+            ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --smart-space-startup-only)
+    set_tests_properties(smart_space_startup_async PROPERTIES TIMEOUT 30
+        ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1" LABELS "integration;ui;async")
     target_link_libraries(fence-glass-test PRIVATE ukui-liquid-popup)
     target_include_directories(fence-glass-test PRIVATE "${UKUI_LIQUID_POPUP_ROOT}/tests")
 endif()

@@ -74,11 +74,14 @@ static int runDesktopRefreshTest(const QString &root)
     check(wallpaperChanges == 0, "unchanged refresh retains wallpaper materials");
     if (!loose || !fenced) return 1;
 
-    // Refresh itself must not add a flash to an unchanged icon.
+    // A brief flash confirms refresh without replacing or hiding the icon.
+    settle(180);
     const QImage stable = loose->grab().toImage();
     QKeyEvent f5(QEvent::KeyPress, Qt::Key_F5, Qt::NoModifier);
     QApplication::sendEvent(&canvas, &f5); settle(50);
-    check(stable == loose->grab().toImage(), "F5 adds no artificial icon flash");
+    check(stable != loose->grab().toImage(), "F5 gives visible refresh feedback on the existing icon");
+    settle(200);
+    check(stable == loose->grab().toImage(), "refresh feedback ends without changing icon appearance or selection");
     entry(loosePath, "Loose after"); entry(fencePath, "Fence after");
     QApplication::sendEvent(&canvas, &f5); settle(200);
     check(loose && loose->item().displayName == "Loose after" && loose->isSelected()

@@ -12,6 +12,17 @@ target_include_directories(ukui-liquid-optics PUBLIC src PRIVATE ${UKUI_LIQUID_G
 target_link_libraries(ukui-liquid-optics PUBLIC Qt5::Gui Qt5::Widgets Threads::Threads)
 
 if(BUILD_TESTING)
+    add_executable(liquid-renderer-sharing-test tests/renderer_sharing_test.cpp)
+    target_link_libraries(liquid-renderer-sharing-test PRIVATE ukui-liquid-optics)
+    add_test(NAME liquid-renderer-sharing-cpu COMMAND liquid-renderer-sharing-test)
+    set_tests_properties(liquid-renderer-sharing-cpu PROPERTIES TIMEOUT 15
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;UKUI_LIQUID_GLASS_NO_GL=1")
+    find_program(LIQUID_OPTICS_XVFB_RUN xvfb-run)
+    if(LIQUID_OPTICS_XVFB_RUN)
+        add_test(NAME liquid-renderer-sharing-gpu
+            COMMAND ${LIQUID_OPTICS_XVFB_RUN} -a $<TARGET_FILE:liquid-renderer-sharing-test> --gpu)
+        set_tests_properties(liquid-renderer-sharing-gpu PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
+    endif()
     add_executable(liquid-preparation-test tests/preparation_test.cpp)
     target_link_libraries(liquid-preparation-test PRIVATE ukui-liquid-optics)
     add_test(NAME liquid-preparation COMMAND liquid-preparation-test)

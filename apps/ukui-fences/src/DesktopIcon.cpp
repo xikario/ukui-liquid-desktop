@@ -365,6 +365,13 @@ DesktopIcon::DesktopIcon(const DesktopItem &item, QWidget *parent)
     connect(&m_renameTimer, &QTimer::timeout,
             this, [this] { startInlineRename(); });
 
+    m_refreshFeedback.setDuration(180);
+    m_refreshFeedback.setStartValue(0.0);
+    m_refreshFeedback.setKeyValueAt(0.22, 1.0);
+    m_refreshFeedback.setEndValue(0.0);
+    connect(&m_refreshFeedback, &QVariantAnimation::valueChanged,
+            this, [this] { update(); });
+
 }
 
 DesktopIcon::~DesktopIcon()
@@ -769,9 +776,21 @@ void DesktopIcon::paintEvent(QPaintEvent *)
     p.setPen(textColor);
     p.drawText(textRect, flags, m_item.displayName);
 
+    if (m_refreshFeedback.state() == QAbstractAnimation::Running) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(255, 255, 255, qRound(90 * m_refreshFeedback.currentValue().toReal())));
+        p.drawRoundedRect(rect(), 8, 8);
+    }
+
 }
 
 // ── 鼠标事件 ─────────────────────────────────────────────
+
+void DesktopIcon::triggerRefreshFeedback()
+{
+    m_refreshFeedback.stop();
+    m_refreshFeedback.start();
+}
 
 void DesktopIcon::enterEvent(QEvent *) { m_hovered = true; m_folderHoverTimer.start(); update(); }
 void DesktopIcon::leaveEvent(QEvent *) { m_hovered = false; m_folderHoverTimer.stop(); update(); }

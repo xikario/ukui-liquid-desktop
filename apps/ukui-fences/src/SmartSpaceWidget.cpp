@@ -1,3 +1,4 @@
+#include "../../../shared/async-work/BackgroundTask.h"
 #include <QDBusPendingCall>
 #include "LiquidPopup.h"
 #include "SmartSpaceWidget.h"
@@ -943,7 +944,7 @@ SmartSpaceWidget::SmartSpaceWidget(bool fenceEmbedded, QWidget *parent)
     });
 
     if (QFileInfo::exists(indexPath())) {
-        loadIndex();
+        loadIndexAsync();
     } else {
         rebuildWatches();
         m_statusLabel->setText(QStringLiteral(
@@ -3532,11 +3533,19 @@ void SmartSpaceWidget::finishIndexing(int exitCode, int exitStatus)
         QTimer::singleShot(100, this, &SmartSpaceWidget::startIndexing);
 }
 
-bool SmartSpaceWidget::loadIndex()
+SmartSpaceWidget::IndexSnapshot SmartSpaceWidget::readIndexSnapshot(
+    const QString &canonicalPath, const QString &streamFilename, const QString &ocrPath,
+    const QString &resumePath, const QStringList &excludedFolders, int maxItems)
 {
+    IndexSnapshot snapshot;
+    auto pathExcluded = [&excludedFolders](const QString &path) {
+        for (const QString &folder : excludedFolders)
+            if (pathIsInside(path, folder)) return true;
+        return false;
+    };
     QJsonObject root;
     QVector<SmartSpaceEntry> loaded;
-    auto appendEntry = [this, &loaded](const QJsonObject &object) {
+    auto appendEntry = [&loaded, &pathExcluded](const QJsonObject &object) {
         SmartSpaceEntry entry;
         entry.path = normalizedPath(object.value(QStringLiteral("path")).toString());
         entry.root = normalizedPath(object.value(QStringLiteral("root")).toString());
@@ -3564,9 +3573,9 @@ bool SmartSpaceWidget::loadIndex()
 
     bool loadedFromStream = false;
     QString streamFailure;
-    const QByteArray streamPath = QFile::encodeName(uiStreamIndexPath());
-    const QFileInfo streamInfo(uiStreamIndexPath());
-    const QFileInfo canonicalInfo(indexPath());
+    const QByteArray streamPath = QFile::encodeName(streamFilename);
+    const QFileInfo streamInfo(streamFilename);
+    const QFileInfo canonicalInfo(canonicalPath);
     const bool streamIsCurrent = streamInfo.exists() &&
         (!canonicalInfo.exists() ||
          streamInfo.lastModified() >= canonicalInfo.lastModified());
@@ -3719,10 +3728,10 @@ bool SmartSpaceWidget::loadIndex()
     }
 
     if (!loadedFromStream) {
-        QFile file(indexPath());
+        QFile file(canonicalPath);
         if (!file.open(QIODevice::ReadOnly)) {
-            m_statusLabel->setText(QStringLiteral("无法读取索引文件，请检查文件权限"));
-            return false;
+            snapshot.error = QStringLiteral("无法读取索引文件，请检查文件权限");
+            return snapshot;
         }
         QJsonParseError error;
         const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
@@ -3730,10 +3739,8 @@ bool SmartSpaceWidget::loadIndex()
             const QString detail = streamFailure.isEmpty()
                 ? error.errorString()
                 : QStringLiteral("%1；%2").arg(error.errorString(), streamFailure);
-            m_statusLabel->setText(QStringLiteral(
-                "索引加载失败（%1）· 索引文件保持不变")
-                .arg(detail));
-            return false;
+            snapshot.error = QStringLiteral("索引加载失败（%1）· 索引文件保持不变").arg(detail);
+            return snapshot;
         }
         root = document.object();
         const QJsonArray items = root.value(QStringLiteral("items")).toArray();
@@ -3741,13 +3748,6 @@ bool SmartSpaceWidget::loadIndex()
         for (const QJsonValue &value : items)
             appendEntry(value.toObject());
     }
-
-    m_entries.clear();
-    m_entries.squeeze();
-    m_entries = std::move(loaded);
-
-    updateResults(true);
-    rebuildWatches();
 
     const QString generated = root.value(QStringLiteral("generatedAt")).toString();
     const int errorCount = root.value(QStringLiteral("errors")).toArray().size();
@@ -3759,7 +3759,7 @@ bool SmartSpaceWidget::loadIndex()
     // The published fast-full snapshot keeps the original OCR candidate count.
     // While an OCR backfill is paused, the append-only resume journal contains
     // the newer per-file states, so use its latest state for the status bar.
-    QFile ocrResume(ocrResumeIndexPath());
+    QFile ocrResume(ocrPath);
     if (ocrResume.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QHash<QString, bool> pendingByPath;
         bool resumeMatchesSnapshot = false;
@@ -3798,7 +3798,7 @@ bool SmartSpaceWidget::loadIndex()
     }
     if (pendingOcr < 0) {
         pendingOcr = 0;
-        for (const SmartSpaceEntry &entry : m_entries) {
+        for (const SmartSpaceEntry &entry : loaded) {
             if (entry.ocrStatus == QLatin1String("pending"))
                 ++pendingOcr;
         }
@@ -3810,7 +3810,7 @@ bool SmartSpaceWidget::loadIndex()
     const int snapshotLimit = capabilities.value(
         QStringLiteral("maxItems")).toInt();
     const bool fullResumePending = !fullRebuild && QFileInfo::exists(
-        resumeIndexPath());
+        resumePath);
     const QDateTime generatedTime = QDateTime::fromString(generated, Qt::ISODateWithMs);
     const QString displayTime = generatedTime.isValid()
         ? generatedTime.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
@@ -3826,27 +3826,75 @@ bool SmartSpaceWidget::loadIndex()
         ? QStringLiteral(" · 全量无文件数上限")
         : (truncated
             ? QStringLiteral(" · 已达日常上限 %1").arg(
-                  snapshotLimit > 0 ? snapshotLimit : m_maxItems)
+                  snapshotLimit > 0 ? snapshotLimit : maxItems)
             : QString());
     const QString ocrState = pendingOcr > 0
         ? QStringLiteral(" · 待检测/OCR %1 项").arg(pendingOcr)
         : QString();
-    m_statusLabel->setText(QStringLiteral("%1 · %2 项%3%4%5%6 · %7")
-        .arg(snapshotKind)
-        .arg(m_entries.size())
+    snapshot.statusPrefix = snapshotKind + QStringLiteral(" · ");
+    snapshot.statusSuffix = QStringLiteral(" 项%1%2%3%4 · %5")
         .arg(errorCount ? QStringLiteral(" · %1 项跳过").arg(errorCount) : QString())
         .arg(reused ? QStringLiteral(" · 复用 %1 项").arg(reused) : QString())
-        .arg(limitState)
-        .arg(ocrState)
-        .arg(displayTime));
+        .arg(limitState).arg(ocrState).arg(displayTime);
+    snapshot.entries = std::move(loaded);
+    snapshot.valid = true;
+    return snapshot;
+}
+
+bool SmartSpaceWidget::applyIndexSnapshot(IndexSnapshot snapshot)
+{
+    QElapsedTimer elapsed; elapsed.start();
+    setProperty("indexLoading", false);
+    if (!snapshot.valid) {
+        if (!m_indexBusy) m_statusLabel->setText(snapshot.error);
+        return false;
+    }
+    // Exclusions may have changed while the initial snapshot was being read.
+    auto &entries = snapshot.entries;
+    entries.erase(std::remove_if(entries.begin(), entries.end(),
+        [this](const SmartSpaceEntry &entry) { return pathExcluded(entry.path); }), entries.end());
+    m_entries = std::move(entries);
+    updateResults(true);
+    rebuildWatches();
+    if (!m_indexBusy)
+        m_statusLabel->setText(snapshot.statusPrefix + QString::number(m_entries.size()) + snapshot.statusSuffix);
+    if (qEnvironmentVariableIsSet("UKUI_FENCES_STARTUP_TRACE"))
+        qInfo() << "[FencesStartup] index-applied" << elapsed.elapsed() << "ms";
 #if defined(__GLIBC__)
-    // Both the old and new 100k-entry vectors coexist briefly during an
-    // atomic refresh.  Return the retired arenas after temporary JSON/stream
-    // objects leave this stack frame instead of retaining hundreds of MB.
     QTimer::singleShot(0, [] { malloc_trim(0); });
 #endif
     return true;
 }
+
+bool SmartSpaceWidget::loadIndex()
+{
+    ++m_indexLoadRevision; // Retire an initial read when a newer index is published.
+    return applyIndexSnapshot(readIndexSnapshot(indexPath(), uiStreamIndexPath(),
+        ocrResumeIndexPath(), resumeIndexPath(), m_excludedFolders, m_maxItems));
+}
+
+void SmartSpaceWidget::loadIndexAsync()
+{
+    const auto revision = ++m_indexLoadRevision;
+    const QString canonical = indexPath(), stream = uiStreamIndexPath();
+    const QString ocr = ocrResumeIndexPath(), resume = resumeIndexPath();
+    const int maxItems = m_maxItems;
+    setProperty("indexLoading", true);
+    m_statusLabel->setText(QStringLiteral("正在加载本地索引…"));
+    rebuildWatches();
+    BackgroundTask::run(this, [=] {
+        QElapsedTimer elapsed; elapsed.start();
+        // Apply the current exclusions on delivery, including folders restored
+        // while I/O was pending. Do not freeze the constructor's scope here.
+        auto snapshot = readIndexSnapshot(canonical, stream, ocr, resume, {}, maxItems);
+        if (qEnvironmentVariableIsSet("UKUI_FENCES_STARTUP_TRACE"))
+            qInfo() << "[FencesStartup] index-read" << elapsed.elapsed() << "ms" << snapshot.entries.size() << "entries";
+        return snapshot;
+    }, [this, revision](const IndexSnapshot &snapshot) {
+        if (revision == m_indexLoadRevision) applyIndexSnapshot(snapshot);
+    });
+}
+
 
 void SmartSpaceWidget::rebuildWatches()
 {

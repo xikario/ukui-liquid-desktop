@@ -7,6 +7,7 @@
 #include <QColor>
 #include <QFont>
 #include <QTimer>
+#include <QVariantAnimation>
 #include <QUrl>
 #include <QList>
 #include "DesktopItem.h"
@@ -46,6 +47,7 @@ public:
 
     // 回收站图标状态刷新
     void refreshTrashIcon();
+    void triggerRefreshFeedback();
     void startInlineRename();
 
 signals:
@@ -114,11 +116,10 @@ private:
     bool        m_clickAnim = false;
     qreal       m_clickAnimProgress = 0.0;
     QTimer      m_clickAnimTimer;
+    QVariantAnimation m_refreshFeedback;
     QTimer      m_renameTimer;
     QLineEdit  *m_renameEdit = nullptr;
     bool        m_finishingRename = false;
-
-    // 刷新闪烁动画
 
     static constexpr int ICON_SIZE = 48;
     static constexpr int CELL_W    = 80;

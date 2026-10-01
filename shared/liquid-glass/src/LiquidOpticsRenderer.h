@@ -5,7 +5,8 @@
 #include <memory>
 namespace LiquidMaterial { struct Prepared; }
 
-// GUI-thread only. One prepared backdrop and one GL backend per renderer.
+// GUI-thread only. Each renderer owns its backdrop; live renderers share one
+// GL program/context so restoring multiple widgets compiles the shader once.
 // Each caller caches its final surface; hover never re-runs the shader.
 class LiquidOpticsRenderer final
 {
@@ -23,7 +24,7 @@ public:
 private:
     QImage renderSurface(const QRect &, qreal, const QPainterPath &, int control);
     class Backend;
-    std::unique_ptr<Backend> m_backend;
+    std::shared_ptr<Backend> m_backend;
     QImage m_source, m_body, m_clear;
     // Shape is local to the panel, so translating a fence must not rebuild it.
     QImage m_shapeField;

@@ -70,6 +70,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "monitor_placement_test.h"
 #include "monitor_diagnosis_test.h"
 #include "startup_wallpaper_test.h"
+#include "smart_space_startup_test.h"
 #include "menu_shortcut_test.h"
 
 int main(int argc, char **argv)
@@ -102,6 +103,8 @@ int main(int argc, char **argv)
         return runMenuShortcutTest();
     if (app.arguments().contains("--startup-wallpaper-only"))
         return runStartupWallpaperTest(isolated.path());
+    if (app.arguments().contains("--smart-space-startup-only"))
+        return runSmartSpaceStartupTest(isolated.path());
     if (app.arguments().contains("--monitor-placement-only"))
         return runMonitorPlacementTest();
     if (app.arguments().contains("--monitor-diagnosis-only"))

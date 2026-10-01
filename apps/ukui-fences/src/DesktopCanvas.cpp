@@ -8,6 +8,7 @@
 #include "CalendarDesklet.h"
 #include "ActivityRecorder.h"
 #include "DesktopCanvas.h"
+#include <QDebug>
 #include "FenceWidget.h"
 #include "FenceGlassRenderer.h"
 #include "DesktopIcon.h"
@@ -666,6 +667,8 @@ QStringList defaultFenceIconPaths()
 DesktopCanvas::DesktopCanvas(QWidget *parent)
     : QWidget(parent)
 {
+    m_startupElapsed.start();
+    traceStartup("constructor-begin");
     m_iconAppearance=IconAppearance::load();
     const QSettings appearanceSettings;
     m_fenceLiquidGlassEnabled = appearanceSettings.value("appearance/fenceLiquidGlass", false).toBool();
@@ -794,6 +797,7 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
             this, &DesktopCanvas::syncCutVisualState);
 
     loadLayout();
+    traceStartup("layout-ready");
     // Event-driven: changing wallpaper must also invalidate dependent glass
     // surfaces, even when the settings application does not call refreshAll.
     auto *wallpaperDebounce = new QTimer(this);
@@ -827,24 +831,36 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
     setFocus(Qt::OtherFocusReason);
 
     connect(this, &DesktopCanvas::initialWallpaperReady, this, [this] {
-        // Restore the light widgets before Smart Space parses its full index.
-        // The latter is synchronous today and must never block their startup.
-        QTimer::singleShot(0, this, [this] {
-            if (LiquidDesklet::autoStartEnabled("clock")) setClockWidgetVisible(true);
-            if (LiquidDesklet::autoStartEnabled("activity")) setActivityWidgetVisible(true);
-            if (LiquidDesklet::autoStartEnabled("music")) setMusicWidgetVisible(true);
-            if (LiquidDesklet::autoStartEnabled("calendar")) setCalendarWidgetVisible(true);
-            if (SystemMonitor::autoStartEnabled()) setSystemMonitorVisible(true);
-            // Allow the restored widgets to paint before loading the large index.
-            QTimer::singleShot(250, this, [this] {
-                if (SmartSpaceWidget::autoStartEnabled()) setSmartSpaceVisible(true);
-            });
+        // Restore the light widgets before mapping the prepared desktop.
+        traceStartup("widgets-start");
+        if (LiquidDesklet::autoStartEnabled("clock")) setClockWidgetVisible(true);
+        traceStartup("clock-ready");
+        if (LiquidDesklet::autoStartEnabled("activity")) setActivityWidgetVisible(true);
+        traceStartup("activity-ready");
+        if (LiquidDesklet::autoStartEnabled("music")) setMusicWidgetVisible(true);
+        traceStartup("music-ready");
+        if (LiquidDesklet::autoStartEnabled("calendar")) setCalendarWidgetVisible(true);
+        traceStartup("calendar-ready");
+        if (SystemMonitor::autoStartEnabled()) setSystemMonitorVisible(true);
+        traceStartup("widgets-ready");
+        // Allow the restored widgets to paint before constructing Smart Space.
+        QTimer::singleShot(250, this, [this] {
+            traceStartup("smart-space-start");
+            if (SmartSpaceWidget::autoStartEnabled()) setSmartSpaceVisible(true);
+            traceStartup("smart-space-ready");
         });
     });
     // Start only after restoration hooks exist. Layout/icon initialization can
     // run nested event loops; a fast worker must not show a half-built desktop
     // or emit the one-shot readiness signal before those hooks are connected.
     loadWallpaper();
+    traceStartup("constructor-ready");
+}
+
+void DesktopCanvas::traceStartup(const char *phase) const
+{
+    if (qEnvironmentVariableIsSet("UKUI_FENCES_STARTUP_TRACE"))
+        qInfo() << "[FencesStartup]" << phase << m_startupElapsed.elapsed() << "ms";
 }
 
 DesktopCanvas::~DesktopCanvas()
@@ -912,6 +928,12 @@ void DesktopCanvas::refreshAll()
     forceSyncDesktopIcons();
     refreshTrashState();
     applyFontToAll();
+    for (DesktopIcon *icon : m_looseIcons)
+        if (icon) icon->triggerRefreshFeedback();
+    for (FenceWidget *fence : m_fences)
+        if (fence)
+            for (DesktopIcon *icon : fence->icons())
+                if (icon) icon->triggerRefreshFeedback();
 }
 
 void DesktopCanvas::activateOnSessionStartup()
@@ -1359,6 +1381,7 @@ void DesktopCanvas::loadWallpaper()
         if (!custom) image = loadSystemWallpaperImage(target);
         return qMakePair(image, custom);
     }, [this, path, mode](const QPair<QImage, bool> &loaded) {
+        traceStartup("wallpaper-decoded");
         m_wallpaperLoading = false;
         if (m_wallpaperReloadPending || path != m_wallpaperPath || mode != m_wallpaperMode) { loadWallpaper(); return; }
         const WallpaperMode renderMode = loaded.second ? mode : WallpaperMode::Fill;
@@ -1371,13 +1394,7 @@ void DesktopCanvas::loadWallpaper()
             clearWallpaperCache(); rebuildWallpaperCache(); update();
             if (m_monitor) m_monitor->refreshWallpaperTheme();
         }
-        if (!m_initialWallpaperReady) {
-            // Failed decoding must also release the gate so a missing image
-            // cannot leave the desktop and its controls inaccessible forever.
-            m_initialWallpaperReady = true;
-            if (!m_userHidden) showAndActivate();
-            emit initialWallpaperReady();
-        }
+        finishInitialWallpaper();
     });
 }
 
@@ -1530,41 +1547,65 @@ void DesktopCanvas::setWallpaperMagnetEnabled(bool enabled)
     update();
 }
 
+void DesktopCanvas::prepareFenceGlass()
+{
+    if (!m_fenceGlassRenderer) m_fenceGlassRenderer = std::make_unique<FenceGlassRenderer>();
+    if (m_glassPreparing || m_fenceGlassWallpaperKey == m_wallpaperCache.cacheKey()) return;
+    QImage source = m_wallpaperCache.toImage();
+    if (source.isNull()) {
+        // Match the desktop's no-wallpaper gradient exactly.
+        const qreal dpr = devicePixelRatioF();
+        source = QImage(QSize(qMax(1, qRound(width()*dpr)), qMax(1, qRound(height()*dpr))),
+                        QImage::Format_RGB32);
+        source.setDevicePixelRatio(dpr);
+        QPainter p(&source);
+        QLinearGradient g(0, 0, 0, height());
+        g.setColorAt(0, QColor("#1a2a3a"));
+        g.setColorAt(1, QColor("#2c5f8a"));
+        p.fillRect(rect(), g);
+    }
+    m_glassPreparing = true;
+    traceStartup("glass-prepare-start");
+    const qint64 key = m_wallpaperCache.cacheKey();
+    BackgroundTask::run(this, [source] { return LiquidMaterial::prepare(source); },
+        [this, key](const LiquidMaterial::Prepared &material) {
+            traceStartup("glass-prepared");
+            m_glassPreparing = false;
+            if (key == m_wallpaperCache.cacheKey() && m_fenceGlassRenderer) {
+                m_fenceGlassRenderer->setPreparedWallpaper(material);
+                m_fenceGlassWallpaperKey = key;
+            }
+            for (auto *fence : m_fences) fence->invalidateGlassCache();
+            finishInitialWallpaper();
+            update();
+        });
+}
+
+void DesktopCanvas::finishInitialWallpaper()
+{
+    if (m_initialWallpaperReady || m_wallpaperLoading || m_wallpaperReloadPending) return;
+    if (m_fenceLiquidGlassEnabled && !m_fences.isEmpty()) {
+        if (m_fenceGlassWallpaperKey != m_wallpaperCache.cacheKey()) {
+            prepareFenceGlass();
+            return;
+        }
+        // Cache the actual panels (including the first GL compile) while hidden.
+        for (auto *fence : m_fences) fence->prepareGlassCache();
+        traceStartup("glass-first-rendered");
+    }
+    // A decode failure still reaches this point with the gradient fallback.
+    m_initialWallpaperReady = true;
+    emit initialWallpaperReady();
+    if (!m_userHidden) showAndActivate();
+    traceStartup("desktop-mapped");
+}
+
 QImage DesktopCanvas::renderLiquidGlass(const QRect &area, qreal radius,
                                         const QPainterPath &shape)
 {
     if (area.isEmpty()) return {};
-    if (!m_fenceGlassRenderer) m_fenceGlassRenderer = std::make_unique<FenceGlassRenderer>();
-    if (m_fenceGlassWallpaperKey != m_wallpaperCache.cacheKey()) {
-        QImage source = m_wallpaperCache.toImage();
-        if (source.isNull()) {
-            // Match the desktop's no-wallpaper gradient exactly.
-            const qreal dpr = devicePixelRatioF();
-            source = QImage(QSize(qMax(1, qRound(width()*dpr)), qMax(1, qRound(height()*dpr))),
-                            QImage::Format_RGB32);
-            source.setDevicePixelRatio(dpr);
-            QPainter p(&source);
-            QLinearGradient g(0, 0, 0, height());
-            g.setColorAt(0, QColor("#1a2a3a"));
-            g.setColorAt(1, QColor("#2c5f8a"));
-            p.fillRect(rect(), g);
-        }
-        if (!m_glassPreparing) {
-            m_glassPreparing = true;
-            const qint64 key = m_wallpaperCache.cacheKey();
-            BackgroundTask::run(this, [source] { return LiquidMaterial::prepare(source); },
-                [this, key](const LiquidMaterial::Prepared &material) {
-                    m_glassPreparing = false;
-                    if (key == m_wallpaperCache.cacheKey() && m_fenceGlassRenderer) {
-                        m_fenceGlassRenderer->setPreparedWallpaper(material);
-                        m_fenceGlassWallpaperKey = key;
-                    }
-                    for (auto *fence : m_fences) fence->invalidateGlassCache();
-                    update();
-                });
-        }
-        return {}; // readable widget fallback until the latest material is ready
-    }
+    prepareFenceGlass();
+    if (m_fenceGlassWallpaperKey != m_wallpaperCache.cacheKey()) return {};
     return m_fenceGlassRenderer->renderPanel(area, radius, shape);
 }
 

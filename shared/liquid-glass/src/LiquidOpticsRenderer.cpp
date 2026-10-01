@@ -1,6 +1,8 @@
 #include "LiquidMaterial.h"
 #include "LiquidOpticsRenderer.h"
 #include <QDebug>
+#include <QCoreApplication>
+#include <QThread>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QOffscreenSurface>
@@ -74,6 +76,19 @@ QImage shapeField(const QPainterPath &path, QSize pixels, qreal dpr)
 // input textures: only context, linked program and reusable output FBO.
 class LiquidOpticsRenderer::Backend {
 public:
+    static std::shared_ptr<Backend> acquire() {
+        Q_ASSERT(QCoreApplication::instance() &&
+                 QThread::currentThread() == QCoreApplication::instance()->thread());
+        // Weak ownership releases every GL object when the last renderer dies,
+        // while QApplication and its display connection still exist.
+        static std::weak_ptr<Backend> shared;
+        auto backend = shared.lock();
+        if (!backend) {
+            backend = std::make_shared<Backend>();
+            shared = backend;
+        }
+        return backend;
+    }
     ~Backend() {
         const bool current=context.isValid() && context.makeCurrent(&surface);
         framebuffer.reset();
@@ -82,7 +97,12 @@ public:
     }
 
     QImage render(const QImage &body, const QImage &clear, QSize logical, float radius, const QImage &shape, float refraction, float shade, float highlight, float chroma, float liquidStrength, int control) {
-        if (!attempted) { attempted=true; ready=initialize(); }
+        if (!attempted) {
+            QElapsedTimer elapsed; elapsed.start();
+            attempted=true; ready=initialize();
+            if (qEnvironmentVariableIsSet("UKUI_FENCES_STARTUP_TRACE"))
+                qInfo() << "[FencesStartup] widget-gl-initialized" << elapsed.elapsed() << "ms" << ready;
+        }
         if (!ready || !context.makeCurrent(&surface)) return {};
         const QImage result=draw(body,clear,logical,radius,shape,refraction,shade,highlight,chroma,liquidStrength,control);
         context.doneCurrent(); // textures were released by draw() before this
@@ -327,7 +347,7 @@ QImage LiquidOpticsRenderer::renderSurface(const QRect &logicalRect, qreal radiu
     radius = qMin(radius, qMin(logicalRect.width(), logicalRect.height())/2.0);
     QImage result;
     if (!qEnvironmentVariableIsSet("UKUI_LIQUID_GLASS_NO_GL")) {
-        if (!m_backend) m_backend = std::make_unique<Backend>();
+        if (!m_backend) m_backend = Backend::acquire();
         if (!shape.isEmpty() && (m_shapeField.isNull() || m_cachedShape != shape ||
             m_shapeSize != pixels.size() || !qFuzzyCompare(m_shapeDpr, dpr))) {
             m_shapeField = shapeField(shape, pixels.size(), dpr);
