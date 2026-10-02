@@ -1,3 +1,5 @@
+#include "LiquidDialog.h"
+#include <QLabel>
 #pragma once
 #include "DesktopIcon.h"
 #include "FileClipboard.h"
@@ -27,7 +29,7 @@ static int runTrashUndoTest(const QString &root)
     QTimer dismiss;
     QObject::connect(&dismiss, &QTimer::timeout, [&] {
         for (auto *widget : QApplication::topLevelWidgets())
-            if (auto *box = qobject_cast<QMessageBox *>(widget)) { warnings << box->text(); box->accept(); }
+            if(widget->objectName()=="liquidMessageDialog" && widget->isVisible() && !widget->property("liquidDialogClosing").toBool()) { warnings << widget->findChild<QLabel *>("liquidMessageText")->text(); qobject_cast<QDialog *>(widget)->accept(); }
     });
     dismiss.start(10);
     QWidget owner;

@@ -15,6 +15,8 @@
 #include <QAbstractTextDocumentLayout>
 #include <QProcess>
 #include <QElapsedTimer>
+#include <QFileDialog>
+#include <QWindow>
 #include <cstring>
 
 // Read-only API fixtures: no real account, key, network, or telemetry submission.
@@ -306,6 +308,7 @@ struct SystemMonitorTestAccess {
         runDiagnosisEvents(monitor);
         runTransport(monitor);
         runMaterialView();
+        runExportLifetime();
         return failures ? 1 : 0;
     }
 
@@ -327,6 +330,24 @@ struct SystemMonitorTestAccess {
         monitor.m_aiRequestTelemetry = monitor.diagnosticTelemetry();
         monitor.showAiDetailsDialog();
         auto *dialog = qobject_cast<MonitorDiagnosisDialog *>(monitor.m_aiDetailsDialog.data());
+        check(!dialog->windowIcon().pixmap(64,64).isNull()
+            && dialog->windowIcon().availableSizes().size()>=5,
+            "diagnosis detail has a rasterized taskbar icon");
+        QProcess identity;
+        identity.start("xprop",{"-id",QString::number(dialog->winId()),"WM_CLASS","_KDE_NET_WM_DESKTOP_FILE",
+            "_NET_WM_WINDOW_TYPE","_NET_WM_STATE"});
+        const bool readIdentity=identity.waitForFinished(2000);
+        const QByteArray nativeProperties=identity.readAllStandardOutput();
+        check(readIdentity && nativeProperties.count("ukui-fences-monitor")>=3,
+            "diagnosis native task identity matches its monitor desktop icon");
+        check(!dialog->windowFlags().testFlag(Qt::WindowStaysOnTopHint)
+            && nativeProperties.contains("_NET_WM_WINDOW_TYPE_NORMAL")
+            && !nativeProperties.contains("_NET_WM_STATE_ABOVE")
+            && !nativeProperties.contains("_NET_WM_STATE_SKIP_TASKBAR"),
+            "diagnosis is a normal task-managed window that permits switching applications");
+        check(dialog->testAttribute(Qt::WA_TranslucentBackground)
+            && dialog->grab().toImage().pixelColor(0,0).alpha()==0,
+            "diagnosis initial fallback does not paint black rectangular corners");
         auto *tabs = dialog->findChild<QTabWidget *>("monitorDiagnosisTabs");
         check(tabs && tabs->count()==3 && tabs->currentIndex()==0, "overview is the default of three distinct reading pages");
         auto *summary = dialog->findChild<QLabel *>("monitorDiagnosisSummary");
@@ -363,6 +384,24 @@ struct SystemMonitorTestAccess {
         check(QString::fromUtf8(textFile.readAll())==monitor.m_aiText, "export retains the entire diagnosis verbatim");
         check(QJsonDocument::fromJson(jsonFile.readAll()) == QJsonDocument::fromJson(monitor.m_aiRequestTelemetry.toUtf8()), "JSON export is exactly the retained request snapshot");
         check(!dialog->saveExport(exports.path()+"/missing/report.txt",false,&error) && !error.isEmpty(), "failed export reports error without fabricating success");
+        QPointer<QFileDialog> exportPicker;
+        QTimer::singleShot(30,dialog,[&] {
+            exportPicker=qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
+            check(exportPicker && exportPicker->parentWidget()==dialog
+                && exportPicker->windowHandle()->transientParent()==dialog->windowHandle()
+                && !exportPicker->windowFlags().testFlag(Qt::WindowStaysOnTopHint)
+                && exportPicker->windowIcon().cacheKey()==dialog->windowIcon().cacheKey(),
+                "export picker is a modal child with the report icon and normal transient stacking");
+            if (!exportPicker) return;
+            QProcess pickerIdentity;
+            pickerIdentity.start("xprop",{"-id",QString::number(exportPicker->winId()),"WM_CLASS","_KDE_NET_WM_DESKTOP_FILE"});
+            check(pickerIdentity.waitForFinished(2000)
+                && pickerIdentity.readAllStandardOutput().count("ukui-fences-monitor")>=3,
+                "export picker native task identity matches its report");
+            exportPicker->reject();
+        });
+        dialog->findChild<QPushButton *>("monitorExportDiagnosis")->click();
+        check(exportPicker.isNull() && dialog->isVisible(),"cancel releases the owned export picker and retains the report");
         tabs->setCurrentIndex(2); dialog->findChild<QPushButton *>("monitorCopyTelemetry")->click();
         check(QJsonDocument::fromJson(QApplication::clipboard()->text().toUtf8()) == QJsonDocument::fromJson(monitor.m_aiRequestTelemetry.toUtf8()), "JSON copy retains actual request data");
         tabs->setCurrentIndex(0);
@@ -374,7 +413,9 @@ struct SystemMonitorTestAccess {
         const QImage lightText=dialog->grab().toImage(); int darkPixels=0;
         for (int y=0;y<lightText.height();++y) for (int x=0;x<lightText.width();++x)
             if (lightText.pixelColor(x,y).alpha()>200 && lightText.pixelColor(x,y).lightness()<90) ++darkPixels;
-        check(darkPixels>20 && lightText.pixelColor(5,5).lightness()>220, "light theme renders dark readable text on a light panel");
+        const qreal lightDpr=dialog->devicePixelRatioF();
+        check(darkPixels>20 && lightText.pixelColor(qRound(100*lightDpr),qRound(5*lightDpr)).lightness()>220,
+              "light theme renders dark readable text on a light panel interior");
         dialog->grab().save(QString("artifacts/monitor-overview-light-%1.png").arg(dialog->devicePixelRatioF()));
         for (auto *page : {dialog->findChild<QScrollArea *>("monitorOverviewScroll"), scroll})
             check(page->horizontalScrollBar()->maximum()==0, "report cards fit the screen at each desktop DPI");
@@ -389,6 +430,20 @@ struct SystemMonitorTestAccess {
         check(dialog->findChild<QLabel *>("monitorDiagnosisBadge")->text()=="待诊断"
               && dialog->findChild<QPlainTextEdit *>("monitorDiagnosisTelemetry")->toPlainText().contains("暂无"), "clear removes result and retained sample together");
         dialog->close(); QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete); settle(20);
+    }
+
+    static void runExportLifetime() {
+        QPointer<MonitorDiagnosisDialog> report=new MonitorDiagnosisDialog(nullptr,nullptr);
+        MonitorDiagnosisSnapshot snapshot;snapshot.text="lifetime export fixture";
+        report->setSnapshot(snapshot);report->show();
+        QPointer<QFileDialog> picker;
+        QTimer::singleShot(30,qApp,[&] {
+            picker=qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
+            check(picker && picker->parentWidget()==report,"export lifetime fixture opens the actual owned picker");
+            delete report.data();
+        });
+        report->findChild<QPushButton *>("monitorExportDiagnosis")->click();
+        check(report.isNull() && picker.isNull(),"destroying the report during export releases its picker without stale access");
     }
 
     static void runDiagnosisEvents(SystemMonitor &monitor) {
@@ -504,6 +559,7 @@ print(json.dumps({'choices':[{'message':message,'finish_reason':'length' if empt
         time.restart(); while (dialog->property("materialBuilds").toInt()==0 && time.elapsed()<5000) settle(20);
         check(dialog->property("materialBuilds").toInt()==1, "diagnosis liquid panel prepares the actual wallpaper asynchronously");
         const QImage preview=dialog->grab().toImage();
+        check(preview.pixelColor(0,0).alpha()==0,"prepared diagnosis material keeps transparent rounded corners");
         auto *scope=dialog->findChild<QLabel *>("monitorDiagnosisScope");
         auto *notice=dialog->findChild<QLabel *>("monitorDiagnosisNotice");
         const qreal dpr=dialog->devicePixelRatioF();

@@ -158,7 +158,12 @@ static int runSmartInteractionTest(const QString &root)
             if (!box) return;
             auto *label=box->findChild<QLabel *>("smartMessageText");
             check(label && !label->text().isEmpty(),"confirmation contains explanatory text");
-            const QColor bg=box->palette().color(QPalette::Window);
+            // The palette's Window brush is transparent for a glass surface;
+            // inspect the actual cached background in the gap above the buttons.
+            const QImage frame=box->grab().toImage();
+            auto *buttonBox=box->findChild<QDialogButtonBox *>();
+            const qreal ratio=frame.devicePixelRatio();
+            const QColor bg=frame.pixelColor(qRound(box->width()/2.*ratio),qRound((buttonBox->geometry().top()-8)*ratio));
             const QColor fg=label ? label->palette().color(QPalette::WindowText) : bg;
             auto luma=[](QColor c) { return .2126*c.red()+.7152*c.green()+.0722*c.blue(); };
             check(qAbs(luma(bg)-luma(fg))>120,"confirmation text has readable contrast in each skin");

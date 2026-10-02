@@ -35,7 +35,8 @@ export UKUI_FENCES_SMARTSPACE_ROOTS="$ROOT_DIR"
 export UKUI_FENCES_SMARTSPACE_OCR=0
 unset UKUI_FENCES_SMARTSPACE_AUTO_INDEX || true
 
-"$BINARY" --smart-space > "$RESULT_DIR/app.log" 2>&1 &
+mkdir -p "$RUNTIME_DIR/home" "$RUNTIME_DIR/data"
+env HOME="$RUNTIME_DIR/home" XDG_DATA_HOME="$RUNTIME_DIR/data" "$BINARY" --smart-space > "$RESULT_DIR/app.log" 2>&1 &
 APP_PID=$!
 attempt=0
 while [ "$attempt" -lt 50 ] && ! gdbus introspect --session \

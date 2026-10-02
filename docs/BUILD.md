@@ -21,7 +21,7 @@ sudo apt install build-essential cmake qtbase5-dev libx11-dev libxtst-dev libgl1
 | 系统监视诊断 | curl、libsecret-1.so.0 和可用的 Secret Service 密钥环；API 由用户自行配置 |
 | 音乐 | 提供 MPRIS 的客户端；识别出的桌面入口用 gtk-launch（libgtk-3-bin） |
 | 日历 | Python 标准库 SQLite、系统 ICU 运行库及对应 UKUI 日历数据库/服务；节假日同步需要网络 |
-| 可选模糊兼容 | Python Xlib（python3-xlib）、X11 与用户 systemd 会话 |
+| 可选模糊兼容 | Python 3、libX11 运行库、X11 与用户 systemd 会话（使用标准库 ctypes） |
 | 可选 FTG340 策略 | 匹配驱动、systemd/udev、Python 3.8+；与主应用构建无关 |
 | UI/图像测试 | xvfb、xauth、dbus-x11、xdotool、x11-utils；部分脚本需 Pillow，OEM 冒烟另需 bubblewrap |
 
@@ -77,7 +77,7 @@ python3 apps/ukui-fences/scripts/smart_space_indexer.py --help
 ```sh
 (cd apps/ukui-fences/build && ctest -N)
 (cd apps/ukui-fences/build && ctest --output-on-failure -R 'desktop_(monitor_diagnosis|music|settings-center)_')
-(cd apps/ukui-kaishicaidan-v2/build-v2 && ctest --output-on-failure -R 'launcher-(metadata|removal-query)')
+(cd apps/ukui-kaishicaidan-v2/build-v2 && ctest --output-on-failure -R 'launcher-(metadata|removal-query|pointer)')
 xvfb-run -a python3 integration/peony/test_blur_compat_x11.py
 ```
 

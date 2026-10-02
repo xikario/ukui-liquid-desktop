@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Fences System Monitor
+Name[zh_CN]=Fences 系统监视
+Comment=System monitoring and read-only diagnosis
+Comment[zh_CN]=系统监视与只读智能诊断
+Exec=ukui-fences-launcher --system-monitor
+Icon=ukui-fences-monitor
+StartupWMClass=ukui-fences-monitor
+Terminal=false
+StartupNotify=false
+NoDisplay=true
+Categories=System;Monitor;

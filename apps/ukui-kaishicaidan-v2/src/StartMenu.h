@@ -11,6 +11,8 @@
 #include <QFileSystemWatcher>
 #include <QImage>
 #include <QPixmap>
+#include <QPointer>
+#include <QRegion>
 #include <functional>
 #include <memory>
 #include "StartMenuTheme.h"
@@ -79,6 +81,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
     void leaveEvent(QEvent *) override;
+    bool eventFilter(QObject *, QEvent *) override;
     void dragEnterEvent(QDragEnterEvent *) override;
     void dragMoveEvent(QDragMoveEvent *) override;
     void dragLeaveEvent(QDragLeaveEvent *) override;
@@ -86,6 +89,11 @@ protected:
 
 private:
     friend class StartMenuRemovalQueryTest;
+    friend class StartMenuPointerTest;
+    void queueGlassPointer(const QPointF &position, QWidget *control = nullptr);
+    void advanceGlassPointer();
+    QRegion glassReflectionDamage(const QPointF &position) const;
+    QRegion railHoverDamage() const;
     void setupUi();
     void setupPinnedGrid();
     void setupRecentFiles();
@@ -102,6 +110,8 @@ private:
     void filterApps(const QString &text);
     void launchApp(int index);
     void launchAppEntry(const AppEntry &app);
+    void reportLaunchFailure(const AppEntry &app, const QString &error);
+    static QString brokenShortcutExecutable(const QString &desktopPath);
     void launchRecent(const QString &path);
     void drawLeftRail(QPainter &p);
     void drawAvatarButton(QPainter &p);
@@ -128,7 +138,6 @@ private:
         enum class Kind {
             DebPackage,
             FolderBundle,
-            DesktopShortcut,
             ProtectedPackage,
             Unsupported
         };
@@ -161,7 +170,10 @@ private:
     // Click-outside detection via polling active X window
     void startOutsideWatch();
     void stopOutsideWatch();
-    void captureNextKdeBackdrop();
+    bool captureNextKdeBackdrop(std::function<void()> ready);
+    void finishShowMenu();
+    bool m_showPending = false;
+    quint64 m_showRequest = 0;
 
     // Active palette (set by applySkin)
     SkinPalette m_palette;
@@ -238,6 +250,9 @@ private:
     NextKdeGlassView *m_nextKdeGlassView = nullptr;
     QTimer *m_glassLightTimer = nullptr;
     QPointF m_glassLightPos = QPointF(-500, -500);
+    QPointF m_glassLightTarget = QPointF(-500, -500);
+    QRegion m_glassControlDirty;
+    QPointer<QWidget> m_lastGlassControl;
 
     friend class StartButton;
     friend class SettingsDialog;

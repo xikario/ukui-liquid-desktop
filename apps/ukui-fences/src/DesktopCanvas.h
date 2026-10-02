@@ -173,6 +173,7 @@ private:
     QString settingsHelpHtml() const;
     QString settingsAboutHtml() const;
     void openFileManager();
+    void openTerminal();
     void openSystemWallpaper();
     void resetLayoutSettings();
     enum class ArrangeMode {

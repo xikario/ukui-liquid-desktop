@@ -1,3 +1,4 @@
+#include "LiquidDialog.h"
 #include "FencesSettingsWindow.h"
 #include "DesktopCanvas.h"
 #include "DesktopWidgets.h"
@@ -9,6 +10,7 @@
 #include "MusicClientsSettings.h"
 #include "ActivityRecorder.h"
 #include "FenceWidget.h"
+#include "FenceIconPicker.h"
 #include "LiquidOpticsRenderer.h"
 #include "LiquidMaterialPreparation.h"
 #include "LiquidPopup.h"
@@ -78,13 +80,15 @@ QVBoxLayout *card(QVBoxLayout *layout, const QString &title) {
 }
 FencesSettingsWindow::FencesSettingsWindow(DesktopCanvas *canvas)
     : QWidget(nullptr),m_canvas(canvas),m_optics(new LiquidOpticsRenderer) {
-    setObjectName("fencesSettingsWindow");setWindowTitle("Fences 设置");
+    setObjectName("fencesSettingsWindow");
+    LiquidDialog::installMotion(this);setWindowTitle("Fences 设置");
     setWindowRole("fences-settings");
     const QIcon source(":/settings/ukui-fences-settings.svg");
     QIcon icon;
     for(int side:{16,24,32,48,64,128,256})icon.addPixmap(source.pixmap(side,side));
     setWindowIcon(icon);
-    setWindowFlags(Qt::Window|Qt::FramelessWindowHint|Qt::WindowStaysOnTopHint);setAttribute(Qt::WA_TranslucentBackground);
+    setWindowFlags(Qt::Window|Qt::FramelessWindowHint|Qt::WindowMinimizeButtonHint
+        |Qt::WindowCloseButtonHint);setAttribute(Qt::WA_TranslucentBackground);
     QPalette colors=palette();
     colors.setColor(QPalette::Window,QColor("#1c3044"));colors.setColor(QPalette::Base,QColor("#172b40"));
     colors.setColor(QPalette::Text,QColor("#edf5ff"));colors.setColor(QPalette::WindowText,QColor("#edf5ff"));
@@ -101,8 +105,10 @@ FencesSettingsWindow::FencesSettingsWindow(DesktopCanvas *canvas)
     auto *title=new QLabel("Fences 设置",titlebar);title->setObjectName("settingsHeading");title->installEventFilter(this);
     titleRow->addWidget(title,1);
     auto *minimize=new QPushButton("−",titlebar);minimize->setAccessibleName("最小化");minimize->setFixedSize(34,30);
+    minimize->setObjectName("settingsMinimize");
     connect(minimize,&QPushButton::clicked,this,&QWidget::showMinimized);titleRow->addWidget(minimize);
     auto *closeButton=new QPushButton("×",titlebar);closeButton->setAccessibleName("关闭设置");closeButton->setFixedSize(34,30);
+    closeButton->setObjectName("settingsClose");
     connect(closeButton,&QPushButton::clicked,this,&QWidget::close);titleRow->addWidget(closeButton);root->addWidget(titlebar);
     auto *body=new QHBoxLayout;body->setSpacing(16);root->addLayout(body,1);
     m_navigation=new QListWidget(this);m_navigation->setObjectName("settingsNavigation");m_navigation->setFixedWidth(186);
@@ -224,15 +230,18 @@ bool FencesSettingsWindow::hasDrafts() const {
 }
 void FencesSettingsWindow::closeEvent(QCloseEvent *e) {
     if(hasDrafts()) {
-        QDialog confirmation(this);confirmation.setObjectName("settingsDiscardDialog");
+        LiquidDialog::Dialog confirmation(this);confirmation.setObjectName("settingsDiscardDialog");
         confirmation.setWindowTitle("尚有未应用的修改");
-        confirmation.setStyleSheet("QDialog {background:#243749;color:#edf5ff;} QLabel {color:#edf5ff;}");
+
         auto *layout=new QVBoxLayout(&confirmation);
         auto *label=new QLabel("关闭并放弃未应用的修改？",&confirmation);layout->addWidget(label);
         auto *buttons=new QDialogButtonBox(QDialogButtonBox::Discard|QDialogButtonBox::Cancel,&confirmation);
         layout->addWidget(buttons);
         buttons->button(QDialogButtonBox::Discard)->setText("放弃修改");
         buttons->button(QDialogButtonBox::Cancel)->setText("继续编辑");
+        buttons->button(QDialogButtonBox::Discard)->setAutoDefault(false);
+        buttons->button(QDialogButtonBox::Cancel)->setDefault(true);
+        buttons->button(QDialogButtonBox::Cancel)->setFocus();
         connect(buttons->button(QDialogButtonBox::Discard),&QPushButton::clicked,&confirmation,&QDialog::accept);
         connect(buttons,&QDialogButtonBox::rejected,&confirmation,&QDialog::reject);
         if(confirmation.exec()!=QDialog::Accepted){e->ignore();return;}
@@ -306,6 +315,9 @@ void FencesSettingsWindow::refreshStates() {
             check->setChecked(on);check->setText(on?"随 Fences 启动：已开启":"随 Fences 启动：未开启");
         } else if(check->objectName()=="fenceLiquidGlass")check->setChecked(m_canvas->fenceLiquidGlassEnabled());
         else if(check->objectName()=="wallpaperMagnet")check->setChecked(m_canvas->wallpaperMagnetEnabled());
+        else if(check->objectName()=="fenceLocked") {
+            if(auto *f=m_canvas->fenceById(check->property("fenceId").toString()))check->setChecked(f->locked());
+        }
     }
 }
 QWidget *FencesSettingsWindow::buildPage(const QString &id) {
@@ -321,13 +333,54 @@ QWidget *FencesSettingsWindow::buildPage(const QString &id) {
             heading->setText(f->title());
             QPointer<FenceWidget> fence=f;
             auto *c=card(layout,"分区外观");
-            auto *titleEdit=new QLineEdit(f->title(),page);c->addWidget(titleEdit);
+            auto *titleEdit=new QLineEdit(f->title(),page);titleEdit->setObjectName("fenceTitleEdit");c->addWidget(titleEdit);
+            connect(f,&FenceWidget::titleChanged,page,[this,id,heading,titleEdit](const QString &title){
+                heading->setText(title);titleEdit->setText(title);
+                for(int i=0;i<m_navigation->count();++i)if(m_navigation->item(i)->data(Qt::UserRole).toString()==id)
+                    m_navigation->item(i)->setText("    "+title);
+            });
             button(c,"修改分区名称",[fence,titleEdit]{if(fence && !titleEdit->text().trimmed().isEmpty())fence->setTitle(titleEdit->text().trimmed());});
-            button(c,"分区颜色…",[this,fence]{if(!fence)return;QColor selected=QColorDialog::getColor(fence->fenceColor(),this,"分区颜色",QColorDialog::ShowAlphaChannel);if(selected.isValid()){fence->setFenceColor(selected);emit fence->geometryChanged();}});
+            button(c,"分区颜色…",[this,fence]{if(!fence)return;QColor selected=LiquidDialog::getColor(fence->fenceColor(),this,"分区颜色",QColorDialog::ShowAlphaChannel);if(fence && selected.isValid()){fence->setFenceColor(selected);emit fence->geometryChanged();}});
             auto *alpha=new QSpinBox(page);alpha->setRange(0,100);alpha->setSuffix("%  不透明度");alpha->setValue(qRound(f->fenceColor().alphaF()*100));c->addWidget(alpha);
             connect(alpha,QOverload<int>::of(&QSpinBox::valueChanged),page,[fence](int n){if(fence){QColor color=fence->fenceColor();color.setAlphaF(n/100.);fence->setFenceColor(color);emit fence->geometryChanged();}});
-            button(c,"选择分区图标…",[this,fence]{if(!fence)return;QString file=QFileDialog::getOpenFileName(this,"选择分区图标",QString(),"图片 (*.png *.jpg *.jpeg *.svg *.ico);;所有文件 (*)");if(!file.isEmpty())fence->setTitleIconPath(file);});
-            button(c,"清除分区图标",[fence]{if(fence)fence->setTitleIconPath(QString());});
+            alpha->setObjectName("fenceOpacity");
+            connect(f,&FenceWidget::fenceColorChanged,alpha,[alpha](const QColor &color){
+                QSignalBlocker block(alpha);alpha->setValue(qRound(color.alphaF()*100));
+            });
+            auto *locked=new QCheckBox("锁定分区位置和内容",page);
+            locked->setObjectName("fenceLocked");locked->setChecked(f->locked());c->addWidget(locked);
+            locked->setProperty("fenceId",f->fenceId());
+            connect(locked,&QCheckBox::toggled,page,[fence](bool on){if(fence){fence->setLocked(on);emit fence->geometryChanged();}});
+            c=card(layout,"分区标题图标");
+            auto *iconPreview=new QLabel(page);iconPreview->setObjectName("fenceTitleIconPreview");c->addWidget(iconPreview);
+            auto *iconStatus=new QLabel(page);iconStatus->setObjectName("fenceTitleIconStatus");iconStatus->setWordWrap(true);iconStatus->setTextFormat(Qt::PlainText);c->addWidget(iconStatus);
+            button(c,"系统与默认图标…",[this,fence]{
+                if(!fence)return;
+                const auto choice=FenceIconPicker::choose(this,fence->titleIconThemeName(),fence->titleIconPath());
+                if(!fence || !choice.accepted)return;
+                if(!choice.themeName.isEmpty())fence->setTitleIconThemeName(choice.themeName);
+                else fence->setTitleIconPath(choice.path);
+            },"fenceChooseLibraryIcon");
+            button(c,"从图片文件选择…",[this,fence]{if(!fence)return;QString file=LiquidDialog::getOpenFileName(this,"选择分区图标",QString(),"图片 (*.png *.jpg *.jpeg *.svg *.ico);;所有文件 (*)");if(fence && !file.isEmpty())fence->setTitleIconPath(file);},"fenceChooseFileIcon");
+            auto *clearIcon=button(c,"清除分区图标…",[this,fence]{if(fence)fence->confirmClearTitleIcon(this);},"fenceClearTitleIcon");
+            const auto refreshIcon=[fence,iconPreview,iconStatus,clearIcon]{
+                if(!fence)return;
+                const auto name=fence->titleIconThemeName();
+                const auto path=fence->titleIconPath();
+                QIcon icon;
+                if(!name.isEmpty()) {
+                    icon=QIcon::fromTheme(name,QIcon(":/fence-icons/orbit.svg"));
+                    iconStatus->setText("系统图标："+name+"（随系统图标主题变化）");
+                } else if(!path.isEmpty()) {
+                    icon=QIcon(path);
+                    const auto label=FenceIconPicker::defaultIconLabel(path);
+                    iconStatus->setText(!label.isEmpty()?"内置默认："+label:"图片文件："+QFileInfo(path).fileName());
+                } else iconStatus->setText("未设置标题图标（显示默认小框）");
+                iconPreview->setPixmap(icon.pixmap(32,32));
+                clearIcon->setEnabled(fence->hasTitleIcon());
+            };
+            connect(f,&FenceWidget::titleIconChanged,page,refreshIcon);refreshIcon();
+            hint(c,"系统图标库可搜索当前主题及其继承图标；内置默认图标无需安装额外主题。");
             attachForm(card(layout,"内部图标字体"),f->createFontSettingsPage(page));
             attachForm(card(layout,"分区标题字体"),f->createTitleFontSettingsPage(page));
             connect(f,&QObject::destroyed,scroll,[scroll]{scroll->deleteLater();});
@@ -341,10 +394,10 @@ QWidget *FencesSettingsWindow::buildPage(const QString &id) {
     } else if(id=="wallpaper") {
         attachForm(card(layout,"Fences 壁纸"),m_canvas->createWallpaperSettingsPage(page));
         auto *c=card(layout,"主题配色");
-        button(c,"从当前壁纸取色",[this]{if(!m_canvas->applyWallpaperThemeToFences())QMessageBox::information(this,"壁纸取色","当前壁纸没有可提取的明显颜色。");},"wallpaperThemeButton");
+        button(c,"从当前壁纸取色",[this]{if(!m_canvas->applyWallpaperThemeToFences())LiquidDialog::information(this,"壁纸取色","当前壁纸没有可提取的明显颜色。");},"wallpaperThemeButton");
         auto *preset=new QComboBox(page);preset->addItems({"海湾蓝","樱花粉","松石绿","暮色紫","石墨灰"});c->addWidget(preset);
         button(c,"应用所选配色",[this,preset]{const QColor colors[]={QColor("#2f80ed"),QColor("#ff7aa2"),QColor("#14b8a6"),QColor("#8b5cf6"),QColor("#202124")};QColor color=colors[preset->currentIndex()];color.setAlpha(90);m_canvas->applyThemeToFences(color,preset->currentIndex()==1?QColor("#202124"):QColor(Qt::white));});
-        button(c,"应用外部主题文件",[this]{if(m_canvas->loadExternalTheme())m_canvas->applyExternalThemeToFences();else QMessageBox::information(this,"外部主题","没有找到外部主题文件。可使用壁纸取色或内置配色。");});
+        button(c,"应用外部主题文件",[this]{if(m_canvas->loadExternalTheme())m_canvas->applyExternalThemeToFences();else LiquidDialog::information(this,"外部主题","没有找到外部主题文件。可使用壁纸取色或内置配色。");});
         button(c,"打开系统壁纸设置",[this]{m_canvas->openSystemWallpaper();});
     } else if(id=="icons") {
         attachForm(card(layout,"图标底座"),m_canvas->createIconSettingsPage(page));
@@ -361,7 +414,7 @@ QWidget *FencesSettingsWindow::buildPage(const QString &id) {
         c=card(layout,"分区");
         for(auto *f:m_canvas->m_fences){QPointer<FenceWidget> fence=f;auto *locked=new QCheckBox(f->title()+" · 锁定",page);locked->setChecked(f->locked());c->addWidget(locked);
             connect(locked,&QCheckBox::toggled,page,[fence](bool on){if(fence){fence->setLocked(on);emit fence->geometryChanged();}});
-            button(c,f->title()+" · 字体设置",[this,fence]{if(fence)openPage("fence:"+fence->fenceId());});}
+            button(c,f->title()+" · 分区设置",[this,fence]{if(fence)openPage("fence:"+fence->fenceId());});}
         c=card(layout,"布局备份");button(c,"导出布局…",[this]{m_canvas->exportLayout();});button(c,"导入布局…",[this]{m_canvas->importLayout();});
         button(c,"重置布局…",[this]{m_canvas->resetLayoutSettings();});
     } else if(id=="widgets") {

@@ -2,12 +2,14 @@
 #include "DesktopWidgets.h"
 #include "DeskletModels.h"
 #include "ActivityRecorder.h"
+#include "FileClipboard.h"
 #include <QPushButton>
 #include "DesktopIcon.h"
 #include <QMimeData>
 #include <QDropEvent>
 #include <QDragEnterEvent>
 #include <QSpinBox>
+#include <QStandardPaths>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <X11/Xlib.h>
@@ -42,12 +44,16 @@ static int runDeskletTest(const QString &root)
     QImage color(1440,900,QImage::Format_RGB32);color.fill(QColor(215,40,35));color.save(redPath);color.fill(QColor(30,40,215));color.save(bluePath);
     auto setWallpaper=[&](const QString &path){QDir().mkpath(root+"/config/kyfences");QFile f(root+"/config/kyfences/layout.json");f.open(QIODevice::WriteOnly);f.write(QJsonDocument(QJsonObject{{"wallpaperMode",2},{"wallpaperPath",path},{"fences",QJsonArray{}}}).toJson());};
     setWallpaper(redPath);
+    const QString primaryDesktop=root+"/primary-desktop";
     const QString desktop=root+"/test-desktop";
     QDir().mkpath(desktop+"/fixture-folder");
     QFile fixture(desktop+"/fixture.txt");fixture.open(QIODevice::WriteOnly);fixture.write("layout fixture");fixture.close();
     qputenv("XDG_DESKTOP_DIR",desktop.toUtf8());
     {
         DesktopCanvas canvas;canvas.show();canvas.setClockWidgetVisible(true);canvas.setActivityWidgetVisible(true);settle(700);
+        check(QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)==primaryDesktop
+            && QDir::homePath()==root+"/home" && desktop!=primaryDesktop,
+            "primary and alternate desktop fixtures use an isolated home and separate directories");
         auto *clock=canvas.findChild<ClockDesklet *>();auto *activity=canvas.findChild<ActivityDesklet *>();auto *recorder=canvas.findChild<ActivityRecorder *>();
         check(clock && activity && recorder,"both desktop widgets share a live canvas and recorder");if(!clock || !activity || !recorder)return 1;
         check(clock->isVisible() && activity->isVisible(),"both display actions reveal their widgets");
@@ -198,11 +204,34 @@ static int runDeskletTest(const QString &root)
                 QDragEnterEvent enter(at,Qt::MoveAction,&mime,Qt::LeftButton,Qt::NoModifier);
                 QApplication::sendEvent(&canvas,&enter);
                 QDropEvent drop(at,Qt::MoveAction,&mime,Qt::LeftButton,Qt::NoModifier);
-                QApplication::sendEvent(&canvas,&drop);settle(80);
+                QApplication::sendEvent(&canvas,&drop);
+                check(!FileClipboard::busy(),"existing desktop drop repositions synchronously without a file transfer");
+                settle(80);
                 check(drop.isAccepted() && avoidsWidgets(fixtureIcon(path)),"file and folder dropped on a widget snap to an unoccupied cell");
-                check(QFileInfo::exists(path),"same-desktop drop preserves the original fixture");
+                check(QFileInfo::exists(path)
+                    && !QFileInfo::exists(primaryDesktop+'/'+QFileInfo(path).fileName()),
+                    "drop from alternate desktop preserves its physical source without a primary-desktop duplicate");
             }
         }
+        const QString copySource=desktop+"/copy-fixture.txt";
+        const QString copyTarget=primaryDesktop+"/copy-fixture.txt";
+        const QByteArray copyContent="desktop copy fixture";
+        QFile copyFile(copySource);
+        check(copyFile.open(QIODevice::WriteOnly) && copyFile.write(copyContent)==copyContent.size(),
+            "alternate desktop copy fixture is created");copyFile.close();
+        QMimeData copyMime;copyMime.setUrls({QUrl::fromLocalFile(copySource)});
+        const QPoint copyPosition=clock->geometry().center();
+        QDragEnterEvent copyEnter(copyPosition,Qt::CopyAction,&copyMime,Qt::LeftButton,Qt::ControlModifier);
+        QApplication::sendEvent(&canvas,&copyEnter);
+        QDropEvent copyDrop(copyPosition,Qt::CopyAction,&copyMime,Qt::LeftButton,Qt::ControlModifier);
+        QApplication::sendEvent(&canvas,&copyDrop);
+        QElapsedTimer copyWait;copyWait.start();
+        do {settle(20);} while(FileClipboard::busy() && copyWait.elapsed()<8000);
+        check(copyDrop.isAccepted() && !FileClipboard::busy(),"real copy drop completes its bounded file job");
+        QFile copied(copyTarget),retained(copySource);
+        check(copied.open(QIODevice::ReadOnly) && retained.open(QIODevice::ReadOnly)
+            && copied.readAll()==copyContent && retained.readAll()==copyContent,
+            "copy from alternate desktop creates a primary copy and preserves the source contents");
         if(auto *icon=fixtureIcon(desktop+"/fixture.txt")){
             const QRect original=activity->geometry();
             activity->move(icon->pos());settle(100);

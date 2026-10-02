@@ -13,7 +13,7 @@ jobs:
       - name: Install build and test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake g++ qtbase5-dev libqt5svg5-dev libgl1-mesa-dev libx11-dev zlib1g-dev xvfb xauth dbus-x11 python3-pil python3-reportlab poppler-utils tesseract-ocr libglib2.0-bin libgtk-3-bin
+          sudo apt-get install -y cmake g++ qtbase5-dev libqt5svg5-dev libgl1-mesa-dev libx11-dev zlib1g-dev xvfb xauth dbus-x11 xdotool x11-utils python3-pil python3-reportlab poppler-utils tesseract-ocr libglib2.0-bin libgtk-3-bin
       - name: System application blur compatibility
         run: |
           python3 integration/peony/test_blur_compat.py
@@ -31,6 +31,9 @@ jobs:
       - name: Diagnosis, music and settings regressions
         working-directory: build/fences
         run: ctest --output-on-failure -R '^desktop_(monitor_diagnosis|music|settings-center)_'
+      - name: Window lifecycle, pointer effects and startup positioning
+        working-directory: build/fences
+        run: ctest --output-on-failure -R '^liquid-(dialog|controls)|^desktop_selection_drag|^desktop_(pointer_effect|fence-settings|menu-shortcut|smart-space-position|desklets)_'
       - uses: actions/upload-artifact@v4
         if: always()
         with:

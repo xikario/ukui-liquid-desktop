@@ -1,6 +1,10 @@
 #include <QApplication>
 #include <QWidget>
 #include <QPainter>
+#include <QPaintEvent>
+#include <QMouseEvent>
+#include <QCursor>
+#include <QScreen>
 #include <QMenu>
 #include <QTimer>
 #include <QTemporaryDir>
@@ -9,6 +13,11 @@
 #include <QLabel>
 #include <QDir>
 #include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QAbstractButton>
+#include <QPushButton>
+#include <QPointer>
 #include <QSlider>
 #include <QCheckBox>
 #include <QSaveFile>
@@ -25,6 +34,15 @@ public:
     using QWidget::QWidget;
     void paintEvent(QPaintEvent *) override {QPainter p(this);p.fillRect(rect(),QColor("#ad2144"));}
 };
+class PointerPaintProbe : public QObject {
+public:
+    QWidget *panel=nullptr;
+    int paints=0;
+    bool eventFilter(QObject *object,QEvent *event) override {
+        if(object==panel && event->type()==QEvent::Paint)++paints;
+        return false;
+    }
+};
 static void check(bool ok,const char *s){if(!ok){qCritical()<<s;std::exit(1);}qInfo()<<"PASS:"<<s;}
 int main(int argc,char **argv) {
     QTemporaryDir dir;qputenv("XDG_CONFIG_HOME",dir.path().toUtf8());
@@ -36,11 +54,41 @@ int main(int argc,char **argv) {
     };
     replaceWallpaper(QColor("#bd6542"));qputenv("UKUI_LIQUID_WALLPAPER",wallpaper.toUtf8());
     auto settle=[] {QEventLoop loop;QTimer::singleShot(700,&loop,&QEventLoop::quit);loop.exec();};
-    QApplication app(argc,argv);UKUIPanel panel;panel.setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);panel.setAttribute(Qt::WA_TranslucentBackground);panel.resize(780,60);
+    QApplication app(argc,argv);UKUIPanel panel;panel.setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint);panel.setAttribute(Qt::WA_TranslucentBackground);panel.resize(780,60);
     QLabel label("原有任务栏内容",&panel);label.move(60,20);panel.show();
     QTimer::singleShot(150,&app,[&]{
         check(panel.property("liquidPanelAttached").toBool(),"Qt style plugin attaches without panel source ABI");
         settle();
+        {
+            // Install after the style: this application filter observes paint
+            // events before the plugin consumes them.
+            PointerPaintProbe probe;probe.panel=&panel;app.installEventFilter(&probe);
+            auto wait=[](int ms){QEventLoop loop;QTimer::singleShot(ms,&loop,&QEventLoop::quit);loop.exec();};
+            auto motion=[&](QPoint local){
+                const QPoint global=panel.mapToGlobal(local);QCursor::setPos(global);
+                QMouseEvent event(QEvent::MouseMove,label.mapFromGlobal(global),global,Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+                QApplication::sendEvent(&label,&event);
+            };
+            motion(QPoint(100,30));wait(100);probe.paints=0;
+            for(int i=0;i<50;++i){motion(QPoint(100+i*9,30));wait(4);}
+            wait(100);qInfo()<<"pointer frame paints"<<probe.paints;
+            check(probe.paints>0 && probe.paints<=12,"child pointer motion merges old/new damage once per 32ms frame");
+            if(QGuiApplication::platformName()=="xcb") {
+                const QImage partial=QApplication::primaryScreen()->grabWindow(panel.winId()).toImage();
+                panel.update();wait(80);
+                const QImage full=QApplication::primaryScreen()->grabWindow(panel.winId()).toImage();
+                int delta=0;
+                for(int y=0;y<full.height();++y)for(int x=0;x<full.width();++x){
+                    const QRgb a=partial.pixel(x,y),b=full.pixel(x,y);
+                    delta=qMax(delta,qMax(qAbs(qRed(a)-qRed(b)),qMax(qAbs(qGreen(a)-qGreen(b)),qAbs(qBlue(a)-qBlue(b)))));
+                }
+                check(partial.size()==full.size() && delta<=2,"native panel partial/full pixels retain exact rim with fractional AA tolerance");
+            }
+            wait(100);probe.paints=0;wait(150);check(probe.paints==0,"stationary panel stops pointer repainting");
+            motion(QPoint(-50,-50));wait(100);probe.paints=0;wait(150);
+            check(probe.paints==0,"leaving panel clears highlight then stops repainting");
+            app.removeEventFilter(&probe);
+        }
         auto on=panel.grab().toImage();
         check(on.pixelColor(400,30)!=QColor("#ad2144"),"panel background replaced");
         check(label.isVisible(),"original children remain visible");
@@ -127,12 +175,52 @@ int main(int argc,char **argv) {
         check(settings!=nullptr,"appearance settings action exists");settings->trigger();app.processEvents();
         auto dialogs=panel.findChildren<QDialog *>();
         check(!dialogs.isEmpty() && dialogs.first()->isVisible(),"appearance settings dialog opens");
+        auto *appearanceDialog=dialogs.first();
+        auto *titlebar=appearanceDialog->findChild<QWidget *>("liquidDialogTitlebar");
+        auto *titleClose=appearanceDialog->findChild<QAbstractButton *>("liquidDialogClose");
+        auto *titleIcon=appearanceDialog->findChild<QLabel *>("liquidDialogIcon");
+        check(!appearanceDialog->windowIcon().isNull() && titleIcon && titleIcon->pixmap()
+                  && !titleIcon->pixmap()->isNull()
+                  && appearanceDialog->windowRole()=="liquid-panel-settings",
+              "panel settings expose an explicit icon and task-window role even when the OEM panel has no icon");
+        check(appearanceDialog->windowFlags().testFlag(Qt::FramelessWindowHint)
+                  && titlebar && titlebar->isVisible() && titleClose && titleClose->isVisible(),
+              "real panel settings use the shared frameless titlebar and close control");
+        check(appearanceDialog->windowType()==Qt::Window
+                  && appearanceDialog->windowFlags().testFlag(Qt::WindowMinimizeButtonHint)
+                  && !appearanceDialog->windowFlags().testFlag(Qt::WindowMaximizeButtonHint)
+                  && appearanceDialog->findChild<QAbstractButton *>("liquidDialogMinimize")
+                  && !appearanceDialog->findChild<QAbstractButton *>("liquidDialogMaximize"),
+              "panel settings expose a task-managed window with minimize and close only");
+        check(!appearanceDialog->windowFlags().testFlag(Qt::WindowStaysOnTopHint),
+              "panel settings stay in the ordinary application window layer");
+        const QPoint settingsPosition=appearanceDialog->pos();
+        const int settingsBuilds=appearanceDialog->property("liquidDialogMaterialBuilds").toInt();
+        appearanceDialog->findChild<QAbstractButton *>("liquidDialogMinimize")->click();settle();
+        check(appearanceDialog->isMinimized(),"real panel settings can be minimized to the task list");
+        settings->trigger();settle();
+        check(!appearanceDialog->isMinimized() && appearanceDialog->pos()==settingsPosition
+                  && appearanceDialog->property("liquidDialogMaterialBuilds").toInt()==settingsBuilds,
+              "settings action restores the existing dialog without capturing its mapped contents again");
+        auto *form=qobject_cast<QFormLayout *>(appearanceDialog->layout());
+        auto *introItem=form?form->itemAt(0,QFormLayout::SpanningRole):nullptr;
+        auto *intro=introItem?qobject_cast<QLabel *>(introItem->widget()):nullptr;
+        auto *footer=appearanceDialog->findChild<QDialogButtonBox *>();
+        auto *footerClose=footer?footer->button(QDialogButtonBox::Close):nullptr;
+        check(form && intro && footerClose,"panel settings retain their actual form and close footer");
+        const QRect headerRect(titlebar->mapTo(appearanceDialog,QPoint()),titlebar->size());
+        const QRect introRect(intro->mapTo(appearanceDialog,QPoint()),intro->size());
+        const QRect footerRect(footerClose->mapTo(appearanceDialog,QPoint()),footerClose->size());
+        check(headerRect.bottom()<introRect.top() && headerRect.bottom()<footerRect.top()
+                  && appearanceDialog->rect().contains(introRect)
+                  && appearanceDialog->rect().contains(footerRect),
+              "panel form instructions and final close button remain below the custom header without clipping");
         auto *follow=dialogs.first()->findChild<QCheckBox *>("liquidPanelFollowWallpaper");
         check(follow && follow->isChecked(),"wallpaper adaptation defaults on");
         auto before=panel.grab().toImage();
         replaceWallpaper(QColor("#46b286"));settle();
         check(panel.grab().toImage()!=before,"atomic wallpaper change updates material automatically");
-        follow->setChecked(false);app.processEvents();saved.sync();
+        follow->setChecked(false);settle();saved.sync();
         check(!saved.value("appearance/followWallpaper",true).toBool(),"adaptation switch persists");
         before=panel.grab().toImage();replaceWallpaper(QColor("#516dbb"));settle();
         check(panel.grab().toImage()==before,"disabled adaptation keeps cached wallpaper");
@@ -141,9 +229,9 @@ int main(int argc,char **argv) {
               "reenabling adaptation asynchronously loads latest wallpaper");
         auto sliders=dialogs.first()->findChildren<QSlider *>();
         check(sliders.size()==7,"material and see-through sliders exist");
-        dialogs.first()->findChild<QSlider *>("liquidPanelShade")->setValue(72);app.processEvents();saved.sync();
-        check(qAbs(saved.value("appearance/opacity").toDouble()-.72)<.001,"slider changes persist immediately");
-        dialogs.first()->findChild<QSlider *>("liquidPanelChroma")->setValue(35);app.processEvents();saved.sync();
+        dialogs.first()->findChild<QSlider *>("liquidPanelShade")->setValue(72);settle();saved.sync();
+        check(qAbs(saved.value("appearance/opacity").toDouble()-.72)<.001,"slider changes persist after the bounded debounce");
+        dialogs.first()->findChild<QSlider *>("liquidPanelChroma")->setValue(35);settle();saved.sync();
         check(qAbs(saved.value("appearance/chroma").toDouble()-.35)<.001,"chroma setting persists immediately");
         auto *clarity=dialogs.first()->findChild<QSlider *>("liquidPanelClarity");
         auto *strength=dialogs.first()->findChild<QSlider *>("liquidPanelStrength");
@@ -155,8 +243,18 @@ int main(int argc,char **argv) {
         clarity->setValue(60);strength->setValue(170);settle();saved.sync();
         check(qAbs(saved.value("appearance/clarity").toDouble()-.6)<.001 &&
               qAbs(saved.value("appearance/liquidStrength").toDouble()-1.7)<.001,"new material settings persist");
+        const int writes=app.property("liquidPanelConfigWrites").toInt();
+        const int batches=app.property("liquidPanelPreviewBatches").toInt();
+        for(int v=20;v<=60;++v)clarity->setValue(v);
+        check(app.property("liquidPanelConfigWrites").toInt()==writes,"slider burst does not synchronously write settings");
+        settle();saved.sync();
+        check(app.property("liquidPanelConfigWrites").toInt()==writes+1 && app.property("liquidPanelPreviewBatches").toInt()==batches+1,
+              "41 slider values merge into one preview and one configuration write");
+        check(qAbs(saved.value("appearance/clarity").toDouble()-.6)<.001,"merged burst saves its final value");
         const auto opaque=panel.grab().toImage();
-        through->setChecked(true);transparency->setValue(50);settle();saved.sync();
+        const auto buildsBeforeTransparency=panel.property("liquidMaterialBuilds").toInt();
+        through->setChecked(true);for(int v=10;v<=50;++v)transparency->setValue(v);settle();saved.sync();
+        check(panel.property("liquidMaterialBuilds").toInt()==buildsBeforeTransparency,"transparency preview reuses optical material");
         const auto transparent=panel.grab().toImage();
         const qreal dpr=panel.devicePixelRatioF();
         check(qAlpha(opaque.pixel(qRound(400*dpr),qRound(30*dpr)))==255 &&
@@ -169,7 +267,12 @@ int main(int argc,char **argv) {
         if(x11)check(!blurProperty().contains(" = "),"see-through never reintroduces native rectangular blur");
         through->setChecked(false);settle();
         check(panel.grab().toImage()==opaque,"disabling see-through restores exact material");
-        dialogs.first()->close();
+        const QPointer<QDialog> appearanceGuard(appearanceDialog);
+        clarity->setValue(61);titleClose->click();settle();saved.sync();
+        check(!appearanceGuard || !appearanceGuard->isVisible(),
+              "shared titlebar close exits the real panel settings dialog");
+        check(qAbs(saved.value("appearance/clarity").toDouble()-.61)<.001,
+              "shared titlebar closing flushes the final pending settings value");
         panel.resize(860,60);settle();
         check(!panel.mask().contains(QPoint(859,0)) && panel.mask().contains(QPoint(858,30)),"resize retains rounded ends");
         validatePhysicalShape();

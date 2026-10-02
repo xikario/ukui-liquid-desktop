@@ -23,6 +23,15 @@ static int runSettingsCenterTest(const QString &root) {
     check(window,"settings window opens");if(!window)return 1;
     check(!window->windowIcon().isNull() && !window->windowIcon().pixmap(32,32).isNull(),"settings has an embedded taskbar icon");
     check(window->windowRole()=="fences-settings","settings has its own window role");
+    check(window->windowType()==Qt::Window && !window->parentWidget()
+        && window->windowFlags().testFlag(Qt::FramelessWindowHint)
+        && window->windowFlags().testFlag(Qt::WindowMinimizeButtonHint)
+        && window->windowFlags().testFlag(Qt::WindowCloseButtonHint)
+        && !window->windowFlags().testFlag(Qt::WindowMaximizeButtonHint),
+        "settings expose an independent normal frameless window with minimize and close but no maximize");
+    auto *minimize=window->findChild<QPushButton *>("settingsMinimize");
+    auto *closeButton=window->findChild<QPushButton *>("settingsClose");
+    check(minimize && closeButton,"settings own titlebar exposes identifiable minimize and close controls");
     check(!window->findChild<QPushButton *>("liquidPopupPreviewButton"),"unused liquid preview entry is removed");
     canvas.showUnifiedSettings();check(settingsWindow()==window,"repeated entry reuses the same window");
     check(!canvas.globalEditMode(),"opening settings does not enable layout editing");
@@ -36,13 +45,23 @@ static int runSettingsCenterTest(const QString &root) {
     window->resize(window->size()+QSize(10,10));settle(180);
     check(materialBuilds==1 && window->property("materialBuilds").toInt()==1,"drag and resize reuse the one opening capture");
     check(window->styleSheet().isEmpty() && window->palette()==QApplication::palette(),"native dialog parent retains default style and palette");
-    check(window->windowFlags().testFlag(Qt::WindowStaysOnTopHint),"settings remains above desktop and external windows");
+    check(!window->windowFlags().testFlag(Qt::WindowStaysOnTopHint),"settings permits switching to another application");
+    QProcess nativeIdentity;
+    nativeIdentity.start("xprop",{"-id",QString::number(window->winId()),"WM_CLASS","_KDE_NET_WM_DESKTOP_FILE",
+        "_NET_WM_WINDOW_TYPE","_NET_WM_STATE"});
+    const bool readIdentity=nativeIdentity.waitForFinished(2000);
+    const QByteArray nativeProperties=nativeIdentity.readAllStandardOutput();
+    check(readIdentity && nativeProperties.count("ukui-fences-settings")>=3
+        && nativeProperties.contains("_NET_WM_WINDOW_TYPE_NORMAL")
+        && !nativeProperties.contains("_NET_WM_STATE_ABOVE")
+        && !nativeProperties.contains("_NET_WM_STATE_SKIP_TASKBAR"),
+        "settings native identity is a normal task-managed window without a permanent above state");
     {
         QFileDialog chooser(window,"选择 Fences 壁纸");
         check(!chooser.testOption(QFileDialog::DontUseNativeDialog),"wallpaper chooser permits the system native dialog");
         check(chooser.styleSheet().isEmpty() && chooser.palette()==QApplication::palette(),"native chooser does not inherit liquid content styling");
     }
-    window->showMinimized();settle(60);check(window->isMinimized(),"pinned settings can still minimize explicitly");
+    if(minimize)minimize->click();settle(60);check(window->isMinimized(),"settings titlebar button minimizes the actual window");
     window->showNormal();settle(60);check(window->isVisible() && !window->isMinimized(),"settings restores after explicit minimize");
     window->move(beforeMove);
     QMouseEvent outside(QEvent::MouseButtonPress,QPoint(3,3),canvas.mapToGlobal(QPoint(3,3)),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
@@ -80,7 +99,7 @@ static int runSettingsCenterTest(const QString &root) {
         const QRect before=clock?clock->geometry():QRect();
         desktopToggle->click();settle(80);
         check(!canvas.fencesDesktopVisible() && window->isVisible() && desktopToggle->text()=="切换回 Fences 桌面","switching to system desktop keeps a visible return action");
-        window->showMinimized();settle(40);canvas.showUnifiedSettings();settle(60);
+        if(minimize)minimize->click();settle(40);canvas.showUnifiedSettings();settle(60);
         check(!canvas.fencesDesktopVisible() && desktopToggle->text()=="切换回 Fences 桌面","reopening settings retains the return-to-Fences action");
         desktopToggle->click();settle(150);
         check(canvas.fencesDesktopVisible() && clock && clock->isVisible() && clock->geometry()==before,"return switch restores desktop and existing widget geometry");
@@ -92,9 +111,19 @@ static int runSettingsCenterTest(const QString &root) {
     auto *iconForm=window->findChild<QWidget *>("iconAppearanceDialog");
     check(iconForm,"icon editor exists as embedded QWidget");
     const int original=IconAppearance::load().strength;
-    iconForm->findChild<QSlider *>("iconGlassStrength")->setValue(original==70?71:70);
+    const int draftStrength=original==70?71:70;
+    iconForm->findChild<QSlider *>("iconGlassStrength")->setValue(draftStrength);
     window->openPage("help");window->openPage("icons");
     check(iconForm==window->findChild<QWidget *>("iconAppearanceDialog"),"page navigation retains an unapplied draft");
+    if(minimize)minimize->click();settle(60);
+    check(window->isMinimized() && iconForm->property("settingsDirty").toBool(),
+        "titlebar minimization retains the unapplied appearance draft");
+    canvas.showUnifiedSettings();settle(60);
+    check(settingsWindow()==window && window->isVisible() && !window->isMinimized()
+        && iconForm==window->findChild<QWidget *>("iconAppearanceDialog")
+        && iconForm->findChild<QSlider *>("iconGlassStrength")->value()==draftStrength
+        && IconAppearance::load().strength==original,
+        "restoring settings reuses the same controls and preserves the draft without saving it");
     QTimer::singleShot(30,window,[]{if(auto *box=qobject_cast<QDialog *>(QApplication::activeModalWidget()))box->reject();});
     window->close();check(window && window->isVisible(),"canceling close keeps the draft available");
     QTimer::singleShot(30,window,[]{if(auto *box=qobject_cast<QDialog *>(QApplication::activeModalWidget()))box->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Discard)->click();});

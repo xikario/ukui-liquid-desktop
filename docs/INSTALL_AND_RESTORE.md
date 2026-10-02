@@ -77,7 +77,7 @@ session 入口显式切换当前面板，登录时也执行一次检查：已加
 
 ## 独立可选模块
 
-- [系统应用模糊兼容](../integration/peony/README.md)：需要 X11、Python Xlib 和用户 systemd；安装会立即启用用户服务并处理目标窗口属性，停用后重开窗口恢复其原模糊请求。
+- [系统应用模糊兼容](../integration/peony/README.md)：需要 X11、Python 3、libX11 运行库和用户 systemd；安装会立即启用用户服务并处理目标窗口属性，停用后重开窗口恢复其原模糊请求。
 - [FTG340 策略](../extras/ukui-desktop-performance/README.md)：管理员安装，明确传入 `600000` 或 `800000`；会写系统服务/规则和匹配驱动参数，不随任何主应用安装，也不适用于其他显卡。
 
 不使用可选模块不影响三个主应用的构建与安装。

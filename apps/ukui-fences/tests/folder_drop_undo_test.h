@@ -1,3 +1,5 @@
+#include "LiquidDialog.h"
+#include <QLabel>
 #pragma once
 #include "DesktopIcon.h"
 #include <QDragEnterEvent>
@@ -38,8 +40,8 @@ static int runFolderDropUndoTest(const QString &root)
     QTimer dismiss;
     QObject::connect(&dismiss, &QTimer::timeout, [&] {
         for (QWidget *widget : QApplication::topLevelWidgets())
-            if (auto *box = qobject_cast<QMessageBox *>(widget)) {
-                messages << box->text(); box->accept();
+            if(widget->objectName()=="liquidMessageDialog" && widget->isVisible() && !widget->property("liquidDialogClosing").toBool()) {
+                messages << widget->findChild<QLabel *>("liquidMessageText")->text(); qobject_cast<QDialog *>(widget)->accept();
             }
     });
     dismiss.start(10);

@@ -1,3 +1,4 @@
+#include "LiquidDialog.h"
 #include "DesktopIcon.h"
 #include "DesktopCanvas.h"
 #include "FileClipboard.h"
@@ -641,11 +642,11 @@ void DesktopIcon::finishInlineRename(bool commit)
 
     if (commit && !newName.isEmpty() && newName != oldName) {
         if (newName.contains('/') || newName.contains('\\')) {
-            QMessageBox::warning(this, "重命名失败", "文件名不能包含路径分隔符。");
+            LiquidDialog::warning(this, "重命名失败", "文件名不能包含路径分隔符。");
         } else {
             const QString newPath = fi.absolutePath() + "/" + newName;
             if (QFileInfo::exists(newPath)) {
-                QMessageBox::warning(this, "重命名失败", "同名项目已存在。");
+                LiquidDialog::warning(this, "重命名失败", "同名项目已存在。");
             } else {
                 const bool renamed = fi.isDir()
                     ? QDir().rename(oldPath, newPath)
@@ -656,7 +657,7 @@ void DesktopIcon::finishInlineRename(bool commit)
                         setItem(item);
                     emit fileRenamed(oldPath, newPath);
                 } else {
-                    QMessageBox::warning(this, "重命名失败", "无法重命名该项目。");
+                    LiquidDialog::warning(this, "重命名失败", "无法重命名该项目。");
                 }
             }
         }
@@ -967,7 +968,7 @@ void DesktopIcon::contextMenuEvent(QContextMenuEvent *e)
             auto *actEmptyTrash = menu.addAction(
                 QIcon::fromTheme("user-trash"), "清空回收站");
             connect(actEmptyTrash, &QAction::triggered, [this] {
-                if (QMessageBox::question(this, "清空回收站",
+                if (LiquidDialog::question(this, "清空回收站",
                         "确定要永久删除回收站中的所有项目吗？\n此操作无法撤销。")
                     != QMessageBox::Yes)
                     return;
@@ -1026,13 +1027,13 @@ void DesktopIcon::contextMenuEvent(QContextMenuEvent *e)
     auto *actDel = menu.addAction(
         QIcon::fromTheme("user-trash"), "移到回收站");
     connect(actDel, &QAction::triggered, [this] {
-        if (QMessageBox::question(this, "确认删除",
+        if (LiquidDialog::question(this, "确认删除",
                 QString("确定要将 \"%1\" 移到回收站吗？").arg(m_item.displayName))
             == QMessageBox::Yes) {
             FileClipboard::trashFilesAsync({m_item.filePath}, this,
                 [this](const FileClipboard::PasteResult &result) {
                     if (!result.failedPaths.isEmpty())
-                        QMessageBox::warning(this, "移到回收站失败", "项目未能移到回收站。");
+                        LiquidDialog::warning(this, "移到回收站失败", "项目未能移到回收站。");
                     if (!result.placedPaths.isEmpty()) emit filesDroppedToTrash(result);
                 });
         }
@@ -1041,7 +1042,7 @@ void DesktopIcon::contextMenuEvent(QContextMenuEvent *e)
     auto *actPermanentDel = menu.addAction(
         QIcon::fromTheme("edit-delete"), "永久删除");
     connect(actPermanentDel, &QAction::triggered, [this] {
-        if (QMessageBox::warning(this, "永久删除",
+        if (LiquidDialog::warning(this, "永久删除",
                 QString("确定永久删除 \"%1\"？\n此操作无法撤销。")
                     .arg(m_item.displayName),
                 QMessageBox::Yes | QMessageBox::No,
@@ -1056,7 +1057,7 @@ void DesktopIcon::contextMenuEvent(QContextMenuEvent *e)
             if (ok) result.placedPaths << oldPath; else result.failedPaths << oldPath;
             return result;
         }, [this, oldPath](const FileClipboard::PasteResult &result) {
-            if (!result.failedPaths.isEmpty()) QMessageBox::warning(this,"删除失败","项目未能删除。");
+            if (!result.failedPaths.isEmpty()) LiquidDialog::warning(this,"删除失败","项目未能删除。");
             else emit fileRemoved(oldPath);
         });
     });
@@ -1135,7 +1136,7 @@ void DesktopIcon::dropEvent(QDropEvent *e)
         accepted = FileClipboard::trashFilesAsync(paths, this,
             [this](const FileClipboard::PasteResult &result) {
                 if (!result.failedPaths.isEmpty())
-                    QMessageBox::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+                    LiquidDialog::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
                 refreshTrashIcon();
                 if (!result.placedPaths.isEmpty()) emit filesDroppedToTrash(result);
             });

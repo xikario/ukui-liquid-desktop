@@ -59,6 +59,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "appearance_test.h"
 #include "desktop_refresh_test.h"
 #include "settings_center_test.h"
+#include "fence_settings_test.h"
 #include "icon_appearance_test.h"
 #include "clipboard_test.h"
 #include "trash_undo_test.h"
@@ -71,20 +72,34 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "monitor_diagnosis_test.h"
 #include "startup_wallpaper_test.h"
 #include "smart_space_startup_test.h"
+#include "smart_space_position_test.h"
 #include "menu_shortcut_test.h"
+#include "pointer_effect_test.h"
 
 int main(int argc, char **argv)
 {
     // Must run under a separate X server and session bus (CTest does this).
     QTemporaryDir isolated("/tmp/fences-global-glass-test-XXXXXX");
     if (!isolated.isValid()) return 2;
+    // Qt caches the home directory as well as its standard-path candidates.
+    // No filesystem fixture may resolve a default desktop in the user's home.
+    const QString fixtureHome=isolated.path()+"/home";
+    if (!QDir().mkpath(fixtureHome)) return 2;
+    qputenv("HOME",fixtureHome.toUtf8());
     for (int i = 1; i < argc; ++i) {
         if (QString::fromLocal8Bit(argv[i]) == "--trash-undo-only"
-            || QString::fromLocal8Bit(argv[i]) == "--trash-benchmark-only") {
+            || QString::fromLocal8Bit(argv[i]) == "--trash-benchmark-only"
+            || QString::fromLocal8Bit(argv[i]) == "--desklets-only") {
             // GIO chooses home vs volume trash using the home filesystem.
-            // Keep both home and XDG data isolated on the fixture filesystem.
-            qputenv("HOME", isolated.path().toUtf8());
+            // Keep local filesystem operations on this fixture filesystem.
             qputenv("GIO_USE_VFS", "local");
+        }
+        if (QString::fromLocal8Bit(argv[i]) == "--desklets-only") {
+            const QString primaryDesktop=isolated.path()+"/primary-desktop";
+            if (!QDir().mkpath(primaryDesktop) || !QDir().mkpath(isolated.path()+"/config")) return 2;
+            QFile userDirs(isolated.path()+"/config/user-dirs.dirs");
+            const QByteArray config=("XDG_DESKTOP_DIR=\""+primaryDesktop+"\"\n").toUtf8();
+            if (!userDirs.open(QIODevice::WriteOnly) || userDirs.write(config)!=config.size()) return 2;
         }
     }
     qputenv("XDG_CONFIG_HOME", (isolated.path()+"/config").toUtf8());
@@ -126,12 +141,16 @@ int main(int argc, char **argv)
         QTimer::singleShot(5000,&app,[&]{app.exit(1);});
         return app.exec();
     }
+    if (app.arguments().contains("--pointer-effect-only"))
+        return PointerEffectTestAccess::run(isolated.path());
     if (app.arguments().contains("--menu-shortcut-only"))
         return runMenuShortcutTest();
     if (app.arguments().contains("--startup-wallpaper-only"))
         return runStartupWallpaperTest(isolated.path());
     if (app.arguments().contains("--smart-space-startup-only"))
         return runSmartSpaceStartupTest(isolated.path());
+    if (app.arguments().contains("--smart-space-position-only"))
+        return runSmartSpacePositionTest();
     if (app.arguments().contains("--monitor-placement-only"))
         return runMonitorPlacementTest();
     if (app.arguments().contains("--monitor-diagnosis-only"))
@@ -152,6 +171,8 @@ int main(int argc, char **argv)
         return runClipboardTest(isolated.path());
     if (app.arguments().contains("--icon-appearance-only"))
         return runIconAppearanceTest(isolated.path());
+    if (app.arguments().contains("--fence-settings-only"))
+        return runFenceSettingsTest(isolated.path());
     if (app.arguments().contains("--settings-center-only"))
         return runSettingsCenterTest(isolated.path());
     if (app.arguments().contains("--appearance-only"))
@@ -357,9 +378,9 @@ int main(int argc, char **argv)
                         if (!a->isSeparator()) result << a->text();
                     return result;
                 };
-                check(labels(menu) == QStringList({"新建", "粘贴", "撤销上一步", "刷新桌面", "打开文件管理器", "编辑分区布局",
+                check(labels(menu) == QStringList({"新建", "粘贴", "撤销上一步", "刷新桌面", "打开终端", "打开文件管理器", "编辑分区布局",
                     "排列与布局", "桌面小组件", "Fences 设置…"}),
-                    "desktop menu has nine ordered entries");
+                    "desktop menu has ten ordered entries");
                 auto *edit=menu->findChild<QAction *>("layoutEditAction");
                 check(edit && !edit->isChecked(),"layout action starts unlocked for activation");
                 if(edit){

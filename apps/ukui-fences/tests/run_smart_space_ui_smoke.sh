@@ -94,7 +94,8 @@ if [ -n "$PREVIOUS_ACTIVE_WINDOW" ]; then
     xdotool windowminimize "$PREVIOUS_ACTIVE_WINDOW" 2>/dev/null || true
 fi
 
-"$BINARY" --smart-space > "$RESULT_DIR/ui-smoke.log" 2>&1 &
+mkdir -p "$RUNTIME_DIR/home" "$RUNTIME_DIR/data"
+env HOME="$RUNTIME_DIR/home" XDG_DATA_HOME="$RUNTIME_DIR/data" "$BINARY" --smart-space > "$RESULT_DIR/ui-smoke.log" 2>&1 &
 APP_PID=$!
 INDEX_PATH="$CACHE_DIR/kylin/ukui-fences/smart-space/index.json"
 attempt=0

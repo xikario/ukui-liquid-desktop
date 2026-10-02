@@ -1,4 +1,6 @@
+#include "LiquidDialog.h"
 #include "MonitorDiagnosisDialog.h"
+#include "FencesWindowIdentity.h"
 #include "DesktopCanvas.h"
 #include "LiquidOpticsRenderer.h"
 #include "LiquidMaterialPreparation.h"
@@ -92,8 +94,15 @@ QString MonitorDiagnosisReport::toPlainText() const {
 }
 
 MonitorDiagnosisDialog::MonitorDiagnosisDialog(QWidget *parent, DesktopCanvas *canvas)
-    : QDialog(parent, Qt::Window | Qt::WindowStaysOnTopHint), m_canvas(canvas) {
+    : QDialog(parent, Qt::Window), m_canvas(canvas) {
+    LiquidDialog::installMotion(this, true);
+    setAttribute(Qt::WA_TranslucentBackground);
+    setAutoFillBackground(false);
     setObjectName("monitorDiagnosisDetails"); setWindowTitle("智能诊断详情 · 只读建议");
+    const QIcon source(":/settings/monitor-diagnosis.svg");
+    QIcon icon;
+    for(int side:{16,24,32,48,64,128,256})icon.addPixmap(source.pixmap(side,side));
+    setWindowIcon(icon);
     setAttribute(Qt::WA_DeleteOnClose); setSizeGripEnabled(true);
     setMinimumSize(520, 340);
     auto *root = new QVBoxLayout(this); root->setContentsMargins(18, 14, 18, 10); root->setSpacing(9);
@@ -132,6 +141,8 @@ MonitorDiagnosisDialog::MonitorDiagnosisDialog(QWidget *parent, DesktopCanvas *c
     });
     connect(m_export, &QPushButton::clicked, this, &MonitorDiagnosisDialog::exportFromPicker);
     root->addWidget(buttons);
+    setWindowRole("fences-monitor-diagnosis");
+    applyFencesWindowIdentity(this,"ukui-fences-monitor");
 }
 MonitorDiagnosisDialog::~MonitorDiagnosisDialog() = default;
 
@@ -297,18 +308,36 @@ bool MonitorDiagnosisDialog::saveExport(const QString &path, bool telemetry, QSt
 void MonitorDiagnosisDialog::exportFromPicker() {
     const QString selected = m_tabs->currentIndex() == 2 ? "采样 JSON (*.json)" : "诊断文本 (*.txt)";
     QPointer<MonitorDiagnosisDialog> guard(this);
-    // Keep the platform file picker independent of the report's glass palette.
-    QFileDialog picker(nullptr, "导出诊断", "diagnosis-" + QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss"),
+    // Owned Qt picker uses the common surface; the report keeps its own material.
+    QPointer<LiquidDialog::FileDialog> picker = new LiquidDialog::FileDialog(this, "导出诊断", "diagnosis-" + QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss"),
         "诊断文本 (*.txt);;采样 JSON (*.json)");
-    picker.setAcceptMode(QFileDialog::AcceptSave); picker.setFileMode(QFileDialog::AnyFile);
-    picker.selectNameFilter(selected); picker.setDefaultSuffix(selected.contains("JSON") ? "json" : "txt");
-    connect(&picker, &QFileDialog::filterSelected, &picker, [&picker](const QString &filter) {
-        picker.setDefaultSuffix(filter.contains("JSON") ? "json" : "txt");
+    picker->setObjectName("monitorDiagnosisExportPicker");
+    picker->setOption(QFileDialog::DontUseNativeDialog);
+    LiquidDialog::install(picker);
+    picker->setWindowIcon(windowIcon());
+    picker->setWindowRole("fences-monitor-export");
+    applyFencesWindowIdentity(picker,"ukui-fences-monitor");
+    picker->setAcceptMode(QFileDialog::AcceptSave); picker->setFileMode(QFileDialog::AnyFile);
+    picker->selectNameFilter(selected); picker->setDefaultSuffix(selected.contains("JSON") ? "json" : "txt");
+    connect(picker, &QFileDialog::filterSelected, picker, [picker](const QString &filter) {
+        if (picker) picker->setDefaultSuffix(filter.contains("JSON") ? "json" : "txt");
     });
-    if (picker.exec() != QDialog::Accepted || !guard || picker.selectedFiles().isEmpty()) return;
+    // The report can be destroyed while the modal picker is running. A heap
+    // child follows its owner; both guards avoid accessing either after exec.
+    const int result = picker->exec();
+    QString path;
+    bool telemetry = false;
+    if (picker) {
+        if (result == QDialog::Accepted && !picker->selectedFiles().isEmpty()) {
+            path = picker->selectedFiles().first();
+            telemetry = picker->selectedNameFilter().contains("JSON");
+        }
+        delete picker.data();
+    }
+    if (!guard || path.isEmpty()) return;
     QString error;
-    if (!saveExport(picker.selectedFiles().first(), picker.selectedNameFilter().contains("JSON"), &error))
-        QMessageBox::warning(this, "导出失败", error);
+    if (!saveExport(path, telemetry, &error))
+        LiquidDialog::warning(this, "导出失败", error);
 }
 void MonitorDiagnosisDialog::refreshMaterial() {
     if (!m_glass || !m_canvas || !m_material.isNull() || m_materialPending) return;
@@ -328,6 +357,9 @@ void MonitorDiagnosisDialog::refreshMaterial() {
 void MonitorDiagnosisDialog::showEvent(QShowEvent *event) { QDialog::showEvent(event); refreshMaterial(); }
 void MonitorDiagnosisDialog::paintEvent(QPaintEvent *) {
     QPainter p(this); p.setRenderHint(QPainter::SmoothPixmapTransform);
+    p.setCompositionMode(QPainter::CompositionMode_Source);
+    p.fillRect(rect(),Qt::transparent);
+    p.setCompositionMode(QPainter::CompositionMode_SourceOver);
     if (m_glass && !m_material.isNull()) {
         p.drawImage(rect(), m_material);
         // Metadata and the advisory footer need stable contrast even over a
@@ -340,5 +372,9 @@ void MonitorDiagnosisDialog::paintEvent(QPaintEvent *) {
         p.drawRoundedRect(QRect(8, 8, width()-16, qMax(0, headerEnd-8)), 12, 12);
         p.drawRoundedRect(QRect(8, footerTop, width()-16, qMax(0, height()-footerTop-8)), 12, 12);
     }
-    else { QColor panel = m_colors.panel; panel.setAlpha(255); p.fillRect(rect(), panel); }
+    else {
+        QColor panel=m_colors.panel;panel.setAlpha(255);
+        p.setRenderHint(QPainter::Antialiasing);p.setPen(Qt::NoPen);p.setBrush(panel);
+        p.drawRoundedRect(QRectF(rect()),14,14);
+    }
 }

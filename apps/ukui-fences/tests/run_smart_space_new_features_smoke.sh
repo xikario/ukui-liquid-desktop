@@ -37,7 +37,8 @@ export UKUI_FENCES_SMARTSPACE_ROOTS="$ROOT"
 export UKUI_FENCES_SMARTSPACE_OCR=0
 export UKUI_FENCES_SMARTSPACE_AUTO_INDEX=1
 export UKUI_FENCES_TEST_AUTO_INDEX=1
-"$BINARY" --smart-space > "$RESULT_DIR/app.log" 2>&1 &
+mkdir -p "$RUNTIME_DIR/home" "$RUNTIME_DIR/data"
+env HOME="$RUNTIME_DIR/home" XDG_DATA_HOME="$RUNTIME_DIR/data" "$BINARY" --smart-space > "$RESULT_DIR/app.log" 2>&1 &
 APP_PID=$!
 INDEX="$CACHE/kylin/ukui-fences/smart-space/index.json"
 i=0

@@ -1,3 +1,4 @@
+#include "LiquidDialog.h"
 #include <QImageReader>
 #include "../../../shared/async-work/BackgroundTask.h"
 #include "LiquidPopup.h"
@@ -70,7 +71,6 @@ namespace {
 const QString kRemoveFolderText=QStringLiteral("移到回收站（文件夹版）");
 const QString kRemoveProtectedText=QStringLiteral("系统组件，无法卸载");
 const QString kRemoveDebText=QStringLiteral("卸载 deb 软件包");
-const QString kRemoveShortcutText=QStringLiteral("移除快捷方式");
 const QString kRemoveFlatpakText=QStringLiteral("请在软件商店卸载（Flatpak）");
 const QString kRemoveSnapText=QStringLiteral("请在软件商店卸载（Snap）");
 const QString kRemoveUnknownText=QStringLiteral("无法判断安装来源");
@@ -727,19 +727,30 @@ static QIcon generatePremiumIcon(const QString &appName)
     return QIcon(pixmap);
 }
 
+static QIcon readableFileIcon(const QString &path)
+{
+    if (!QFileInfo(path).isFile()) return {};
+    const QIcon icon(path);
+    // An existing path can be empty, corrupt or unreadable. Some icon engines
+    // remain non-null until their first pixmap request, so validate a render.
+    return icon.pixmap(38, 38).isNull() ? QIcon() : icon;
+}
+
 static QIcon iconForDesktopIcon(const QString &appName, const QString &iconName, const QString &desktopPath = QString())
 {
     if (iconName.isEmpty())
         return generatePremiumIcon(appName);
 
     QFileInfo iconInfo(iconName);
-    if (iconInfo.isAbsolute() && iconInfo.exists())
-        return QIcon(iconName);
+    if (iconInfo.isAbsolute()) {
+        const QIcon icon = readableFileIcon(iconName);
+        if (!icon.isNull()) return icon;
+    }
 
     if (!desktopPath.isEmpty()) {
         const QString localIcon = QFileInfo(desktopPath).absoluteDir().absoluteFilePath(iconName);
-        if (QFile::exists(localIcon))
-            return QIcon(localIcon);
+        const QIcon icon = readableFileIcon(localIcon);
+        if (!icon.isNull()) return icon;
     }
 
     QIcon icon = QIcon::fromTheme(iconName);
@@ -748,7 +759,7 @@ static QIcon iconForDesktopIcon(const QString &appName, const QString &iconName,
     if (icon.isNull())
         icon = QIcon::fromTheme(iconName.toLower());
     if (icon.isNull() && QFile::exists(iconName))
-        icon = QIcon(iconName);
+        icon = readableFileIcon(iconName);
     if (icon.isNull()) {
         const QString base = iconInfo.completeBaseName().isEmpty()
             ? iconName : iconInfo.completeBaseName();
@@ -765,20 +776,24 @@ static QIcon iconForDesktopIcon(const QString &appName, const QString &iconName,
             QDir dir(root);
             if (!dir.exists()) continue;
             const QFileInfoList files = dir.entryInfoList(patterns, QDir::Files);
-            if (!files.isEmpty())
-                return QIcon(files.first().absoluteFilePath());
+            for (const QFileInfo &file : files) {
+                const QIcon candidate = readableFileIcon(file.absoluteFilePath());
+                if (!candidate.isNull()) return candidate;
+            }
 
             const QFileInfoList subdirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
             for (const QFileInfo &subdir : subdirs) {
                 QDir appsDir(subdir.absoluteFilePath() + "/apps");
                 const QFileInfoList appIcons = appsDir.entryInfoList(patterns, QDir::Files);
-                if (!appIcons.isEmpty())
-                    return QIcon(appIcons.first().absoluteFilePath());
+                for (const QFileInfo &file : appIcons) {
+                    const QIcon candidate = readableFileIcon(file.absoluteFilePath());
+                    if (!candidate.isNull()) return candidate;
+                }
             }
         }
     }
     // Scalable theme engines can legitimately omit a fixed-size inventory.
-    if (icon.isNull()) {
+    if (icon.isNull() || icon.pixmap(38, 38).isNull()) {
         return generatePremiumIcon(appName);
     }
     return icon;
@@ -842,7 +857,10 @@ static int railPowerY()
 // Each control samples only the clean material image held by StartMenu.
 class GlassSearchEdit final : public QLineEdit {
 public:
-    explicit GlassSearchEdit(QWidget *parent) : QLineEdit(parent) { setMouseTracking(true); }
+    explicit GlassSearchEdit(QWidget *parent) : QLineEdit(parent) {
+        setMouseTracking(true);
+        setProperty("glassPointerControl", true);
+    }
 protected:
     void paintEvent(QPaintEvent *e) override {
         bool glass=false;
@@ -864,7 +882,7 @@ protected:
     }
     void enterEvent(QEvent *e) override { QLineEdit::enterEvent(e); update(); }
     void leaveEvent(QEvent *e) override { QLineEdit::leaveEvent(e); update(); }
-    void mouseMoveEvent(QMouseEvent *e) override { QLineEdit::mouseMoveEvent(e); update(); }
+    void mouseMoveEvent(QMouseEvent *e) override { QLineEdit::mouseMoveEvent(e); }
 };
 
 // ── Custom app button for the pinned grid ─────────────────
@@ -882,6 +900,7 @@ public:
         setToolTip(app.name);
 
         m_icon = iconForDesktopIcon(app.name, app.iconName, app.desktopPath);
+        setIcon(m_icon);
 
         // 初始化 Hover 动画
         m_hoverAnim = new QVariantAnimation(this);
@@ -1001,7 +1020,8 @@ protected:
     }
 
     void mouseMoveEvent(QMouseEvent *e) override {
-        update(); // refresh the local specular/hover state while moving
+        // This tile has no pointer-dependent glint. Enter/leave animation and
+        // QPushButton press feedback already invalidate it when needed.
         if (!m_draggable || !(e->buttons() & Qt::LeftButton)
             || (e->pos() - m_dragStartPos).manhattanLength() < QApplication::startDragDistance()) {
             QPushButton::mouseMoveEvent(e);
@@ -1227,6 +1247,7 @@ public:
         setCursor(Qt::PointingHandCursor);
         setToolTip(app.name);
         m_icon = iconForDesktopIcon(app.name, app.iconName, app.desktopPath);
+        setIcon(m_icon);
     }
 
 protected:
@@ -1296,13 +1317,19 @@ public:
     {
         setFixedHeight(32);
         setAutoFillBackground(false);
+        setProperty("glassPointerControl", !actionText.isEmpty());
         if (!actionText.isEmpty()) {
             setMouseTracking(true);
         }
     }
 
     void setTitle(const QString &title) { m_title = title; update(); }
-    void setAction(const QString &action) { m_action = action; if (!action.isEmpty()) setMouseTracking(true); update(); }
+    void setAction(const QString &action) {
+        m_action = action;
+        setProperty("glassPointerControl", !action.isEmpty());
+        if (!action.isEmpty()) setMouseTracking(true);
+        update();
+    }
 
     std::function<void()> onActionClicked;   // 排序（保留原名兼容）
     std::function<void()> onBackClicked;     // 新增：返回
@@ -1429,12 +1456,16 @@ protected:
         QWidget::mouseReleaseEvent(e);
     }
     void mouseMoveEvent(QMouseEvent *e) override {
-        m_mousePos = e->pos();
         layoutActionRects();
+        const bool wasBack = m_backRect.contains(m_mousePos);
+        const bool wasSort = m_sortRect.contains(m_mousePos);
+        m_mousePos = e->pos();
         const bool on = (m_backRect.isValid() && m_backRect.contains(m_mousePos))
                      || (m_sortRect.isValid() && m_sortRect.contains(m_mousePos));
         setCursor(on ? Qt::PointingHandCursor : Qt::ArrowCursor);
-        update();
+        if (wasBack != m_backRect.contains(m_mousePos)
+            || wasSort != m_sortRect.contains(m_mousePos))
+            update(m_backRect.united(m_sortRect).adjusted(-2, -2, 2, 2));
         QWidget::mouseMoveEvent(e);
     }
     void enterEvent(QEvent *) override { m_hovered = true; update(); }
@@ -1479,15 +1510,10 @@ StartMenu::StartMenu(QWidget *parent)
     });
     m_glassLightTimer = new QTimer(this);
     m_glassLightTimer->setInterval(33);
-    connect(m_glassLightTimer, &QTimer::timeout, this, [this] {
-        if (m_skin != Skin::EcoLiquid) return;
-        const QPointF target=mapFromGlobal(QCursor::pos());
-        const QPointF delta=target-m_glassLightPos;
-        if (qAbs(delta.x())+qAbs(delta.y()) < 0.5) return;
-        m_glassLightPos += delta*0.3;
-        // Reflection only touches the rim; don't repaint all text and icons.
-        update(QRegion(rect()).subtracted(QRegion(rect().adjusted(28,28,-28,-28))));
-    });
+    connect(m_glassLightTimer, &QTimer::timeout, this, &StartMenu::advanceGlassPointer);
+    // Observe, but never consume, pointer events delivered to our descendants.
+    // The timer animates towards an event-provided target; it does not poll X11.
+    qApp->installEventFilter(this);
     setupClipboardHistory();
     applyFontToChildren();
     setupAppWatcher();
@@ -1507,6 +1533,108 @@ StartMenu::~StartMenu()
         XCloseDisplay(m_pointerDisplay);
         m_pointerDisplay = nullptr;
     }
+}
+
+bool StartMenu::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() != QEvent::MouseMove && event->type() != QEvent::Show)
+        return QWidget::eventFilter(watched, event);
+    auto *widget = qobject_cast<QWidget *>(watched);
+    if (!widget || widget->window() != this)
+        return QWidget::eventFilter(watched, event);
+    if (event->type() == QEvent::Show) {
+        // Includes containers and widgets rebuilt by search or view changes.
+        widget->setMouseTracking(true);
+    } else if (isVisible() && m_skin == Skin::EcoLiquid) {
+        QWidget *control = widget;
+        while (control && control != this && !control->property("glassPointerControl").toBool())
+            control = control->parentWidget();
+        queueGlassPointer(mapFromGlobal(static_cast<QMouseEvent *>(event)->globalPos()),
+                          control == this ? nullptr : control);
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+QRegion StartMenu::glassReflectionDamage(const QPointF &position) const
+{
+    // The 180px radial light only paints the outer stroke. Retain the rounded
+    // corner arcs without invalidating a 28px strip around the whole panel.
+    QRegion rim = QRegion(rect()).subtracted(QRegion(rect().adjusted(4, 4, -4, -4)));
+    for (const QPoint &corner : {QPoint(0, 0), QPoint(width() - 28, 0),
+                                QPoint(0, height() - 28), QPoint(width() - 28, height() - 28)})
+        rim += QRect(corner, QSize(28, 28));
+    return rim.intersected(QRectF(position.x() - 182, position.y() - 182, 364, 364).toAlignedRect());
+}
+
+void StartMenu::queueGlassPointer(const QPointF &position, QWidget *control)
+{
+    if (!isVisible() || m_skin != Skin::EcoLiquid || !m_glassLightTimer)
+        return;
+    if (position == m_glassLightTarget && control == m_lastGlassControl)
+        return;
+    const QRect rail(0, 0, StartMenuTheme::kRailWidth, height());
+    for (const QPointF &point : {m_glassLightTarget, position})
+        m_glassControlDirty += QRectF(point.x() - 60, point.y() - 60, 120, 120)
+            .toAlignedRect().intersected(rail);
+    for (QWidget *widget : {m_lastGlassControl.data(), control})
+        if (widget && widget->isVisible())
+            m_glassControlDirty += QRect(widget->mapTo(this, QPoint()), widget->size());
+    // A capsule's radial glint also changes when the pointer is near it, not
+    // only while inside it. Repaint every affected capsule, including the one
+    // left behind, so a later full redraw cannot reveal an old highlight.
+    for (QWidget *widget : {static_cast<QWidget *>(m_searchEdit),
+                           static_cast<QWidget *>(m_pinnedHeader),
+                           static_cast<QWidget *>(m_recentHeader)}) {
+        if (!widget || !widget->isVisible() || !widget->property("glassPointerControl").toBool())
+            continue;
+        const QRect bounds(widget->mapTo(this, QPoint()), widget->size());
+        const qreal radius = qMax(40.0, widget->width() * 0.9) + 2;
+        const QRectF support = QRectF(bounds).adjusted(-radius, -radius, radius, radius);
+        if (support.contains(m_glassLightTarget) || support.contains(position))
+            m_glassControlDirty += bounds;
+    }
+    m_lastGlassControl = control;
+    m_glassLightTarget = position;
+    if (!m_glassLightTimer->isActive())
+        m_glassLightTimer->start();
+}
+
+void StartMenu::advanceGlassPointer()
+{
+    if (!isVisible() || m_skin != Skin::EcoLiquid) {
+        m_glassLightTimer->stop();
+        m_glassControlDirty = {};
+        return;
+    }
+    const QPointF previous = m_glassLightPos;
+    const QPointF delta = m_glassLightTarget - previous;
+    const bool moving = qAbs(delta.x()) + qAbs(delta.y()) >= 0.5;
+    m_glassLightPos = moving ? previous + delta * 0.3 : m_glassLightTarget;
+    QRegion damage = m_glassControlDirty;
+    m_glassControlDirty = {};
+    if (previous != m_glassLightPos)
+        damage += glassReflectionDamage(previous).united(glassReflectionDamage(m_glassLightPos));
+    if (!damage.isEmpty())
+        update(damage);
+    if (!moving)
+        m_glassLightTimer->stop();
+}
+
+QRegion StartMenu::railHoverDamage() const
+{
+    int y = -100;
+    switch (m_hoveredRailBtn) {
+    case RailButton::Avatar: y = 50; break;
+    case RailButton::Documents: y = railDocumentsY(); break;
+    case RailButton::Clipboard: y = railClipboardY(); break;
+    case RailButton::Theme: y = railThemeY(); break;
+    case RailButton::Settings: y = railSettingsY(); break;
+    case RailButton::Power: y = railPowerY(); break;
+    case RailButton::NoButton: break;
+    }
+    if (m_hoveredRailApp >= 0)
+        y = railAppY(m_hoveredRailApp);
+    return y < 0 ? QRegion() : QRegion(QRect(0, y - 25, StartMenuTheme::kRailWidth, 50));
 }
 
 void StartMenu::applyConfig()
@@ -1538,6 +1666,10 @@ void StartMenu::refreshPalette()
 void StartMenu::applySkin(Skin skin)
 {
     m_skin = skin;
+    if (m_glassLightTimer) m_glassLightTimer->stop();
+    m_glassControlDirty = {};
+    m_lastGlassControl.clear();
+    m_glassLightPos = m_glassLightTarget = mapFromGlobal(QCursor::pos());
     refreshPalette();
     applyX11BackdropEffect();
     applySearchStyle();
@@ -1684,6 +1816,8 @@ bool StartMenu::paintGlassControl(QPainter &p,const QWidget *owner,const QRectF 
                                   qreal radius,qreal hover,bool pressed)
 {
     if(m_skin!=Skin::EcoLiquid || !m_nextKdeGlassView) return false;
+    if (p.hasClipping() && !p.clipBoundingRect().intersects(target.adjusted(-2, -2, 2, 2)))
+        return true;
     const QPoint origin=owner->mapTo(this,QPoint(0,0));
     const QImage glass=m_nextKdeGlassView->controlImage(target.translated(origin),radius,pressed);
     if(glass.isNull()) return false;
@@ -1700,7 +1834,7 @@ bool StartMenu::paintGlassControl(QPainter &p,const QWidget *owner,const QRectF 
     p.drawImage(dest,glass);
     p.setOpacity(1);
     p.setClipPath(shape,Qt::IntersectClip);
-    const QPointF cursor=owner->mapFromGlobal(QCursor::pos());
+    const QPointF cursor = m_glassLightTarget - origin;
     QRadialGradient glint(cursor,qMax(40.0,target.width()*0.9));
     glint.setColorAt(0,QColor(255,255,255,qRound(80+active*100)));
     glint.setColorAt(0.42,QColor(207,236,255,qRound(20+active*30)));
@@ -1718,18 +1852,18 @@ qreal StartMenu::glassLuminanceAt(const QRectF &menuRect) const
         ? m_nextKdeGlassView->luminanceAt(menuRect) : 0;
 }
 
-void StartMenu::captureNextKdeBackdrop()
+bool StartMenu::captureNextKdeBackdrop(std::function<void()> ready)
 {
     if (!m_nextKdeGlassView || isVisible())
-        return;
+        return false;
     if (m_skin != Skin::EcoLiquid || !isX11Platform())
-        return;
+        return false;
 
     QScreen *screen = QGuiApplication::screenAt(pos() + QPoint(width() / 2, height() / 2));
     if (!screen)
         screen = QGuiApplication::primaryScreen();
     if (!screen)
-        return;
+        return false;
 
     // Capture while the menu is still hidden. Unlike the KWin6 effect, a Qt5
     // client cannot sample the compositor framebuffer, so this snapshot is the
@@ -1738,7 +1872,7 @@ void StartMenu::captureNextKdeBackdrop()
                                                  width(), height());
     if (snapshot.isNull()) {
         qWarning() << "[NextKdeGlass] screen backdrop capture failed";
-        return;
+        return false;
     }
 
     const QImage backdrop = snapshot.toImage();
@@ -1747,12 +1881,17 @@ void StartMenu::captureNextKdeBackdrop()
     if (!m_nextKdeGlassView->image().isNull()
         && backdrop.devicePixelRatio() == m_lastBackdrop.devicePixelRatio()
         && backdrop == m_lastBackdrop)
-        return;
-    m_nextKdeGlassView->setBackdropAsync(backdrop,qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_FAST"),[this]{update();});
-    m_lastBackdrop = backdrop;
+        return false;
+    m_nextKdeGlassView->setBackdropAsync(backdrop,qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_FAST"),
+        [this,backdrop,ready=std::move(ready)] {
+            m_lastBackdrop=backdrop;
+            update();
+            if(ready)ready();
+        });
     qDebug() << "[NextKdeGlass] captured backdrop" << snapshot.size()
              << "mode" << (qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_FAST") ? "fast" : "shared-optics")
              << "for menu" << size();
+    return true;
 }
 
 void StartMenu::changeEvent(QEvent *e)
@@ -2178,31 +2317,134 @@ void StartMenu::launchApp(int index)
 
 void StartMenu::launchAppEntry(const AppEntry &app)
 {
-    bool started = false;
-
-    if (!app.desktopPath.isEmpty()) {
-        const QString desktopFileName = QFileInfo(app.desktopPath).fileName();
-        started = QProcess::startDetached("gtk-launch", QStringList() << desktopFileName);
+    hideMenu();
+    // GLib reads the actual entry, including quoted Exec, field codes,
+    // Terminal and D-Bus activation. A detached helper alone cannot confirm it.
+    if(app.desktopPath.isEmpty()) {
+        LiquidDialog::warning(this,"无法打开应用","缺少快捷方式路径。");
+        return;
     }
+    auto *process=new QProcess(this);
+    auto *timeout=new QTimer(process);
+    timeout->setSingleShot(true);
+    const auto completed=std::make_shared<bool>(false);
+    connect(process,QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),this,
+        [this,process,timeout,completed,app](int code,QProcess::ExitStatus status) {
+            timeout->stop();
+            const QString error=conciseProcessError(QString::fromUtf8(process->readAllStandardError()));
+            process->deleteLater();
+            if(*completed)return;
+            *completed=true;
+            if(status==QProcess::NormalExit && code==0) {
+                AppRegistry::recordLaunchedApp(app.desktopPath);
+                m_lastRecordedActiveDesktop=app.desktopPath;
+            } else reportLaunchFailure(app,error.isEmpty()?"应用启动失败。":error);
+        });
+    connect(process,&QProcess::errorOccurred,this,[this,process,timeout,completed,app](QProcess::ProcessError error) {
+        if(error!=QProcess::FailedToStart || *completed)return;
+        *completed=true;timeout->stop();
+        const QString message=process->errorString();process->deleteLater();
+        hideMenu();
+        LiquidDialog::warning(this,"无法打开应用",message);
+    });
+    connect(timeout,&QTimer::timeout,this,[this,process,completed] {
+        if(*completed)return;
+        *completed=true;
+        // Stop only the launch helper, never the dispatched application.
+        process->kill();
+        hideMenu();
+        LiquidDialog::warning(this,"启动未确认","启动工具响应超时，请检查应用状态后重试。");
+    });
+    timeout->start(10000);
+    process->start(QCoreApplication::applicationFilePath(),
+        {"--launch-desktop",QFileInfo(app.desktopPath).absoluteFilePath()});
+}
 
-    if (!started && !app.exec.isEmpty()) {
-        QString execStr = app.exec;
-        QStringList parts = execStr.split(' ', QString::SkipEmptyParts);
-        if (!parts.isEmpty()) {
-            const QString cmd = parts.takeFirst();
-            parts.erase(std::remove_if(parts.begin(), parts.end(),
-                [](const QString &s) { return s.startsWith('%'); }),
-                parts.end());
-            started = QProcess::startDetached(cmd, parts);
+QString StartMenu::brokenShortcutExecutable(const QString &desktopPath)
+{
+    const QFileInfo desktop(desktopPath);
+    if(!isUserDesktopShortcut(desktopPath) || !desktop.isFile() || desktop.isSymLink()
+        || desktop.canonicalFilePath()!=desktop.absoluteFilePath())return {};
+    QFile file(desktopPath);
+    if(!file.open(QIODevice::ReadOnly) || file.size()>128*1024)return {};
+    QString exec,type;bool entry=false,dbus=false;
+    for(const auto &raw:QString::fromUtf8(file.readAll()).split('\n')) {
+        const QString line=raw.trimmed();
+        if(line.startsWith('[')){entry=line=="[Desktop Entry]";continue;}
+        if(!entry)continue;
+        if(line.startsWith("Exec="))exec=line.mid(5).trimmed();
+        else if(line.startsWith("Type="))type=line.mid(5);
+        else if(line=="DBusActivatable=true")dbus=true;
+    }
+    if(type!="Application" || dbus || exec.isEmpty())return {};
+    // Decode the desktop-entry string layer before its quoted Exec token.
+    QString decoded;
+    for(int i=0;i<exec.size();++i) {
+        if(exec[i]!='\\'){decoded+=exec[i];continue;}
+        if(++i>=exec.size())return {};
+        switch(exec[i].unicode()) {
+        case '\\':decoded+='\\';break;
+        case 's':decoded+=' ';break;
+        case 'n':decoded+='\n';break;
+        case 'r':decoded+='\r';break;
+        case 't':decoded+='\t';break;
+        default:return {};
         }
     }
-
-    if (started) {
-        AppRegistry::recordLaunchedApp(app.desktopPath);
-        m_lastRecordedActiveDesktop = app.desktopPath;
+    QString command;int end=0;
+    if(decoded.startsWith('"')) {
+        bool closed=false;
+        for(end=1;end<decoded.size();++end) {
+            const auto c=decoded[end];
+            if(c=='"'){closed=true;++end;break;}
+            if(c=='\\' && end+1<decoded.size()) {
+                const auto next=decoded[++end];
+                if(next!='"' && next!='\\' && next!='$' && next!=QChar(0x60))return {};
+                command+=next;
+            }
+            else command+=c;
+        }
+        if(!closed || (end<decoded.size() && !decoded[end].isSpace()))return {};
+    } else {
+        while(end<decoded.size() && !decoded[end].isSpace())command+=decoded[end++];
+        if(command.contains('"') || command.contains('\\'))return {};
     }
+    if(command.isEmpty() || command.contains('%') || command.contains('$')
+        || command.contains(QChar(0x60)) || command=="env" || command.contains('='))return {};
+    // Relative paths and shell wrappers are ambiguous: never guess.
+    if(command.contains('/') && !QFileInfo(command).isAbsolute())return {};
+    const QString executable=QFileInfo(command).isAbsolute()
+        ?command:QStandardPaths::findExecutable(command);
+    const QFileInfo target(executable);
+    if(executable.isEmpty() || !target.exists() || !target.isFile() || !target.isExecutable())
+        return command;
+    return {};
+}
 
+void StartMenu::reportLaunchFailure(const AppEntry &app,const QString &error)
+{
     hideMenu();
+    const QString missing=brokenShortcutExecutable(app.desktopPath);
+    if(missing.isEmpty()) {
+        LiquidDialog::warning(this,"无法打开应用",QString("%1\n\n%2").arg(app.name,error));
+        return;
+    }
+    QFile file(app.desktopPath);
+    if(!file.open(QIODevice::ReadOnly))return;
+    const QByteArray before=file.readAll();file.close();
+    const auto reply=LiquidDialog::question(this,"快捷方式已失效",
+        QString("%1 未能启动，快捷方式指向的程序不存在或不可执行：\n%2\n\n是否移除这个失效快捷方式？")
+            .arg(app.name,missing),QMessageBox::Yes|QMessageBox::No,QMessageBox::No);
+    if(reply!=QMessageBox::Yes)return;
+    // The program or shortcut may have been repaired while the dialog was open.
+    if(brokenShortcutExecutable(app.desktopPath)!=missing || !file.open(QIODevice::ReadOnly)
+        || file.readAll()!=before)return;
+    file.close();
+    if(!QFile::remove(app.desktopPath)) {
+        LiquidDialog::warning(this,"移除失败","无法移除失效快捷方式。");return;
+    }
+    AppRegistry::unpinApp(app.desktopPath);
+    rebuildAppList();
 }
 
 void StartMenu::launchRecent(const QString &path)
@@ -2254,9 +2496,10 @@ void StartMenu::positionAboveStartButton()
     move(menuX, menuY);
 }
 
-void StartMenu::paintEvent(QPaintEvent *)
+void StartMenu::paintEvent(QPaintEvent *event)
 {
     QPainter p(this);
+    p.setClipRegion(event->region());
     p.setRenderHint(QPainter::Antialiasing);
     p.setCompositionMode(QPainter::CompositionMode_Source);
     p.fillRect(rect(), Qt::transparent);
@@ -2277,7 +2520,7 @@ void StartMenu::paintEvent(QPaintEvent *)
                 p.save();
                 QPainterPath silhouette;
                 silhouette.addRoundedRect(panelRect,26,26);
-                p.setClipPath(silhouette);
+                p.setClipPath(silhouette, Qt::IntersectClip);
                 QRadialGradient reflection(m_glassLightPos,180);
                 reflection.setColorAt(0,QColor(255,255,255,150));
                 reflection.setColorAt(0.4,QColor(230,245,255,45));
@@ -2311,7 +2554,8 @@ void StartMenu::paintEvent(QPaintEvent *)
         }
     }
 
-    drawLeftRail(p);
+    if (event->region().intersects(QRect(0, 0, StartMenuTheme::kRailWidth + 2, height())))
+        drawLeftRail(p);
 
     if (m_skin != Skin::EcoLiquid) {
         const QRect searchRect = m_searchEdit->geometry();
@@ -2351,7 +2595,7 @@ void StartMenu::drawLeftRail(QPainter &p)
     railPath.closeSubpath();
 
     p.save();
-    p.setClipPath(railClip);
+    p.setClipPath(railClip, Qt::IntersectClip);
 
     if (m_skin == Skin::EcoLiquid) {
         // A subtle shade on the same material, no separately opaque capsule.
@@ -2365,7 +2609,7 @@ void StartMenu::drawLeftRail(QPainter &p)
     p.restore();
 
     p.save();
-    p.setClipPath(railClip);
+    p.setClipPath(railClip, Qt::IntersectClip);
     drawAvatarButton(p);
     drawRailApps(p);
     drawRailButtons(p);
@@ -2399,6 +2643,8 @@ void StartMenu::drawAvatarButton(QPainter &p)
     const int cx = StartMenuTheme::kRailWidth / 2;
     const int cy = 50;
     const int r = 16;
+    if (!p.clipRegion().intersects(QRect(0, cy - 25, StartMenuTheme::kRailWidth, 50)))
+        return;
 
     if (m_hoveredRailBtn == RailButton::Avatar) {
         QRect avatarRect(cx - 20, cy - 20, 40, 40);
@@ -2426,7 +2672,7 @@ void StartMenu::drawAvatarButton(QPainter &p)
                          (scaledAvatar.height() - r * 2) / 2,
                          r * 2, r * 2);
         p.save();
-        p.setClipPath(circle);
+        p.setClipPath(circle, Qt::IntersectClip);
         p.drawPixmap(QRect(cx - r, cy - r, r * 2, r * 2),
                      scaledAvatar.copy(crop));
         p.restore();
@@ -2456,6 +2702,8 @@ void StartMenu::drawRailApps(QPainter &p)
 
     for (int i = 0; i < m_railApps.size() && i < kMaxRailApps; ++i) {
         const int cy = railAppY(i);
+        if (!p.clipRegion().intersects(QRect(0, cy - 22, StartMenuTheme::kRailWidth, 44)))
+            continue;
         const QRect slotRect(cx - 18, cy - 18, 36, 36);
         if (m_hoveredRailApp == i) {
             p.setPen(Qt::NoPen);
@@ -3032,10 +3280,12 @@ void StartMenu::mouseMoveEvent(QMouseEvent *e)
     }
 
     if (newHover != m_hoveredRailBtn || newRailAppHover != m_hoveredRailApp) {
+        QRegion damage = railHoverDamage();
         m_hoveredRailBtn = newHover;
         m_hoveredRailApp = newRailAppHover;
+        damage += railHoverDamage();
         updateRailTooltip();
-        update();
+        update(damage);
     }
 }
 
@@ -3149,17 +3399,19 @@ void StartMenu::enterEvent(QEvent *e)
 void StartMenu::leaveEvent(QEvent *e)
 {
     QWidget::leaveEvent(e);
+    queueGlassPointer(mapFromGlobal(QCursor::pos()));
     if (m_hoveredRailBtn != RailButton::NoButton || m_hoveredRailApp >= 0) {
+        const QRegion damage = railHoverDamage();
         m_hoveredRailBtn = RailButton::NoButton;
         m_hoveredRailApp = -1;
         LiquidPopup::hideText();
-        update();
+        update(damage);
     }
 }
 
 void StartMenu::toggle()
 {
-    if (m_visible) {
+    if (m_visible || m_showPending) {
         hideMenu();
     } else {
         showMenu();
@@ -3168,12 +3420,23 @@ void StartMenu::toggle()
 
 void StartMenu::showMenu()
 {
+    // A Win-key or D-Bus request can arrive inside exec()'s nested event loop.
+    // Keep the live confirmation/settings window reachable rather than map
+    // the always-on-top launcher over it or sample it into a new backdrop.
+    if (auto *dialog = QApplication::activeModalWidget()) {
+        if (dialog->isMinimized()) dialog->showNormal();
+        dialog->raise();
+        dialog->activateWindow();
+        return;
+    }
+    if (m_settingsOpen) return;
     // Repeated --show must never recapture the menu into its own backdrop.
     if (isVisible()) {
         raise();
         activateWindow();
         return;
     }
+    if(m_showPending)return;
     // Desktop file/directory watchers own the installed-app refresh. Opening
     // only reloads the small usage record, not every application on disk.
     AppRegistry::refreshUsageMetadata(m_allApps);
@@ -3185,9 +3448,17 @@ void StartMenu::showMenu()
     positionAboveStartButton();
     // Only capture on explicit opening, while still hidden. Unchanged pixels
     // reuse the material; never keep the first desktop snapshot indefinitely.
-    if (m_skin == Skin::EcoLiquid && m_nextKdeGlassView) {
-        captureNextKdeBackdrop();
-    }
+    m_showPending=true;
+    const auto request=++m_showRequest;
+    if(captureNextKdeBackdrop([this,request] {
+        if(m_showPending && request==m_showRequest)finishShowMenu();
+    }))return;
+    finishShowMenu();
+}
+
+void StartMenu::finishShowMenu()
+{
+    m_showPending=false;
     applyX11Immunity();
 
     const bool instantLiquid = m_skin == Skin::EcoLiquid;
@@ -3248,6 +3519,8 @@ void StartMenu::showMenu()
 
 void StartMenu::hideMenu()
 {
+    m_showPending=false;
+    ++m_showRequest;
     stopOutsideWatch();
     m_visible = false;
     m_pointerHasEnteredMenu = false;
@@ -3423,14 +3696,6 @@ StartMenu::AppRemovalTarget StartMenu::detectAppRemovalTarget(const AppEntry &ap
         return result;
     }
 
-    if (isUserDesktopShortcut(desktopPath)) {
-        result.kind = AppRemovalTarget::Kind::DesktopShortcut;
-        result.target = desktopPath;
-        result.actionText = kRemoveShortcutText;
-        result.detail = QString::fromUtf8("只移除菜单入口，不删除程序文件");
-        return result;
-    }
-
     result.kind = AppRemovalTarget::Kind::Unsupported;
     if (desktopPath.contains(QStringLiteral("/flatpak/"))) {
         result.actionText = kRemoveFlatpakText;
@@ -3447,40 +3712,20 @@ StartMenu::AppRemovalTarget StartMenu::detectAppRemovalTarget(const AppEntry &ap
 
 void StartMenu::removeApp(const AppEntry &app, const AppRemovalTarget &target)
 {
-    if (target.kind == AppRemovalTarget::Kind::DesktopShortcut) {
-        if (!isUserDesktopShortcut(target.target))
-            return;
-        const auto reply = QMessageBox::question(
-            this, QString::fromUtf8("移除快捷方式"),
-            QString::fromUtf8("只从开始菜单移除 %1 的快捷方式，不会删除程序文件。\n\n%2")
-                .arg(app.name, target.target),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (reply != QMessageBox::Yes)
-            return;
-
-        if (!QFile::remove(target.target)) {
-            QMessageBox::warning(this, QString::fromUtf8("移除失败"),
-                                 QString::fromUtf8("无法删除快捷方式：\n%1").arg(target.target));
-            return;
-        }
-        AppRegistry::unpinApp(app.desktopPath);
-        rebuildAppList();
-        return;
-    }
-
+    hideMenu();
     if (target.kind == AppRemovalTarget::Kind::FolderBundle) {
         if (!isSafeFolderBundle(target.target)) {
-            QMessageBox::warning(this, QString::fromUtf8("无法删除"),
+            LiquidDialog::warning(this, QString::fromUtf8("无法删除"),
                                  QString::fromUtf8("程序目录未通过安全检查。"));
             return;
         }
         if (QStandardPaths::findExecutable(QStringLiteral("gio")).isEmpty()) {
-            QMessageBox::warning(this, QString::fromUtf8("无法删除"),
+            LiquidDialog::warning(this, QString::fromUtf8("无法删除"),
                                  QString::fromUtf8("系统缺少回收站工具 gio，未删除任何文件。"));
             return;
         }
 
-        const auto reply = QMessageBox::question(
+        const auto reply = LiquidDialog::question(
             this, QString::fromUtf8("移到回收站"),
             QString::fromUtf8("将 %1 的整个程序文件夹移到回收站？\n\n%2")
                 .arg(app.name, target.target),
@@ -3497,22 +3742,24 @@ void StartMenu::removeApp(const AppEntry &app, const AppRemovalTarget &target)
             const QString output = conciseProcessError(
                 QString::fromUtf8(process->readAllStandardOutput()));
             process->deleteLater();
+            hideMenu();
             if (status == QProcess::NormalExit && exitCode == 0) {
                 if (isUserDesktopShortcut(desktopPath))
                     QFile::remove(desktopPath);
                 AppRegistry::unpinApp(desktopPath);
                 rebuildAppList();
-                QMessageBox::information(this, QString::fromUtf8("已移到回收站"),
+                LiquidDialog::information(this, QString::fromUtf8("已移到回收站"),
                                          QString::fromUtf8("%1 已移到回收站。").arg(appName));
             } else {
-                QMessageBox::warning(this, QString::fromUtf8("操作失败"),
+                LiquidDialog::warning(this, QString::fromUtf8("操作失败"),
                     output.isEmpty() ? QString::fromUtf8("无法将程序文件夹移到回收站。") : output);
             }
         });
         connect(process, &QProcess::errorOccurred, this,
                 [this, process](QProcess::ProcessError error) {
             if (error == QProcess::FailedToStart) {
-                QMessageBox::warning(this, QString::fromUtf8("操作失败"), process->errorString());
+                hideMenu();
+                LiquidDialog::warning(this, QString::fromUtf8("操作失败"), process->errorString());
                 process->deleteLater();
             }
         });
@@ -3535,13 +3782,14 @@ void StartMenu::removeApp(const AppEntry &app, const AppRemovalTarget &target)
         return qMakePair(removedPackages,QString());
     }, [this, app, target](const QPair<QStringList,QString> &result) {
         m_removalPending = false;
-        if (!result.second.isEmpty()) { QMessageBox::warning(this,"无法卸载",result.second); return; }
+        if (!result.second.isEmpty()) { hideMenu(); LiquidDialog::warning(this,"无法卸载",result.second); return; }
         confirmDebRemoval(app,target,result.first);
     });
 }
 
 void StartMenu::confirmDebRemoval(const AppEntry &app, const AppRemovalTarget &target, const QStringList &removedPackages)
 {
+    hideMenu();
     QString impactText;
     QStringList additionalPackages = removedPackages;
     additionalPackages.removeAll(target.target);
@@ -3555,7 +3803,7 @@ void StartMenu::confirmDebRemoval(const AppEntry &app, const AppRemovalTarget &t
             impactText += QString::fromUtf8("\n……");
     }
 
-    const auto reply = QMessageBox::question(
+    const auto reply = LiquidDialog::question(
         this, QString::fromUtf8("确认卸载"),
         QString::fromUtf8("卸载 %1？\n\n软件包：%2\n应用配置将保留。%3")
             .arg(app.name, target.target, impactText),
@@ -3564,7 +3812,7 @@ void StartMenu::confirmDebRemoval(const AppEntry &app, const AppRemovalTarget &t
         return;
 
     if (QStandardPaths::findExecutable(QStringLiteral("pkexec")).isEmpty()) {
-        QMessageBox::warning(this, QString::fromUtf8("无法卸载"),
+        LiquidDialog::warning(this, QString::fromUtf8("无法卸载"),
                              QString::fromUtf8("系统缺少管理员授权工具 pkexec。"));
         return;
     }
@@ -3578,15 +3826,16 @@ void StartMenu::confirmDebRemoval(const AppEntry &app, const AppRemovalTarget &t
         const QString output = conciseProcessError(
             QString::fromUtf8(process->readAllStandardOutput()));
         process->deleteLater();
+        hideMenu();
         if (status == QProcess::NormalExit && exitCode == 0) {
             if (isUserDesktopShortcut(desktopPath))
                 QFile::remove(desktopPath);
             AppRegistry::unpinApp(desktopPath);
             rebuildAppList();
-            QMessageBox::information(this, QString::fromUtf8("卸载完成"),
+            LiquidDialog::information(this, QString::fromUtf8("卸载完成"),
                                      QString::fromUtf8("%1 已卸载。").arg(appName));
         } else {
-            QMessageBox::warning(
+            LiquidDialog::warning(
                 this, QString::fromUtf8("卸载未完成"),
                 output.isEmpty() ? QString::fromUtf8("授权被取消或卸载命令执行失败。") : output);
         }
@@ -3594,7 +3843,8 @@ void StartMenu::confirmDebRemoval(const AppEntry &app, const AppRemovalTarget &t
     connect(process, &QProcess::errorOccurred, this,
             [this, process](QProcess::ProcessError error) {
         if (error == QProcess::FailedToStart) {
-            QMessageBox::warning(this, QString::fromUtf8("卸载失败"), process->errorString());
+            hideMenu();
+            LiquidDialog::warning(this, QString::fromUtf8("卸载失败"), process->errorString());
             process->deleteLater();
         }
     });
@@ -3626,8 +3876,7 @@ void StartMenu::queryAppRemovalTarget(const AppEntry &app, QAction *action,
                 guard->setText(result.actionText);
                 guard->setToolTip(result.detail);
                 guard->setEnabled(result.kind == AppRemovalTarget::Kind::DebPackage
-                    || result.kind == AppRemovalTarget::Kind::FolderBundle
-                    || result.kind == AppRemovalTarget::Kind::DesktopShortcut);
+                    || result.kind == AppRemovalTarget::Kind::FolderBundle);
             }
             auto next = std::move(m_nextRemovalQuery);
             m_nextRemovalQuery = {};
@@ -3668,7 +3917,7 @@ void StartMenu::showAppContextMenu(const AppEntry &app, const QPoint &globalPos)
     // Measure every possible lookup result before Show, after liquid metrics
     // are installed. Async status changes must not visibly stretch the menu.
     QStringList removalTexts={kRemoveFolderText,kRemoveProtectedText,kRemoveDebText,
-                              kRemoveShortcutText,kRemoveUnknownText};
+                              kRemoveUnknownText};
     const QString desktopPath=QFileInfo(app.desktopPath).absoluteFilePath();
     if(desktopPath.contains(QStringLiteral("/flatpak/"))) removalTexts << kRemoveFlatpakText;
     else if(desktopPath.contains(QStringLiteral("/snapd/"))) removalTexts << kRemoveSnapText;
@@ -3686,7 +3935,7 @@ void StartMenu::showAppContextMenu(const AppEntry &app, const QPoint &globalPos)
         QString dir = QFileInfo(app.desktopPath).absolutePath();
         QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
     } else if (chosen == actModifyIcon) {
-        QString newIconPath = QFileDialog::getOpenFileName(this,
+        QString newIconPath = LiquidDialog::getOpenFileName(this,
             QString::fromUtf8("选择新图标"),
             QDir::homePath(),
             QString::fromUtf8("Images (*.png *.jpg *.jpeg *.svg *.xpm);;All Files (*)"));
@@ -3860,6 +4109,11 @@ void StartMenu::startOutsideWatch()
                 mousePressed = (QGuiApplication::mouseButtons() != Qt::NoButton);
             }
 
+            // Geometry and taskbar discovery are useful only for a click.
+            // Avoid scanning panel windows and querying the cursor while the
+            // open menu is idle; retain the fallback for desktop/dock clicks.
+            if (!mousePressed) return;
+
             // Cache taskbar geometry for 2 seconds to avoid frequent scanning
             if (!m_taskbarCacheTimer.isValid() || m_taskbarCacheTimer.elapsed() > 1500) {
                 m_cachedTaskbarInfo = TaskbarDetector::detect();
@@ -3901,8 +4155,10 @@ void StartMenu::stopOutsideWatch()
 void StartMenu::showEvent(QShowEvent *e)
 {
     if (m_glassLightTimer) {
-        m_glassLightPos=mapFromGlobal(QCursor::pos());
-        m_glassLightTimer->start();
+        m_glassLightTimer->stop();
+        m_glassControlDirty = {};
+        m_lastGlassControl.clear();
+        m_glassLightPos = m_glassLightTarget = mapFromGlobal(QCursor::pos());
     }
     QWidget::showEvent(e);
     positionAboveStartButton();
@@ -3912,6 +4168,8 @@ void StartMenu::showEvent(QShowEvent *e)
 void StartMenu::hideEvent(QHideEvent *e)
 {
     if (m_glassLightTimer) m_glassLightTimer->stop();
+    m_glassControlDirty = {};
+    m_lastGlassControl.clear();
     QWidget::hideEvent(e);
     m_visible = false;
     m_pointerHasEnteredMenu = false;

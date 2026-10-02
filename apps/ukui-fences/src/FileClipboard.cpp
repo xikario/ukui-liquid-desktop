@@ -1,3 +1,4 @@
+#include "LiquidDialog.h"
 #include "FileClipboard.h"
 
 #include <QApplication>
@@ -464,8 +465,8 @@ using Work = std::function<PasteResult(const std::shared_ptr<std::atomic_bool> &
 bool submit(QWidget *owner, Work work, Completion completed, bool cancellable = true)
 {
     if (jobActive) {
-        auto *message = new QMessageBox(QMessageBox::Information, "文件操作",
-            "已有文件操作正在进行，请完成后重试。", QMessageBox::Ok, owner);
+        auto *message = LiquidDialog::createMessage(owner, "文件操作",
+            "已有文件操作正在进行，请完成后重试。", QMessageBox::Information, QMessageBox::Ok);
         message->setAttribute(Qt::WA_DeleteOnClose); message->show();
         return false;
     }
@@ -473,6 +474,7 @@ bool submit(QWidget *owner, Work work, Completion completed, bool cancellable = 
     auto cancel = std::make_shared<std::atomic_bool>(false);
     auto *progress = new QProgressDialog("正在处理文件；取消将在当前项目完成后生效。", "取消后续项目", 0, 0, owner);
     if (!cancellable) { progress->setLabelText("正在处理文件，请稍候…"); progress->setCancelButton(nullptr); }
+    LiquidDialog::install(progress);
     progress->setWindowTitle("文件操作");
     progress->setMinimumDuration(300);
     progress->setValue(0);

@@ -33,6 +33,14 @@ awk -v launcher="$USER_PREFIX/bin/ukui-fences-launcher" \
      /^Icon=/ { print "Icon=" icon; next } { print }' \
     "$PROJECT_DIR/packaging/ukui-fences-settings.desktop" > "$settings_file"
 
+# Hidden task identity: a diagnosis icon without another application grid item.
+monitor_file="$HOME/.local/share/applications/ukui-fences-monitor.desktop"
+awk -v launcher="$USER_PREFIX/bin/ukui-fences-launcher" \
+    -v icon="$USER_PREFIX/share/icons/hicolor/scalable/apps/ukui-fences-monitor.svg" \
+    '/^Exec=/ { print "Exec=\"" launcher "\" --system-monitor"; next }
+     /^Icon=/ { print "Icon=" icon; next } { print }' \
+    "$PROJECT_DIR/packaging/ukui-fences-monitor.desktop" > "$monitor_file"
+
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 fi

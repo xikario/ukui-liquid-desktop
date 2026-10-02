@@ -1,4 +1,5 @@
 #pragma once
+class PointerEffect;
 
 #include <QDateTime>
 #include <QColor>
@@ -61,6 +62,7 @@ struct SmartSpaceEntry {
 class SmartSpaceWidget : public QWidget
 {
     Q_OBJECT
+    friend struct PointerEffectTestAccess;
     friend class SmartSpaceStartupTestAccess;
 public:
     explicit SmartSpaceWidget(bool fenceEmbedded = false,
@@ -290,7 +292,8 @@ private:
     QPointer<QWidget> m_edgeTransition;
     QTimer m_geometrySaveTimer;
     QTimer m_glassBackdropRefreshTimer;
-    QTimer m_glassPointerTimer;
+    QRegion glassPointerDamage(const QPoint &position) const;
+    PointerEffect *m_glassPointerEffect = nullptr;
     QPoint m_glassPointerPosition;
     bool m_glassPointerActive = false;
 

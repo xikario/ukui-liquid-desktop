@@ -18,7 +18,8 @@ export XDG_DATA_HOME="$runtime/data" UKUI_FENCES_SMARTSPACE_ROOTS="$runtime/docu
 unset UKUI_FENCES_TEST_CONFIRM_IDLE UKUI_FENCES_TEST_CONFIRM_EXCLUDE UKUI_FENCES_TEST_AUTO_INDEX || true
 printf '%s\n' '[systemMonitor]' 'autoStart=false' '[smartSpace]' 'defaultHidden=false' \
     > "$runtime/config/kylin/ukui-fences.ini"
-"$1" --smart-space > "$runtime/app.log" 2>&1 &
+mkdir -p "$runtime/home"
+env HOME="$runtime/home" "$1" --smart-space > "$runtime/app.log" 2>&1 &
 app_pid=$!
 call() {
     gdbus call --session --timeout 2 --dest org.ukui.fences --object-path /ukuiFences \

@@ -1,3 +1,4 @@
+#include "LiquidDialog.h"
 #include "CalendarDesklet.h"
 #include "DesktopCanvas.h"
 #include "LiquidPopup.h"
@@ -249,10 +250,10 @@ void CalendarDesklet::syncCalendarData()
         const QString message=result["message"].toString();
         m_calendarWarning=message.isEmpty()?"同步失败，保留原农历与节假日数据":message;
         reload();update();
-        auto *notice=new QMessageBox(QMessageBox::Information,"农历和节假日同步",
+        auto *notice=LiquidDialog::createMessage(this,"农历和节假日同步",
             message.isEmpty() ? (started?"网络或数据源暂不可用，原数据已保留。":"无法启动同步程序，原数据已保留。")
                               : "农历按系统 ICU 重新计算。\n"+message,
-            QMessageBox::Ok,this);
+            QMessageBox::Information,QMessageBox::Ok);
         notice->setAttribute(Qt::WA_DeleteOnClose);notice->open();process->deleteLater();
     };
     connect(process,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[finish](int,QProcess::ExitStatus){finish(true);});

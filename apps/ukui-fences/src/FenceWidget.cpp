@@ -1,3 +1,7 @@
+#include "LiquidDialog.h"
+#include <QPointer>
+#include "PointerEffect.h"
+#include <QPaintEvent>
 #include <memory>
 #include "FenceWidget.h"
 #include "DesktopIcon.h"
@@ -140,33 +144,33 @@ FenceWidget::FenceWidget(const QString &title,
     m_iconViewport->installEventFilter(this);
     m_iconViewport->show();
     m_expandedH = qMax(TITLE_H + 60, geo.height());
-    m_glassHoverTimer = new QTimer(this);
-    m_glassHoverTimer->setInterval(33);
-    connect(m_glassHoverTimer, &QTimer::timeout, this, [this] {
-        const QPointF pos = mapFromGlobal(QCursor::pos());
-        const bool inside = m_glassPointerPresent && isVisible() && m_liquidGlassEnabled && rect().contains(pos.toPoint())
-            && (mask().isEmpty() || mask().contains(pos.toPoint()));
+    m_glassPointerEffect = new PointerEffect(this, [this](const QPoint &pos, bool inside) {
+        inside = inside && m_liquidGlassEnabled;
         const qreal target = inside ? 1.0 : 0.0;
-        const qreal next = qAbs(target-m_glassHover) < 0.015 ? target : m_glassHover+(target-m_glassHover)*0.25;
+        const qreal next = !isVisible() ? 0.0 : qAbs(target-m_glassHover) < 0.015
+            ? target : m_glassHover+(target-m_glassHover)*0.25;
         if (pos != m_glassPointer || next != m_glassHover) {
+            QPainterPath rim;
+            if (m_magneticEdge != MagneticEdge::None && m_magneticContour.size() >= 2)
+                rim = fenceShapePath();
+            else rim.addRoundedRect(QRectF(rect()).adjusted(0.8,0.8,-0.8,-0.8),9.2,9.2);
+            QRegion damage;
+            if (m_glassHover > 0) damage |= pointerRimDamage(rim, m_glassPointer, 110);
+            if (next > 0) damage |= pointerRimDamage(rim, pos, 110);
             m_glassPointer = pos;
             m_glassHover = next;
-            update();
+            if (!damage.isEmpty()) update(damage);
         }
-        if (!inside && m_glassHover == 0) m_glassHoverTimer->stop();
+        return next != target;
     });
+    m_glassPointerEffect->setEnabled(m_liquidGlassEnabled);
 }
 
 void FenceWidget::setLiquidGlassEnabled(bool enabled)
 {
     m_liquidGlassEnabled = enabled;
-    m_glassPointerPresent = enabled && underMouse();
-    if (!enabled) {
-        m_glassHoverTimer->stop();
-        m_glassHover = 0;
-    } else if (underMouse()) {
-        m_glassHoverTimer->start();
-    }
+    if (!enabled) m_glassHover = 0;
+    m_glassPointerEffect->setEnabled(enabled);
     updateShapeMask();
     invalidateGlassCache();
 }
@@ -176,21 +180,6 @@ void FenceWidget::invalidateGlassCache()
     m_glassImage = {};
     m_glassGeometry = {};
     update();
-}
-
-void FenceWidget::enterEvent(QEvent *event)
-{
-    m_glassPointerPresent = true;
-    if (m_liquidGlassEnabled) m_glassHoverTimer->start();
-    QWidget::enterEvent(event);
-}
-
-void FenceWidget::leaveEvent(QEvent *event)
-{
-    m_glassPointerPresent = false;
-    // Fade out; timeout also tracks movement over child icons without tooltips.
-    if (m_liquidGlassEnabled) m_glassHoverTimer->start();
-    QWidget::leaveEvent(event);
 }
 
 // ── 属性设置 ─────────────────────────────────────────────
@@ -206,6 +195,7 @@ void FenceWidget::setFenceColor(const QColor &c)
 {
     m_color = c;
     update();
+    emit fenceColorChanged(c);
 }
 
 void FenceWidget::setLocked(bool locked)
@@ -265,12 +255,39 @@ void FenceWidget::setIconFontItalic(bool italic)
 void FenceWidget::setTitleIconPath(const QString &path)
 {
     m_titleIconPath = path;
+    m_titleIconThemeName.clear();
     if (!path.isEmpty() && QFile::exists(path))
         m_titleIcon = QIcon(path);
     else
         m_titleIcon = QIcon();
     update();
     emit geometryChanged();
+    emit titleIconChanged();
+}
+
+void FenceWidget::setTitleIconThemeName(const QString &name)
+{
+    m_titleIconThemeName = name.trimmed();
+    m_titleIconPath.clear();
+    m_titleIcon = m_titleIconThemeName.isEmpty() ? QIcon()
+        : QIcon::fromTheme(m_titleIconThemeName, QIcon(":/fence-icons/orbit.svg"));
+    update();
+    emit geometryChanged();
+    emit titleIconChanged();
+}
+
+bool FenceWidget::confirmClearTitleIcon(QWidget *parent)
+{
+    if (!hasTitleIcon()) return false;
+    QPointer<FenceWidget> guard(this);
+    const auto answer = LiquidDialog::question(parent ? parent : this,
+        "清除分区图标", QString("清除“%1”的标题图标？\n分区及其中的文件不受影响。")
+            .arg(m_title), QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (guard && answer == QMessageBox::Yes) {
+        guard->setTitleIconPath(QString());
+        return true;
+    }
+    return false;
 }
 
 void FenceWidget::setTitleTextColor(const QColor &color)
@@ -447,7 +464,7 @@ void FenceWidget::pasteClipboardFiles()
         return;
 
     if (!result.failedPaths.isEmpty()) {
-        QMessageBox::warning(this, "粘贴失败",
+        LiquidDialog::warning(this, "粘贴失败",
             QString("有 %1 个项目无法粘贴到分区。").arg(result.failedPaths.size()));
     }
 
@@ -511,7 +528,7 @@ void FenceWidget::createNewFile(const QString &baseName,
     const QString path = dir.absoluteFilePath(name);
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
-        QMessageBox::warning(this, "新建失败",
+        LiquidDialog::warning(this, "新建失败",
                              QString("无法创建 %1。").arg(name));
         return;
     }
@@ -528,7 +545,7 @@ void FenceWidget::createNewDirectory()
         name = QStringLiteral("新建文件夹 (%1)").arg(n++);
 
     if (!dir.mkdir(name)) {
-        QMessageBox::warning(this, "新建失败",
+        LiquidDialog::warning(this, "新建失败",
                              QString("无法创建 %1。").arg(name));
         return;
     }
@@ -540,7 +557,7 @@ void FenceWidget::trashSelectedIcons()
     const QStringList paths = selectedFilePaths();
     if (paths.isEmpty()) return;
 
-    if (QMessageBox::question(this, "移到回收站",
+    if (LiquidDialog::question(this, "移到回收站",
             QString("确定要将选中的 %1 个项目移到回收站吗？").arg(paths.size()))
         != QMessageBox::Yes)
         return;
@@ -548,7 +565,7 @@ void FenceWidget::trashSelectedIcons()
     FileClipboard::trashFilesAsync(paths, this, [this](const FileClipboard::PasteResult &result) {
         for (const auto &path : result.placedPaths) removeItem(path);
         if (!result.failedPaths.isEmpty())
-            QMessageBox::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+            LiquidDialog::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
         if (!result.placedPaths.isEmpty()) emit filesTrashed(result);
         emit geometryChanged();
     });
@@ -1448,9 +1465,10 @@ void FenceWidget::prepareGlassCache()
     }
 }
 
-void FenceWidget::paintEvent(QPaintEvent *)
+void FenceWidget::paintEvent(QPaintEvent *event)
 {
     QPainter p(this);
+    p.setClipRegion(event->region());
     p.setRenderHint(QPainter::Antialiasing);
 
     if (!m_collapseSnapshot.isNull()) {
@@ -1458,7 +1476,7 @@ void FenceWidget::paintEvent(QPaintEvent *)
         // retain the rounded lower rim rather than squashing the entire image.
         QPainterPath clip;
         clip.addRoundedRect(QRectF(rect()), 10, 10);
-        p.setClipPath(clip);
+        p.setClipPath(clip, Qt::IntersectClip);
         p.drawPixmap(0, 0, m_collapseSnapshot);
         const qreal dpr = m_collapseSnapshot.devicePixelRatio();
         const qreal fullHeight = m_collapseSnapshot.height() / dpr;
@@ -1482,7 +1500,7 @@ void FenceWidget::paintEvent(QPaintEvent *)
         p.drawImage(QRectF(rect()), m_glassImage);
         if (m_glassHover > 0) {
             p.save();
-            p.setClipPath(bgPath);
+            p.setClipPath(bgPath, Qt::IntersectClip);
             QPainterPath rim;
             if (shaped) rim = bgPath;
             else rim.addRoundedRect(QRectF(rect()).adjusted(0.8, 0.8, -0.8, -0.8), 9.2, 9.2);
@@ -1526,9 +1544,13 @@ void FenceWidget::paintEvent(QPaintEvent *)
     // ── 标题图标 + 标题文字 ────────────────────────────────────
     int titleX = qMax(12, magneticContentInset());
     const int iconSz = TITLE_H - 12;
-    if (!m_titleIcon.isNull()) {
+    // A temporarily missing theme icon can become available after a theme
+    // switch. Resolve by name here too, instead of keeping a file fallback.
+    const QIcon titleIcon = m_titleIconThemeName.isEmpty() ? m_titleIcon
+        : QIcon::fromTheme(m_titleIconThemeName, QIcon(":/fence-icons/orbit.svg"));
+    if (!titleIcon.isNull()) {
         p.drawPixmap(QRect(titleX, (TITLE_H - iconSz) / 2, iconSz, iconSz),
-                     m_titleIcon.pixmap(iconSz, iconSz));
+                     titleIcon.pixmap(iconSz, iconSz));
         titleX += iconSz + 6;
     } else {
         // 默认白色小框
@@ -1757,7 +1779,7 @@ void FenceWidget::mouseDoubleClickEvent(QMouseEvent *e)
 void FenceWidget::showRenameDialog()
 {
     bool ok = false;
-    const QString t = QInputDialog::getText(
+    const QString t = LiquidDialog::getText(
         this, "重命名分区", "分区名称：",
         QLineEdit::Normal, m_title, &ok);
     if (ok && !t.isEmpty()) setTitle(t);
@@ -1921,6 +1943,14 @@ void FenceWidget::contextMenuEvent(QContextMenuEvent *e)
         connect(actCut, &QAction::triggered,
                 [this] { copySelectedIcons(true); });
 
+        menu.addSeparator();
+        auto *actSettings = menu.addAction("分区设置…");
+        actSettings->setObjectName("fenceSettingsAction");
+        connect(actSettings, &QAction::triggered, this, [this] {
+            if (auto *canvas = qobject_cast<DesktopCanvas *>(parentWidget()))
+                canvas->showSettingsPage("fence:" + fenceId());
+        });
+
         menu.exec(e->globalPos());
         e->accept();
         return;
@@ -1960,94 +1990,20 @@ void FenceWidget::contextMenuEvent(QContextMenuEvent *e)
     sortMenu->addAction("按类型", [this] { sortItems(SortMode::Type); });
     sortMenu->addAction("按修改时间", [this] { sortItems(SortMode::ModifiedTime); });
 
-    QMenu *alphaMenu = menu.addMenu("透明度");
-    MenuStyle::applyVenturaContextMenu(alphaMenu);
-    const QList<QPair<QString, int>> alphaItems = {
-        { "很淡", 45 },
-        { "较淡", 75 },
-        { "默认", 90 },
-        { "较深", 130 },
-        { "深色", 170 }
-    };
-    for (const auto &alpha : alphaItems) {
-        alphaMenu->addAction(alpha.first, [this, value = alpha.second] {
-            QColor c = m_color;
-            c.setAlpha(value);
-            setFenceColor(c);
-            emit geometryChanged();
-        });
-    }
-
-    // 颜色子菜单
-    QMenu *cm = menu.addMenu("分区颜色");
-    MenuStyle::applyVenturaContextMenu(cm);
-
-    // 辅助：添加颜色项
-    auto addColorAct = [&](const QString &name, int r, int g, int b, int a) {
-        QColor c(r, g, b, a);
-        QPixmap px(16, 16);
-        px.fill(c);
-        auto *act = cm->addAction(QIcon(px), name);
-        connect(act, &QAction::triggered, [this, c] {
-            setFenceColor(c);
-            emit geometryChanged();
-        });
-    };
-
-    addColorAct("蓝色",   0, 120, 215,  90);
-    addColorAct("青色",   0, 180, 180,  90);
-    addColorAct("绿色",   0, 180,  80,  90);
-    addColorAct("红色", 215,  60,  60,  90);
-    addColorAct("紫色", 140,  80, 200,  90);
-    addColorAct("橙色", 215, 140,   0,  90);
-    addColorAct("深灰",  80,  80,  80, 120);
-    addColorAct("深黑",  20,  20,  20, 160);
-
-    cm->addSeparator();
-    auto *actCustom = cm->addAction("自定义…");
-    connect(actCustom, &QAction::triggered, [this] {
-        QColor c = QColorDialog::getColor(m_color, this, "选择分区颜色");
-        if (c.isValid()) {
-            c.setAlpha(90);
-            setFenceColor(c);
-            emit geometryChanged();
-        }
-    });
-
     menu.addSeparator();
-
-    // 分区图标
-    auto *actIcon = menu.addAction("分区图标…");
-    connect(actIcon, &QAction::triggered, [this] {
-        const QString path = QFileDialog::getOpenFileName(
-            this, "选择分区图标",
-            QStandardPaths::writableLocation(QStandardPaths::PicturesLocation),
-            "图片文件 (*.png *.svg *.jpg *.ico)");
-        if (!path.isEmpty())
-            setTitleIconPath(path);
+    auto *actSettings = menu.addAction("分区设置…");
+    actSettings->setObjectName("fenceSettingsAction");
+    connect(actSettings, &QAction::triggered, this, [this] {
+        if (auto *canvas = qobject_cast<DesktopCanvas *>(parentWidget()))
+            canvas->showSettingsPage("fence:" + fenceId());
     });
-    auto *actClearIcon = menu.addAction("清除分区图标");
-    actClearIcon->setEnabled(!m_titleIconPath.isEmpty());
-    connect(actClearIcon, &QAction::triggered, [this] {
-        setTitleIconPath(QString());
-    });
-
-    // 分区标题字体设置
-    auto *actTitleFont = menu.addAction("标题字体设置…");
-    connect(actTitleFont, &QAction::triggered,
-            [this] { showTitleFontSettingsDialog(); });
-
-    // 分区内部图标字体设置
-    auto *actFont = menu.addAction("内部图标字体设置…");
-    connect(actFont, &QAction::triggered,
-            [this] { showFontSettingsDialog(); });
 
     menu.addSeparator();
 
     auto *actDel = menu.addAction("删除此分区");
     actDel->setEnabled(!m_locked);
     connect(actDel, &QAction::triggered, [this] {
-        if (QMessageBox::question(this, "确认",
+        if (LiquidDialog::question(this, "确认",
                 QString("删除分区 \"%1\"？\n"
                         "内部文件图标将回到桌面。").arg(m_title))
             == QMessageBox::Yes)
@@ -2145,7 +2101,7 @@ void FenceWidget::dropEvent(QDropEvent *e)
         if (!result.transferredPaths.isEmpty())
             emit filesPasted(result.placedSourcePaths, result.transferredPaths, result.move);
         if (!result.failedPaths.isEmpty())
-            QMessageBox::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+            LiquidDialog::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
     };
     bool accepted = true;
     if (internal) {
@@ -2216,7 +2172,7 @@ QWidget *FenceWidget::createFontSettingsPage(QWidget *parent)
     };
     updateColorBtn();
     connect(colorBtn, &QPushButton::clicked, &dlg, [=, &dlg] {
-        QColor c = QColorDialog::getColor(*chosenColor, &dlg, "选择字体颜色");
+        QColor c = LiquidDialog::getColor(*chosenColor, &dlg, "选择字体颜色");
         if (c.isValid()) {
             *chosenColor = c;
             updateColorBtn();
@@ -2311,7 +2267,7 @@ QWidget *FenceWidget::createTitleFontSettingsPage(QWidget *parent)
     };
     updateColorBtn();
     connect(colorBtn, &QPushButton::clicked, &dlg, [=, &dlg] {
-        QColor c = QColorDialog::getColor(*chosenColor, &dlg, "选择标题字体颜色");
+        QColor c = LiquidDialog::getColor(*chosenColor, &dlg, "选择标题字体颜色");
         if (c.isValid()) {
             *chosenColor = c;
             updateColorBtn();

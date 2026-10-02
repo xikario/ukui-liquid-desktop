@@ -1,3 +1,4 @@
+#include "LiquidDialog.h"
 #include "FencesSettingsWindow.h"
 #include "WidgetResizeSnap.h"
 #include "../../../shared/async-work/BackgroundTask.h"
@@ -10,6 +11,7 @@
 #include "DesktopCanvas.h"
 #include <QDebug>
 #include "FenceWidget.h"
+#include "FenceIconPicker.h"
 #include "FenceGlassRenderer.h"
 #include "DesktopIcon.h"
 #include "FileClipboard.h"
@@ -621,44 +623,6 @@ QColor accentColorFromWallpaper(const QPixmap &wallpaper)
     return accent;
 }
 
-QStringList defaultFenceIconPaths()
-{
-    const QStringList names = {
-        "orbit.svg",
-        "tasks.svg",
-        "industry.svg",
-        "services.svg",
-        "presentation.svg",
-        "dock.svg",
-        "inbox.svg",
-        "archive.svg",
-        "ideas.svg",
-        "favorites.svg"
-    };
-    const QStringList roots = {
-        QCoreApplication::applicationDirPath()
-            + "/../assets/fence-icons",
-        QCoreApplication::applicationDirPath()
-            + "/../share/ukui-fences/fence-icons",
-        QStringLiteral("/usr/share/ukui-fences/fence-icons")
-    };
-
-    for (const QString &root : roots) {
-        QStringList paths;
-        bool complete = true;
-        for (const QString &name : names) {
-            const QString path = QDir(root).absoluteFilePath(name);
-            if (!QFileInfo::exists(path)) {
-                complete = false;
-                break;
-            }
-            paths << path;
-        }
-        if (complete)
-            return paths;
-    }
-    return {};
-}
 
 } // namespace
 
@@ -965,8 +929,8 @@ void DesktopCanvas::activateOnSessionStartup()
 void DesktopCanvas::quitApp()
 {
     if (FileClipboard::busy()) {
-        auto *notice=new QMessageBox(QMessageBox::Information,"文件操作尚未完成",
-            "请等待当前项目完成，或先取消后续项目，再退出桌面。",QMessageBox::Ok,this);
+        auto *notice=LiquidDialog::createMessage(this,"文件操作尚未完成",
+            "请等待当前项目完成，或先取消后续项目，再退出桌面。",QMessageBox::Information,QMessageBox::Ok);
         notice->setAttribute(Qt::WA_DeleteOnClose); notice->show();
         return;
     }
@@ -1896,7 +1860,7 @@ void DesktopCanvas::showSettingsPage(const QString &page)
         connect(this, &QObject::destroyed, m_settingsWindow, &QObject::deleteLater);
     }
     m_settingsWindow->openPage(page);
-    m_settingsWindow->showNormal();
+    LiquidDialog::reopen(m_settingsWindow);
     m_settingsWindow->raise();
     m_settingsWindow->activateWindow();
 }
@@ -1917,6 +1881,30 @@ void DesktopCanvas::openFileManager()
         QProcess::startDetached(
             QStringLiteral("xdg-open"), QStringList() << home);
 }
+void DesktopCanvas::openTerminal()
+{
+    QString directory = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
+    if (!QFileInfo(directory).isDir())
+        directory = QDir::homePath();
+    // Honour the system terminal alternative first. Pass the working directory
+    // directly to the process; no shell command or desktop path interpolation.
+    const QList<QPair<QString, QStringList>> terminals = {
+        {QStringLiteral("x-terminal-emulator"), {}},
+        {QStringLiteral("mate-terminal"), {QStringLiteral("--working-directory"), directory}},
+        {QStringLiteral("gnome-terminal"), {QStringLiteral("--working-directory"), directory}},
+        {QStringLiteral("konsole"), {QStringLiteral("--workdir"), directory}},
+        {QStringLiteral("xfce4-terminal"), {QStringLiteral("--working-directory"), directory}},
+        {QStringLiteral("xterm"), {}}
+    };
+    for (const auto &terminal : terminals) {
+        const QString program = QStandardPaths::findExecutable(terminal.first);
+        if (!program.isEmpty() && QProcess::startDetached(program, terminal.second, directory))
+            return;
+    }
+    LiquidDialog::information(this, QStringLiteral("打开终端"),
+        QStringLiteral("未找到可启动的终端，请安装终端或设置系统默认终端。"));
+}
+
 QString DesktopCanvas::settingsHelpHtml() const
 {
     return QStringLiteral(
@@ -1926,7 +1914,7 @@ QString DesktopCanvas::settingsHelpHtml() const
             "Delete 移到回收站；剪切后的图标暂时置灰，粘贴完成后自动更新。</p>"
             "<h3>布局编辑</h3>"
             "<p>右键 → 编辑分区布局，开启后移动、缩放分区和桌面小组件，支持边缘吸附和图标避让。"
-            "完成后选择“退出布局编辑”。分区标题栏右键可重命名、锁定并单独设置字体。</p>"
+            "完成后选择“退出布局编辑”。分区右键可重命名、锁定；“分区设置…”统一调整颜色、透明度、标题图标和字体。</p>"
             "<h3>六类桌面小组件</h3>"
             "<p>右键 → 桌面小组件，可切换智能空间、系统监视、时钟与倒计时、活动统计、"
             "音乐播放器、日历与系统待办。对号表示已启用；智能空间可收起成贴边星标。</p>"
@@ -1965,7 +1953,7 @@ QString DesktopCanvas::settingsAboutHtml() const
 }
 void DesktopCanvas::resetLayoutSettings()
 {
-        if (QMessageBox::question(this, "重置布局…",
+        if (LiquidDialog::question(this, "重置布局…",
                 "确定清空所有分区和图标位置吗？") != QMessageBox::Yes)
             return;
 
@@ -2057,7 +2045,7 @@ QWidget *DesktopCanvas::createFontSettingsPage(QWidget *parent)
     };
     updateColorBtn();
     connect(colorBtn, &QPushButton::clicked, &dlg, [=, &dlg] {
-        QColor c = QColorDialog::getColor(*chosenColor, &dlg, "选择字体颜色");
+        QColor c = LiquidDialog::getColor(*chosenColor, &dlg, "选择字体颜色");
         if (c.isValid()) {
             *chosenColor = c;
             updateColorBtn();
@@ -2314,7 +2302,7 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
         const QString startDir = chosenPath->isEmpty()
             ? QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
             : QFileInfo(*chosenPath).absolutePath();
-        const QString path = QFileDialog::getOpenFileName(
+        const QString path = LiquidDialog::getOpenFileName(
             dlg.window(),
             "选择 Fences 壁纸",
             startDir,
@@ -2325,7 +2313,7 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
         QString imageError;
         const QPixmap test = readWallpaperPixmap(path, &imageError);
         if (test.isNull()) {
-            QMessageBox::warning(&dlg, "Fences 壁纸",
+            LiquidDialog::warning(&dlg, "Fences 壁纸",
                 QStringLiteral("无法读取这张图片：%1\n%2").arg(path, imageError));
             return;
         }
@@ -3851,7 +3839,7 @@ void DesktopCanvas::createNewDesktopFile(const QString &baseName,
     const QString path = dir.absoluteFilePath(name);
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
-        QMessageBox::warning(this, "新建失败",
+        LiquidDialog::warning(this, "新建失败",
                              QString("无法创建 %1。").arg(name));
         return;
     }
@@ -3869,7 +3857,7 @@ void DesktopCanvas::createNewDesktopDirectory(const QPoint &clickPos)
         name = QStringLiteral("新建文件夹 (%1)").arg(n++);
 
     if (!dir.mkdir(name)) {
-        QMessageBox::warning(this, "新建失败",
+        LiquidDialog::warning(this, "新建失败",
                              QString("无法创建 %1。").arg(name));
         return;
     }
@@ -4089,7 +4077,7 @@ void DesktopCanvas::recordTrashUndo(const FileClipboard::PasteResult &result, Fe
 
     pushUndo(op);
     if (!result.undoUnavailablePaths.isEmpty())
-        QMessageBox::warning(this, "撤回记录不可用", "部分项目已移到回收站，但无法确认本次删除的记录。请在回收站中手动恢复这些项目。");
+        LiquidDialog::warning(this, "撤回记录不可用", "部分项目已移到回收站，但无法确认本次删除的记录。请在回收站中手动恢复这些项目。");
 }
 
 void DesktopCanvas::recordPasteUndo(const FileClipboard::PasteResult &result,
@@ -4144,7 +4132,7 @@ bool DesktopCanvas::transferFilesToFolder(const QStringList &paths, const QStrin
             saveLayout();
             if (completed) completed();
             if (!result.failedPaths.isEmpty())
-                QMessageBox::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+                LiquidDialog::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
         });
 }
 
@@ -4165,12 +4153,12 @@ bool DesktopCanvas::movePathForUndo(const QString &srcPath,
 void DesktopCanvas::undoLastOperation()
 {
     if (m_undoStack.isEmpty()) {
-        QMessageBox::information(this, "撤回", "没有可撤回的操作。");
+        LiquidDialog::information(this, "撤回", "没有可撤回的操作。");
         return;
     }
 
     if (FileClipboard::busy()) {
-        QMessageBox::information(this, "撤回", "请等待当前文件操作完成。"); return;
+        LiquidDialog::information(this, "撤回", "请等待当前文件操作完成。"); return;
     }
     const UndoOperation op = m_undoStack.takeLast();
     const bool accepted = FileClipboard::runOperationAsync(this, [op] {
@@ -4228,7 +4216,7 @@ void DesktopCanvas::undoLastOperation()
             const QString reason = op.type == UndoOperation::Type::Trash
                 ? "可能回收站记录已被清理或修改，或权限不足。"
                 : "可能原位置已有同名项目或权限不足。";
-            QMessageBox::warning(this,"撤回失败",QString("有 %1 个项目无法撤回，%2\n未覆盖现有文件；处理后可再次撤回。")
+            LiquidDialog::warning(this,"撤回失败",QString("有 %1 个项目无法撤回，%2\n未覆盖现有文件；处理后可再次撤回。")
                 .arg(result.failedPaths.size()).arg(reason));
         }
     });
@@ -4251,7 +4239,7 @@ FenceWidget *DesktopCanvas::createFence(const QString &title, const QRect &geo)
     fence->setFenceColor(m_defaultFenceColor);
     fence->setEditMode(m_editMode);
     fence->setIconScale(m_iconScale);
-    const QStringList defaultIcons = defaultFenceIconPaths();
+    const QStringList defaultIcons = FenceIconPicker::defaultIconPaths();
     if (!defaultIcons.isEmpty())
         fence->setTitleIconPath(
             defaultIcons.at(m_fences.size() % defaultIcons.size()));
@@ -4503,7 +4491,7 @@ bool DesktopCanvas::pasteToDesktop(const QPoint &preferredPos)
     return FileClipboard::pasteFilesToDirectoryAsync(m_desktopPath,this,
         [this,preferredPos](const FileClipboard::PasteResult &result) {
             if (!result.failedPaths.isEmpty())
-                QMessageBox::warning(this,"粘贴失败",QString("有 %1 个项目无法粘贴。").arg(result.failedPaths.size()));
+                LiquidDialog::warning(this,"粘贴失败",QString("有 %1 个项目无法粘贴。").arg(result.failedPaths.size()));
             recordPasteUndo(result);
             placeFilesOnDesktop(result.placedPaths,preferredPos);
             refreshDesktopIcons();syncCutVisualState();
@@ -4515,7 +4503,7 @@ void DesktopCanvas::trashSelectedIcons()
     const QStringList paths = selectedFilePaths();
     if (paths.isEmpty()) return;
 
-    if (QMessageBox::question(this, "移到回收站",
+    if (LiquidDialog::question(this, "移到回收站",
             QString("确定要将选中的 %1 个项目移到回收站吗？").arg(paths.size()))
         != QMessageBox::Yes)
         return;
@@ -4524,7 +4512,7 @@ void DesktopCanvas::trashSelectedIcons()
         recordTrashUndo(result);
         for (const auto &path : result.placedPaths) removeLooseIcon(path);
         if (!result.failedPaths.isEmpty())
-            QMessageBox::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+            LiquidDialog::warning(this, "移到回收站未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
         saveLayout(); refreshTrashState(); scheduleRefresh(300);
     });
 }
@@ -4620,21 +4608,37 @@ void DesktopCanvas::dropEvent(QDropEvent *e)
         return;
     }
 
-    QStringList paths;
-    for (const auto &url : e->mimeData()->urls())
-        if (url.isLocalFile()) paths << url.toLocalFile();
     const QPoint position = e->pos();
     const bool move = e->proposedAction() == Qt::MoveAction || e->dropAction() == Qt::MoveAction;
-    const bool accepted = FileClipboard::transferFilesAsync(paths, m_desktopPath, move, true, this,
-        [this, position](const FileClipboard::PasteResult &result) {
-            recordPasteUndo(result);
-            for (const auto &path : result.placedPaths)
-                for (auto *fence : m_fences) fence->removeItem(path);
-            placeFilesOnDesktop(result.placedPaths, position);
-            saveLayout();
-            if (!result.failedPaths.isEmpty())
-                QMessageBox::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
-        });
+    QStringList desktopPaths, transferPaths;
+    for (const auto &url : e->mimeData()->urls()) {
+        if (!url.isLocalFile()) continue;
+        const QString path = url.toLocalFile();
+        const QFileInfo source(path);
+        // The canvas merges all recognised desktop directories. Moving an
+        // item already in that view changes its layout, not its physical home.
+        if (move && (source.exists() || source.isSymLink()) && isInDesktopDirectory(path))
+            desktopPaths << path;
+        else
+            transferPaths << path;
+    }
+    const auto complete = [this, position, desktopPaths](const FileClipboard::PasteResult &result) {
+        recordPasteUndo(result);
+        const QStringList placedPaths = desktopPaths + result.placedPaths;
+        for (const auto &path : placedPaths)
+            for (auto *fence : m_fences) fence->removeItem(path);
+        placeFilesOnDesktop(placedPaths, position);
+        saveLayout();
+        if (!result.failedPaths.isEmpty())
+            LiquidDialog::warning(this, "拖放未完成", QString("有 %1 个项目失败或已取消。").arg(result.failedPaths.size()));
+    };
+    if (transferPaths.isEmpty()) {
+        if (desktopPaths.isEmpty()) { e->ignore(); return; }
+        complete({});
+        e->acceptProposedAction();
+        return;
+    }
+    const bool accepted = FileClipboard::transferFilesAsync(transferPaths, m_desktopPath, move, true, this, complete);
     if (accepted) e->acceptProposedAction(); else e->ignore();
 }
 
@@ -4932,7 +4936,7 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
         "普通分区…");
     connect(actNewFence, &QAction::triggered, [this, clickPos] {
         bool ok = false;
-        const QString title = QInputDialog::getText(
+        const QString title = LiquidDialog::getText(
             this, "新建分区", "分区名称：",
             QLineEdit::Normal, "新分区", &ok);
         if (ok && !title.isEmpty())
@@ -5061,6 +5065,12 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
         pasteToDesktop(clickPos);
     });
 
+    auto *actTerminal = rootAction(
+        menuIcon(QStringList() << "utilities-terminal" << "terminal", ">_", QColor("#475569")),
+        "打开终端");
+    actTerminal->setObjectName("desktopTerminalAction");
+    actTerminal->setToolTip("在桌面目录打开系统默认终端。");
+    connect(actTerminal, &QAction::triggered, this, &DesktopCanvas::openTerminal);
     auto *actPeony = rootAction(
         menuIcon(QStringList() << "system-file-manager" << "folder", "📁", QColor("#ea580c")),
         "打开文件管理器");
@@ -5082,6 +5092,7 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     menu.addAction(actPaste);
     menu.addAction(actUndo);
     menu.addAction(actRefresh);
+    menu.addAction(actTerminal);
     menu.addAction(actPeony);
     menu.addSeparator();
     menu.addAction(actEdit);
@@ -5127,7 +5138,9 @@ void DesktopCanvas::saveLayout()
             }
             obj["magneticContour"] = contourArr;
         }
-        if (!fence->titleIconPath().isEmpty())
+        if (!fence->titleIconThemeName().isEmpty())
+            obj["titleIconTheme"] = fence->titleIconThemeName();
+        else if (!fence->titleIconPath().isEmpty())
             obj["titleIcon"] = fence->titleIconPath();
 
         if (fence->m_hasTitleFont) {
@@ -5349,8 +5362,14 @@ void DesktopCanvas::loadLayout()
         }
 
         const QString iconPath = obj["titleIcon"].toString();
-        if (!iconPath.isEmpty() && QFileInfo::exists(iconPath))
-            fence->setTitleIconPath(iconPath);
+        // A saved empty/absent icon is a cleared choice. createFence() gives
+        // newly created fences a default, which must not overwrite that choice.
+        const QString iconTheme = obj["titleIconTheme"].toString().trimmed();
+        if (!iconTheme.isEmpty())
+            fence->setTitleIconThemeName(iconTheme);
+        else
+            fence->setTitleIconPath(!iconPath.isEmpty() && QFileInfo::exists(iconPath)
+                ? iconPath : QString());
 
         if (obj.contains("titleFont")) {
             const QJsonObject fontObj = obj["titleFont"].toObject();
@@ -5406,20 +5425,20 @@ void DesktopCanvas::exportLayout()
         + "/kyfences_backup_"
         + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss")
         + ".json";
-    const QString target = QFileDialog::getSaveFileName(
+    const QString target = LiquidDialog::getSaveFileName(
         this, "导出布局", defaultPath, "JSON 文件 (*.json)");
     if (target.isEmpty()) return;
 
     QFile::remove(target);
     if (QFile::copy(layoutPath(), target))
-        QMessageBox::information(this, "导出布局", "布局已导出。");
+        LiquidDialog::information(this, "导出布局", "布局已导出。");
     else
-        QMessageBox::warning(this, "导出布局", "布局导出失败。");
+        LiquidDialog::warning(this, "导出布局", "布局导出失败。");
 }
 
 void DesktopCanvas::importLayout()
 {
-    const QString source = QFileDialog::getOpenFileName(
+    const QString source = LiquidDialog::getOpenFileName(
         this, "导入布局",
         QStandardPaths::writableLocation(QStandardPaths::HomeLocation),
         "JSON 文件 (*.json)");
@@ -5427,13 +5446,13 @@ void DesktopCanvas::importLayout()
 
     QFile f(source);
     if (!f.open(QIODevice::ReadOnly)) {
-        QMessageBox::warning(this, "导入布局", "无法读取布局文件。");
+        LiquidDialog::warning(this, "导入布局", "无法读取布局文件。");
         return;
     }
 
     const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
     if (!doc.isObject() || !doc.object().contains("fences")) {
-        QMessageBox::warning(this, "导入布局", "布局文件格式不正确。");
+        LiquidDialog::warning(this, "导入布局", "布局文件格式不正确。");
         return;
     }
 
@@ -5441,7 +5460,7 @@ void DesktopCanvas::importLayout()
     QDir().mkpath(QFileInfo(target).absolutePath());
     QFile::remove(target);
     if (!QFile::copy(source, target)) {
-        QMessageBox::warning(this, "导入布局", "写入布局失败。");
+        LiquidDialog::warning(this, "导入布局", "写入布局失败。");
         return;
     }
 
@@ -5462,5 +5481,5 @@ void DesktopCanvas::importLayout()
     for (auto *icon : m_looseIcons)
         icon->setVisualScale(m_desktopIconScale);
     refreshDesktopIcons();
-    QMessageBox::information(this, "导入布局", "布局已导入。");
+    LiquidDialog::information(this, "导入布局", "布局已导入。");
 }

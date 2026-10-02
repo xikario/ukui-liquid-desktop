@@ -10,7 +10,8 @@ export XDG_CONFIG_HOME="$TMP/config"
 export XDG_CACHE_HOME="$TMP/cache"
 export UKUI_FENCES_GLASS_NO_GL=1
 
-"$BIN" --autostart >"$TMP/app.log" 2>&1 &
+mkdir -p "$TMP/home" "$TMP/data"
+env HOME="$TMP/home" XDG_DATA_HOME="$TMP/data" "$BIN" --autostart >"$TMP/app.log" 2>&1 &
 PID=$!
 sleep 2
 kill -0 "$PID"

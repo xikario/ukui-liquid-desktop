@@ -1,4 +1,5 @@
 #pragma once
+class PointerEffect;
 
 #include <QColor>
 #include <QByteArray>
@@ -42,6 +43,7 @@ struct ProcessInfo {
 class SystemMonitor : public QWidget
 {
     Q_OBJECT
+    friend struct PointerEffectTestAccess;
 public:
     enum class Skin {
         Dark,
@@ -277,6 +279,7 @@ private:
     QColor m_wallpaperThemeColor;
     QImage m_liquidGlassImage;
     QRect m_liquidGlassGeometry;
+    PointerEffect *m_liquidPointerEffect = nullptr;
     QPointF m_liquidGlassPointer {-1000, -1000};
     QString m_aiText;
     QString m_aiReasoning;

@@ -65,6 +65,21 @@ static int runMenuShortcutTest()
     settings.setValue("systemMonitor/autoStart", false);
     settings.sync();
     DesktopCanvas canvas; canvas.show(); settle();
+    QTemporaryDir terminalFixture;
+    const QString terminalBin = terminalFixture.path() + "/bin";
+    const QString terminalRecord = terminalFixture.path() + "/launched";
+    QDir().mkpath(terminalBin);
+    QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::DesktopLocation));
+    QFile terminal(terminalBin + "/x-terminal-emulator");
+    check(terminal.open(QIODevice::WriteOnly), "terminal fixture is writable");
+    terminal.write("#!/bin/sh\npwd > \"$UKUI_TERMINAL_RECORD\"\nprintf '%s\\n' \"$@\" >> \"$UKUI_TERMINAL_RECORD\"\n");
+    terminal.close();
+    terminal.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    const QByteArray oldPath = qgetenv("PATH");
+    const bool hadRecord = qEnvironmentVariableIsSet("UKUI_TERMINAL_RECORD");
+    const QByteArray oldRecord = qgetenv("UKUI_TERMINAL_RECORD");
+    qputenv("PATH", terminalBin.toUtf8() + ':' + oldPath);
+    qputenv("UKUI_TERMINAL_RECORD", terminalRecord.toUtf8());
     bool inspected = false;
     QTimer inspector; inspector.setSingleShot(true);
     QObject::connect(&inspector, &QTimer::timeout, [&] {
@@ -72,6 +87,12 @@ static int runMenuShortcutTest()
             for (QAction *action : menu->actions()) if (action->text()=="撤销上一步") {
                 checkShortcutPainting(*menu, *action, "撤销上一步"); inspected = true;
             }
+            auto *terminalAction = menu->findChild<QAction *>("desktopTerminalAction");
+            auto *fileManager = menu->findChild<QAction *>("desktopFileManagerAction");
+            check(terminalAction && fileManager &&
+                menu->actions().indexOf(terminalAction) + 1 == menu->actions().indexOf(fileManager),
+                "Open Terminal is immediately above Open File Manager");
+            if (terminalAction) terminalAction->trigger();
             menu->close();
         }
     });
@@ -79,6 +100,17 @@ static int runMenuShortcutTest()
     QContextMenuEvent event(QContextMenuEvent::Mouse, QPoint(900,650), canvas.mapToGlobal(QPoint(900,650)));
     QApplication::sendEvent(&canvas, &event);
     check(inspected, "actual desktop menu shortcut also paints with separate columns");
+    QElapsedTimer launchWait; launchWait.start();
+    while (!QFileInfo::exists(terminalRecord) && launchWait.elapsed() < 2000) settle(10);
+    QFile recorded(terminalRecord);
+    check(recorded.open(QIODevice::ReadOnly), "terminal action launches the system alternative");
+    const QList<QByteArray> lines = recorded.readAll().split('\n');
+    check(!lines.isEmpty() && QString::fromUtf8(lines.first()) ==
+        QStandardPaths::writableLocation(QStandardPaths::DesktopLocation),
+        "terminal process starts in the desktop directory");
+    qputenv("PATH", oldPath);
+    if (hadRecord) qputenv("UKUI_TERMINAL_RECORD", oldRecord);
+    else qunsetenv("UKUI_TERMINAL_RECORD");
     LiquidPopup::setBackdropProvider({});
     return failures ? 1 : 0;
 }

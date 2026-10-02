@@ -38,7 +38,8 @@ export UKUI_FENCES_SMARTSPACE_AUTO_INDEX=1
 export UKUI_FENCES_TEST_AUTO_INDEX=1
 export UKUI_FENCES_TEST_CONFIRM_IDLE=1
 
-"$BINARY" > "$RUNTIME_DIR/app.log" 2>&1 &
+mkdir -p "$RUNTIME_DIR/home" "$RUNTIME_DIR/data"
+env HOME="$RUNTIME_DIR/home" XDG_DATA_HOME="$RUNTIME_DIR/data" "$BINARY" > "$RUNTIME_DIR/app.log" 2>&1 &
 APP_PID=$!
 attempt=0
 while [ "$attempt" -lt 50 ]; do

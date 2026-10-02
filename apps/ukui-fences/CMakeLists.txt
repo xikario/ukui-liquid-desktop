@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ukui-fences VERSION 0.5.1 LANGUAGES CXX)
+project(ukui-fences VERSION 0.6.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CTest)
@@ -54,6 +54,8 @@ add_executable(ukui-fences
     src/DeskletModels.cpp
     src/ActivityRecorder.cpp
     src/FenceWidget.cpp
+    src/FenceIconPicker.cpp
+    src/FencesWindowIdentity.cpp
     src/FenceGlassRenderer.cpp
     src/fence-glass.qrc
     src/LiquidIconRenderer.cpp
@@ -157,6 +159,13 @@ if(BUILD_TESTING)
                     ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --appearance-only)
         set_tests_properties(desktop_appearance PROPERTIES TIMEOUT 30 LABELS "integration;ui;appearance"
             ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1;QT_SCREEN_SCALE_FACTORS=1")
+        foreach(POINTER_SCALE 1 1.5 2)
+            add_test(NAME desktop_pointer_effect_${POINTER_SCALE}
+                COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2560x1600x24"
+                    ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --pointer-effect-only)
+            set_tests_properties(desktop_pointer_effect_${POINTER_SCALE} PROPERTIES TIMEOUT 45
+                ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1;QT_STYLE_OVERRIDE=Fusion;QT_SCREEN_SCALE_FACTORS=1;QT_SCALE_FACTOR=${POINTER_SCALE}")
+        endforeach()
         foreach(REFRESH_SCALE 1 1.5 2)
             add_test(NAME desktop_refresh_${REFRESH_SCALE}
                 COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
@@ -189,7 +198,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:fence-glass-test> --clipboard-only)
         set_tests_properties(desktop_clipboard_async PROPERTIES TIMEOUT 30 LABELS "integration;files")
         foreach(SCALE 1 1.5 2)
-            foreach(KIND appearance icon-appearance icon-damage smart-interaction settings-center menu-shortcut)
+            foreach(KIND appearance icon-appearance icon-damage smart-interaction smart-space-position settings-center fence-settings menu-shortcut)
                 add_test(NAME desktop_${KIND}_${SCALE}
                     COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
                         ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --${KIND}-only)
@@ -273,12 +282,15 @@ install(PROGRAMS scripts/smart_space_indexer.py
                  scripts/credential_store.py
                  scripts/smart_space_knowledge.py
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/ukui-fences)
-install(FILES packaging/ukui-fences.desktop packaging/ukui-fences-settings.desktop
+install(FILES packaging/ukui-fences.desktop packaging/ukui-fences-settings.desktop packaging/ukui-fences-monitor.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES packaging/ukui-fences.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
 install(FILES packaging/ukui-fences.svg packaging/ukui-fences-settings.svg
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+install(FILES assets/monitor-diagnosis.svg
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+        RENAME ukui-fences-monitor.svg)
 install(DIRECTORY assets/fence-icons/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/ukui-fences/fence-icons
         FILES_MATCHING PATTERN "*.svg")

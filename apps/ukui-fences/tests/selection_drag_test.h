@@ -52,9 +52,18 @@ static int runSelectionDragTest(const QString &isolated)
     layout.close();
 
     SelectionPaintProbe canvas;
-    const auto icons = canvas.findChildren<DesktopIcon *>();
-    for (auto *icon : icons) icon->hide();
+    QElapsedTimer startup;startup.start();
+    while (!canvas.isVisible() && startup.elapsed()<5000) settle(20);
+    check(canvas.isVisible(),"selection fixture waits for the prepared desktop to map");
+    if (!canvas.isVisible()) return 1;
+    // Initial wallpaper/screen layout can reveal icons. Establish the blank
+    // backing-store fixture only after that startup work, using current icons.
     settle(350);
+    const auto icons = canvas.findChildren<DesktopIcon *>(QString(),Qt::FindDirectChildrenOnly);
+    for (auto *icon : icons) icon->hide();
+    settle(80);
+    bool iconsHidden=true;for (auto *icon:icons) iconsHidden &= icon->isHidden();
+    check(iconsHidden,"native selection fixture hides all current desktop icons after startup");
     const QPoint origin(700, 450);
     auto sendMouse = [&](QEvent::Type type, QPoint pos) {
         const bool move = type == QEvent::MouseMove;
@@ -95,6 +104,7 @@ static int runSelectionDragTest(const QString &isolated)
                 const QPoint start(x, y);
                 const QPoint end(x + 100, y + 180);
                 const QImage before = screenshot();
+                const QRect geometryBefore=canvas.geometry();
                 nativeMove(start);
                 canvas.presses = canvas.releases = 0;
                 nativeMouse({"mousedown", "1"});
@@ -105,7 +115,21 @@ static int runSelectionDragTest(const QString &isolated)
                 check(screenshot() != before, "top drag paints a visible selection");
                 checkBackingStore();
                 nativeMouse({"mouseup", "1"});
-                check(canvas.releases == 1 && screenshot() == before,
+                const QImage released=screenshot();
+                if (canvas.releases!=1 || released!=before) {
+                    QRect difference;int changed=0;
+                    if (released.size()==before.size())
+                        for(int row=0;row<released.height();++row)for(int column=0;column<released.width();++column)
+                            if(released.pixel(column,row)!=before.pixel(column,row)) {difference|=QRect(column,row,1,1);++changed;}
+                    qInfo()<<"Release diagnostic"<<start<<"releases"<<canvas.releases
+                        <<"geometry"<<geometryBefore<<canvas.geometry()<<"changed"<<changed<<"bounds"<<difference;
+                    QDir().mkpath("artifacts/selection-release");
+                    const QString sample=QString("artifacts/selection-release/%1-%2-%3").arg(canvas.devicePixelRatioF()).arg(x).arg(y);
+                    before.save(sample+"-before.png");released.save(sample+"-released.png");
+                }
+                check(canvas.releases==1 && canvas.geometry()==geometryBefore,
+                      "physical release is delivered once and leaves desktop geometry fixed");
+                check(released == before,
                       "physical release clears top selection without moving desktop");
             }
         }

@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/settings">
         <file alias="ukui-fences-settings.svg">packaging/ukui-fences-settings.svg</file>
+        <file alias="monitor-diagnosis.svg">assets/monitor-diagnosis.svg</file>
     </qresource>
     <qresource prefix="/smart-space">
         <file alias="menu-refresh.png">assets/smart-space-menu-icons/refresh.png</file>
@@ -11,5 +12,17 @@
         <file alias="menu-delete-space.png">assets/smart-space-menu-icons/delete-space.png</file>
         <file alias="menu-settings.png">assets/smart-space-menu-icons/settings.png</file>
         <file alias="menu-close.png">assets/smart-space-menu-icons/close.png</file>
+    </qresource>
+    <qresource prefix="/fence-icons">
+        <file alias="archive.svg">assets/fence-icons/archive.svg</file>
+        <file alias="dock.svg">assets/fence-icons/dock.svg</file>
+        <file alias="favorites.svg">assets/fence-icons/favorites.svg</file>
+        <file alias="ideas.svg">assets/fence-icons/ideas.svg</file>
+        <file alias="inbox.svg">assets/fence-icons/inbox.svg</file>
+        <file alias="industry.svg">assets/fence-icons/industry.svg</file>
+        <file alias="orbit.svg">assets/fence-icons/orbit.svg</file>
+        <file alias="presentation.svg">assets/fence-icons/presentation.svg</file>
+        <file alias="services.svg">assets/fence-icons/services.svg</file>
+        <file alias="tasks.svg">assets/fence-icons/tasks.svg</file>
     </qresource>
 </RCC>

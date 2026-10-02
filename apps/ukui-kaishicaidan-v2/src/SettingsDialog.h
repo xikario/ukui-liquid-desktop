@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QDialog>
+#include "LiquidDialog.h"
 #include <QComboBox>
 #include <QSpinBox>
 #include <QFontComboBox>
@@ -10,7 +10,7 @@
 
 class StartMenu;
 
-class SettingsDialog : public QDialog {
+class SettingsDialog : public LiquidDialog::Dialog {
     Q_OBJECT
 public:
     explicit SettingsDialog(StartMenu *menu, QWidget *parent = nullptr);

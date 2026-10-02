@@ -22,7 +22,9 @@ private:
     void attach(QWidget *);
     void addMenu(QMenu *);
     void settingsDialog(QWidget *);
-    void apply();
+    void apply(bool materialChanged = true);
+    void flushPreview();
+    void saveConfiguration();
     void refreshBackdrop(bool force = true);
     void updateWallpaperWatchers();
     void syncOutline(QWidget *);
@@ -40,7 +42,11 @@ private:
     QFileSystemWatcher m_wallpaperWatcher;
     QTimer m_wallpaperRefresh;
     QTimer m_hoverRefresh;
+    QTimer m_previewRefresh;
+    QTimer m_configSave;
+    bool m_pendingMaterial=false;
     QHash<QWidget *,QPointF> m_pointers;
+    QHash<QWidget *,QRegion> m_pointerDamage;
     LiquidOpticsRenderer m_optics;
     QHash<QWidget *,QImage> m_cache;
     QSet<QWidget *> m_materialDirty;

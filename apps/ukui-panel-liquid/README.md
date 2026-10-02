@@ -4,6 +4,8 @@
 
 [项目主页](../../README.md) · [构建](../../docs/BUILD.md) · [安装与恢复](../../docs/INSTALL_AND_RESTORE.md)
 
+本组件属于仓库 [v0.6.0 发布集合](../../docs/versions/v0.6.0.md)。
+
 ## 功能与设置入口
 
 面板空白处右键 → **外观与特效**：
@@ -12,9 +14,11 @@
 - **刷新背景材质**：重新读取背景并生成一次材质。
 - **液态外观设置…**：调整圆角、背景压暗、高光、背景色彩、清晰度、液态强度、壁纸跟随、窗口透视及菜单动画。
 
-设置即时保存到 `~/.config/ukui/liquid-panel.ini`，仅影响当前面板组件。背景清晰度混入原壁纸细节；液态强度控制边缘光学变化；窗口透视只调整底板透明度，文字和图标不变淡。
+设置立即预览；连续滑块变化按 16 ms 合并预览，停顿 180 ms、松开滑块或关闭设置时保存最终值到 `~/.config/ukui/liquid-panel.ini`，仅影响当前面板组件。背景清晰度混入原壁纸细节；液态强度控制边缘光学变化；窗口透视只调整底板透明度，文字和图标不变淡。
 
 **自适应壁纸**开启时合并处理系统/Fences 壁纸配置及文件变化，背景实际变化才重建材质。关闭后保留本次会话缓存，仍可手动刷新；重启会读取启动时壁纸。它不自动选择亮/暗主题，也不会覆盖用户光学参数。
+
+设置窗口使用 [公共液态弹窗](../../shared/liquid-popup/README.md)。仅改变透视程度或动画选项时复用现有材质。
 
 ## 构建与安装
 
@@ -56,6 +60,8 @@ python3 apps/ukui-panel-liquid/scripts/install.py
 
 进程内 QMenu 和标准提示复用 [公共菜单模块](../../shared/liquid-popup/README.md)。独立进程的音量、网络、通知弹窗和部分 QML 预览/日历不自动换肤；菜单材质也不能等同于主底板的 GPU 渲染。
 
+液态外观设置使用公共玻璃内标题栏，标题关闭保留最后参数的保存行为；按钮和下拉控件与 Fences、开始菜单共用实现。验证见 [标题栏与控件补齐](../../docs/DIALOG_CHROME_CONTROLS_20261002.md)。
+
 已适配环境为麒麟 V10 / Qt 5.12 的 OEM 面板，历史包版本 `3.26.0.0-0k3.21oemccd3000m0.26.u`。系统升级继续使用新的 `/usr/bin/ukui-panel`，但接口或窗口结构变化后需重新验证，不能保证适配所有发行版面板。
 
 ## 隔离验证与源码
@@ -71,3 +77,5 @@ xvfb-run -a -s '-screen 0 2880x1800x24' dbus-run-session -- sh -c 'cd apps/ukui-
 主要源码为 `src/PanelStyle.*`、`src/WallpaperBackdrop.*`，部署与恢复工具位于 `scripts/` 和 `packaging/`。历史截图、性能测量和本机备份在忽略的 `artifacts/`、`releases/` 下，不随源码发布。
 
 [材质参数与透视说明](../../docs/MATERIAL_CONTROLS_20260929.md) · [安装事务整改](../../docs/REVIEW_ROUND2_FIXES_20261001.md) · [验证记录](../../docs/VALIDATION.md) · [来源与许可](../../THIRD_PARTY_NOTICES.md)
+
+[桌面光效 CPU 优化与画面对照验证](../../docs/DESKTOP_EFFECT_CPU_20261001.md)：保留原光效参数，合并输入与局部重绘，静止或隐藏时停止光效计时。

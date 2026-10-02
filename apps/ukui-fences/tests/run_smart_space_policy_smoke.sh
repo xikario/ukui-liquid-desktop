@@ -30,7 +30,8 @@ export XDG_CACHE_HOME="$CACHE_DIR"
 export UKUI_FENCES_SMARTSPACE_ROOTS="$ROOT_DIR"
 unset UKUI_FENCES_SMARTSPACE_AUTO_INDEX || true
 
-"$BINARY" --autostart > "$RESULT_DIR/policy-smoke.log" 2>&1 &
+mkdir -p "$RUNTIME_DIR/home" "$RUNTIME_DIR/data"
+env HOME="$RUNTIME_DIR/home" XDG_DATA_HOME="$RUNTIME_DIR/data" "$BINARY" --autostart > "$RESULT_DIR/policy-smoke.log" 2>&1 &
 APP_PID=$!
 attempt=0
 while [ "$attempt" -lt 40 ]; do

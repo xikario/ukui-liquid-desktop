@@ -24,6 +24,13 @@ struct Theme {
 Theme &theme();
 using BackdropProvider = std::function<QImage(const QRect &, qreal)>;
 void setBackdropProvider(BackdropProvider provider);
+QImage captureBackdrop(const QRect &globalArea, qreal dpr);
+// Skin the native combo/spin buttons while retaining their input handling.
+void installControls(QWidget *form);
+void installComboPopups(QWidget *form, BackdropProvider provider = {});
+struct MaterialCacheStats { int bytes; quint64 builds; quint64 hits; };
+MaterialCacheStats materialCacheStats();
+void clearMaterialCache();
 QImage renderMaterial(const QImage &backdrop, QSize logicalSize, qreal dpr,
                       bool light = false, QRectF body = QRectF());
 // Cached alpha silhouette and rim; does not rely on aliased painter clips.

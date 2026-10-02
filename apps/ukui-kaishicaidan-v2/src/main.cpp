@@ -13,6 +13,7 @@
 #include <QDebug>
 
 #include "StartMenu.h"
+#include "DesktopAppLaunch.h"
 #include "StartButton.h"
 #include "KeyInterceptor.h"
 #include "TaskbarDetector.h"
@@ -47,6 +48,10 @@ bool callExistingInstance(const QString &method)
 
 int main(int argc, char *argv[])
 {
+    if(argc==3 && QString::fromLatin1(argv[1])=="--launch-desktop") {
+        QCoreApplication helper(argc,argv);
+        return launchDesktopFile(helper.arguments().at(2));
+    }
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
 
@@ -60,8 +65,11 @@ int main(int argc, char *argv[])
     app.setApplicationName("ukui-kaishicaidan");
 #endif
     app.setApplicationDisplayName(QString::fromUtf8("开始菜单"));
+    app.setDesktopFileName(QStringLiteral("ukui-kaishicaidan"));
+    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("kylin-startmenu"),
+                                     QIcon::fromTheme(QStringLiteral("start-here"))));
     app.setOrganizationName("kylin");
-    app.setApplicationVersion("0.1.0");
+    app.setApplicationVersion("0.2.0");
 
     app.setStyleSheet(StartMenuTheme::tooltipStyleSheet());
 

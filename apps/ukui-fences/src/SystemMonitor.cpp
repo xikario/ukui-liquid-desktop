@@ -1,3 +1,5 @@
+#include "PointerEffect.h"
+#include <QPaintEvent>
 #include "../../../shared/async-work/BackgroundTask.h"
 #include "LiquidPopup.h"
 #include "SystemMonitor.h"
@@ -188,6 +190,21 @@ SystemMonitor::SystemMonitor(QWidget *parent)
     m_diskHistory = QVector<double>(HISTORY_POINTS, 0.0);
 
     restoreSettings();
+    m_liquidPointerEffect = new PointerEffect(this, [this](const QPoint &pos, bool inside) {
+        if (m_skin != Skin::Liquid) return false;
+        const QPointF pointer = inside ? QPointF(logicalPosition(pos)) : QPointF(-1000,-1000);
+        if (pointer == m_liquidGlassPointer) return false;
+        QPainterPath rim;
+        rim.addRoundedRect(QRectF(1,1,logicalWidth()-2,logicalHeight()-2),13,13);
+        QRegion damage = pointerRimDamage(rim,m_liquidGlassPointer,112)
+            | pointerRimDamage(rim,pointer,112);
+        m_liquidGlassPointer = pointer;
+        const QTransform scale = QTransform::fromScale(m_scale,m_scale);
+        damage = scale.map(damage);
+        if (!damage.isEmpty()) update(damage);
+        return false;
+    }, 16);
+    m_liquidPointerEffect->setEnabled(m_skin == Skin::Liquid);
     const QString environmentKey =
         QString::fromUtf8(qgetenv("DEEPSEEK_API_KEY")).trimmed();
     if (!environmentKey.isEmpty())
@@ -217,6 +234,7 @@ SystemMonitor::SystemMonitor(QWidget *parent)
 
 SystemMonitor::~SystemMonitor()
 {
+    if (m_liquidPointerEffect) m_liquidPointerEffect->stop();
     for (auto *process : findChildren<QProcess *>()) {
         process->disconnect(this); process->kill();
     }
@@ -1149,7 +1167,7 @@ void SystemMonitor::drawAiPanel(QPainter &p, const QRect &rect,
                        : m_aiProgressText);
     } else if (!m_aiError.isEmpty()) {
         p.save();
-        p.setClipRect(content.adjusted(1, 1, -1, -1));
+        p.setClipRect(content.adjusted(1, 1, -1, -1), Qt::IntersectClip);
         p.translate(0, -m_aiScrollOffset);
         p.setPen(QColor(248, 113, 113));
         p.drawText(textRect,
@@ -1158,7 +1176,7 @@ void SystemMonitor::drawAiPanel(QPainter &p, const QRect &rect,
         p.restore();
     } else if (!m_aiText.isEmpty()) {
         p.save();
-        p.setClipRect(content.adjusted(1, 1, -1, -1));
+        p.setClipRect(content.adjusted(1, 1, -1, -1), Qt::IntersectClip);
         p.translate(0, -m_aiScrollOffset);
         p.setPen(colors.text);
         p.drawText(textRect,
@@ -1203,9 +1221,10 @@ void SystemMonitor::drawAiPanel(QPainter &p, const QRect &rect,
                colors.muted, colors.track, colors.border);
 }
 
-void SystemMonitor::paintEvent(QPaintEvent *)
+void SystemMonitor::paintEvent(QPaintEvent *event)
 {
     QPainter painter(this);
+    painter.setClipRegion(event->region());
     painter.setRenderHint(QPainter::Antialiasing);
     painter.scale(m_scale, m_scale);
     const Palette colors = paletteForSkin();
@@ -1228,7 +1247,7 @@ void SystemMonitor::paintEvent(QPaintEvent *)
             painter.drawRoundedRect(QRect(0, 0, logicalWidth(), logicalHeight()), 14, 14);
         }
 
-        const QPointF pointer = logicalPosition(m_liquidGlassPointer.toPoint());
+        const QPointF pointer = m_liquidGlassPointer;
         if (m_hovered && pointer.x() >= 0 && pointer.y() >= 0 &&
             pointer.x() < logicalWidth() && pointer.y() < logicalHeight()) {
             QPainterPath rim;
@@ -1239,7 +1258,7 @@ void SystemMonitor::paintEvent(QPaintEvent *)
             reflection.setColorAt(0.38, QColor(193, 225, 255, 48));
             reflection.setColorAt(1, Qt::transparent);
             painter.save();
-            painter.setClipPath(rim);
+            painter.setClipPath(rim, Qt::IntersectClip);
             painter.setBrush(Qt::NoBrush);
             painter.setPen(QPen(QBrush(reflection), 1.6));
             painter.drawPath(rim);
@@ -1302,7 +1321,7 @@ void SystemMonitor::paintEvent(QPaintEvent *)
     m_diskRingRect =
         QRect(diskCard.left() + 12, diskCard.top() + 38, 66, 66);
 
-    drawMetricCard(painter, cpuCard,
+    if (painter.clipRegion().intersects(cpuCard)) drawMetricCard(painter, cpuCard,
         QStringLiteral("CPU"), cpuDetail, m_cpuPercent,
         colors.cpu, m_cpuHistory);
     const int coreAreaX = cpuCard.left() + 92;
@@ -1333,10 +1352,10 @@ void SystemMonitor::paintEvent(QPaintEvent *)
                       track.width(), fillH), 2, 2);
         }
     }
-    drawMetricCard(painter, memoryCard,
+    if (painter.clipRegion().intersects(memoryCard)) drawMetricCard(painter, memoryCard,
         QStringLiteral("内存"), memDetail, m_memPercent,
         colors.memory, m_memHistory);
-    drawMetricCard(painter, diskCard,
+    if (painter.clipRegion().intersects(diskCard)) drawMetricCard(painter, diskCard,
         QStringLiteral("磁盘"), diskDetail, m_diskPercent,
         colors.disk, m_diskHistory);
 
@@ -1405,6 +1424,7 @@ void SystemMonitor::setSkin(Skin skin)
     if (m_skin == skin)
         return;
     m_skin = skin;
+    m_liquidPointerEffect->setEnabled(skin == Skin::Liquid);
     if (skin == Skin::Wallpaper)
         refreshWallpaperTheme();
     saveSettings();
@@ -2973,11 +2993,6 @@ void SystemMonitor::mousePressEvent(QMouseEvent *event)
 
 void SystemMonitor::mouseMoveEvent(QMouseEvent *event)
 {
-    if (m_skin == Skin::Liquid) {
-        m_liquidGlassPointer = logicalPosition(event->pos());
-        if (!m_dragging && !m_resizing)
-            update();
-    }
     if (m_resizing && (event->buttons() & Qt::LeftButton)) {
         const QPoint delta = event->globalPos() - m_resizeStartGlobal;
         const QSize logical = baseSize();

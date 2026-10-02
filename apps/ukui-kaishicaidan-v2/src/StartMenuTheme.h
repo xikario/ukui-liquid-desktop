@@ -341,6 +341,16 @@ public:
         m_settings->setValue("panelOpacity", qBound(0, opacity, 100));
         m_settings->sync();
     }
+    bool setAppearance(Skin value,const QString &family,int size,int opacity) {
+        opacity=qBound(0,opacity,100);
+        if(skin()==value && fontFamily()==family && fontSize()==size && panelOpacity()==opacity)return false;
+        m_settings->setValue("skin",static_cast<int>(value));
+        m_settings->setValue("fontFamily",family);
+        m_settings->setValue("fontSize",size);
+        m_settings->setValue("panelOpacity",opacity);
+        m_settings->sync();
+        return true;
+    }
 
     QStringList railPinnedApps() const {
         return m_settings->value("railPinnedApps").toStringList();

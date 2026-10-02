@@ -55,6 +55,7 @@ if(NOT KAISHICAIDAN_GL_INCLUDE_DIR)
 endif()
 
 set(LAUNCHER_SOURCES
+    src/DesktopAppLaunch.cpp
     src/StartMenu.cpp
     src/StartButton.cpp
     src/KeyInterceptor.cpp
@@ -138,4 +139,18 @@ if(BUILD_TESTING)
                 ENVIRONMENT "QT_SCALE_FACTOR=${SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1")
         endforeach()
     endif()
+endif()
+
+if(BUILD_TESTING AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
+    add_executable(launcher-pointer-test tests/pointer_repaint_test.cpp ${LAUNCHER_SOURCES})
+    target_compile_definitions(launcher-pointer-test PRIVATE UKUI_KAISHICAIDAN_V2=1)
+    target_include_directories(launcher-pointer-test PRIVATE src ${X11_INCLUDE_DIR} ${KAISHICAIDAN_GL_INCLUDE_DIR} ../../shared/async-work)
+    target_link_libraries(launcher-pointer-test PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets Qt5::DBus ${X11_LIBRARY} ${XTST_LIBRARY} ukui-liquid-popup ukui-liquid-optics)
+    foreach(SCALE 1 1.5 2)
+        add_test(NAME launcher-pointer-${SCALE}
+            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
+                ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:launcher-pointer-test>)
+        set_tests_properties(launcher-pointer-${SCALE} PROPERTIES TIMEOUT 30
+            ENVIRONMENT "QT_SCALE_FACTOR=${SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1;KAISHICAIDAN_GLASS_FAST=1")
+    endforeach()
 endif()

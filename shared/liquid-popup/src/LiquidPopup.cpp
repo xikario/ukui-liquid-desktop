@@ -15,6 +15,11 @@
 #include <QToolTip>
 #include <QTextDocument>
 #include <QWidgetAction>
+#include <QCache>
+#include <QDataStream>
+#include <QMouseEvent>
+#include <memory>
+#include <limits>
 #include <QtMath>
 #include <algorithm>
 
@@ -28,6 +33,66 @@ QPointer<QWidget> tipOwner;
 QRect tipOwnerRect;
 QString tipText;
 QTimer *tipTimeout = nullptr;
+struct LensGeometry {
+    QVector<qreal> qx,qy,rimX,rimY,cornerRim;
+    QVector<int> sampleX,sampleY,cornerX,cornerY,cornerSample;
+    int cornerWidth=0;
+};
+QCache<QByteArray, LensGeometry> lensCache(2*1024*1024);
+quint64 lensBuilds=0, lensHits=0;
+struct LensPoint { qreal rim; int sample; };
+LensPoint lensPoint(int x,int y,QSize size,qreal dpr,QRectF bounds,qreal radius,qreal refraction) {
+    const qreal px=(x+.5)/dpr,py=(y+.5)/dpr;
+    const qreal sx=px-bounds.center().x(),sy=py-bounds.center().y();
+    const qreal qx=std::abs(sx)-bounds.width()/2+radius;
+    const qreal qy=std::abs(sy)-bounds.height()/2+radius;
+    const qreal vx=qMax(qx,0.0),vy=qMax(qy,0.0),length=std::hypot(vx,vy);
+    const qreal distance=length+qMin(qMax(qx,qy),0.0)-radius;
+    const qreal rim=std::exp(-qMax(-distance,0.0)/6.0);
+    const qreal nx=(sx<0?-1:1)*(length>0?vx/length:(qx>qy?1:0));
+    const qreal ny=(sy<0?-1:1)*(length>0?vy/length:(qx>qy?0:1));
+    return {rim,qBound(0,qRound(y-ny*refraction*rim*dpr),size.height()-1)*size.width()
+        +qBound(0,qRound(x-nx*refraction*rim*dpr),size.width()-1)};
+}
+const LensGeometry *geometryFor(QSize size,qreal dpr,QRectF bounds,qreal radius,qreal refraction) {
+    // Cache geometry only: every opening still uses its own current backdrop.
+    QByteArray key;
+    QDataStream stream(&key,QIODevice::WriteOnly);
+    stream<<size<<dpr<<bounds<<radius<<refraction;
+    if(auto *found=lensCache.object(key)){++lensHits;return found;}
+    auto geometry=std::make_unique<LensGeometry>();
+    QVector<int> cornerXs,cornerYs;
+    auto axis=[&](int extent,qreal center,qreal half,QVector<qreal> &q,QVector<qreal> &rim,
+                  QVector<int> &sample,QVector<int> &corner,QVector<int> &positions,int stride) {
+        q.resize(extent);rim.resize(extent);sample.resize(extent);corner.fill(-1,extent);
+        for(int i=0;i<extent;++i) {
+            const qreal displacement=(i+.5)/dpr-center;
+            q[i]=std::abs(displacement)-half+radius;
+            rim[i]=std::exp(-qMax(radius-q[i],0.0)/6.0);
+            sample[i]=qBound(0,qRound(i-(displacement<0?-1:1)*refraction*rim[i]*dpr),extent-1)*stride;
+            if(q[i]>0){corner[i]=positions.size();positions.append(i);}
+        }
+    };
+    axis(size.width(),bounds.center().x(),bounds.width()/2,geometry->qx,geometry->rimX,
+        geometry->sampleX,geometry->cornerX,cornerXs,1);
+    axis(size.height(),bounds.center().y(),bounds.height()/2,geometry->qy,geometry->rimY,
+        geometry->sampleY,geometry->cornerY,cornerYs,size.width());
+    const qint64 corners=qint64(cornerXs.size())*cornerYs.size();
+    const qint64 cost=(qint64(size.width())+size.height())*(2*sizeof(qreal)+2*sizeof(int))
+        +corners*(sizeof(qreal)+sizeof(int))+sizeof(LensGeometry)+256;
+    if(cost>lensCache.maxCost() || corners>std::numeric_limits<int>::max())return nullptr;
+    geometry->cornerWidth=cornerXs.size();
+    geometry->cornerRim.resize(int(corners));geometry->cornerSample.resize(int(corners));
+    for(int cy=0;cy<cornerYs.size();++cy)for(int cx=0;cx<cornerXs.size();++cx) {
+        const auto point=lensPoint(cornerXs[cx],cornerYs[cy],size,dpr,bounds,radius,refraction);
+        const int index=cy*cornerXs.size()+cx;
+        geometry->cornerRim[index]=point.rim;geometry->cornerSample[index]=point.sample;
+    }
+    ++lensBuilds;
+    auto *result=geometry.release();
+    lensCache.insert(key,result,int(cost));
+    return result;
+}
 
 class MenuGlyphStyle final : public QProxyStyle {
 public:
@@ -84,6 +149,8 @@ QImage diffuse(const QImage &in, QSize size) {
 class MenuSkin final : public QObject {
 public:
     explicit MenuSkin(QMenu *m):QObject(m),menu(m) {
+        hover.setSingleShot(true);
+        connect(&hover,&QTimer::timeout,this,[this]{deliverHover();});
         menu->installEventFilter(this);
         connect(menu,&QMenu::aboutToShow,this,[this] {
             if (!enabled) return;
@@ -123,6 +190,16 @@ public:
     }
     void updateItemMetrics() {
             if (!styled || updatingMetrics) return;
+            QByteArray key;
+            QDataStream stream(&key,QIODevice::WriteOnly);
+            stream<<menu->font()<<menu->layoutDirection();
+            for(QAction *action:menu->actions()) {
+                stream<<quintptr(action)<<action->isVisible()<<action->isSeparator()
+                    <<action->text()<<action->font()<<action->shortcut().toString()
+                    <<action->icon().cacheKey()<<bool(qobject_cast<QWidgetAction *>(action));
+            }
+            if(key==metricsKey)return;
+            metricsKey=key;
             updatingMetrics = true;
             int labelWidth = 0, iconWidth = 0, shortcutGap = 0;
             for (QAction *action : menu->actions()) {
@@ -155,8 +232,27 @@ public:
 protected:
     bool eventFilter(QObject *,QEvent *e) override {
         if (!enabled) {
+            hover.stop();pendingHover.reset();
             restore();
             return false;
+        }
+        if(e->type()==QEvent::MouseMove && styled && menu->isVisible() && !deliveringHover) {
+            auto *mouse=static_cast<QMouseEvent *>(e);
+            if(mouse->buttons()==Qt::NoButton) {
+                pendingHover=std::make_unique<QMouseEvent>(*mouse);
+                QScreen *screen=QGuiApplication::screenAt(mouse->globalPos());
+                const qreal rate=screen?screen->refreshRate():60.;
+                const int interval=qBound(4,qRound(1000./(rate>0?rate:60.)),33);
+                if(!hoverClock.isValid() || hoverClock.elapsed()>=interval)deliverHover();
+                else if(!hover.isActive())hover.start(qMax(1,interval-int(hoverClock.elapsed())));
+                return true;
+            }
+        } else if(e->type()==QEvent::MouseButtonPress || e->type()==QEvent::MouseButtonRelease ||
+                  e->type()==QEvent::KeyPress || e->type()==QEvent::Leave) {
+            // Input results remain immediate, including a click between frames.
+            const QPointer<MenuSkin> guard(this);
+            deliverHover();
+            if(!guard)return true;
         }
         if (styled && (e->type()==QEvent::ActionAdded || e->type()==QEvent::ActionRemoved ||
                        e->type()==QEvent::ActionChanged || e->type()==QEvent::FontChange)) {
@@ -236,6 +332,7 @@ protected:
     }
     void restore() {
         if (!styled) return;
+        hover.stop();pendingHover.reset();hoverClock.invalidate();metricsKey.clear();
         styled = false;
         fade.stop();menu->setWindowOpacity(1);material={};backdrop={};
         menu->setStyleSheet(originalStyle);
@@ -253,6 +350,16 @@ protected:
         indicatorIcons.clear();
     }
 private:
+    void deliverHover() {
+        hover.stop();
+        auto event=std::move(pendingHover);
+        if(!event || !menu->isVisible())return;
+        deliveringHover=true;
+        hoverClock.start();
+        const QPointer<MenuSkin> guard(this);
+        QCoreApplication::sendEvent(menu,event.get());
+        if(guard)deliveringHover=false;
+    }
     QPointer<QStyle> glyphStyle, originalWidgetStyle;
     QString originalStyle;
     QRegion originalMask;
@@ -262,6 +369,11 @@ private:
     QRect backdropArea, availableArea;
     QList<QPointer<QAction>> indicatorIcons;
     QVariantAnimation fade;
+    QTimer hover;
+    QElapsedTimer hoverClock;
+    std::unique_ptr<QMouseEvent> pendingHover;
+    QByteArray metricsKey;
+    bool deliveringHover=false;
 };
 class Filter final : public QObject {
 public:
@@ -373,6 +485,9 @@ void setEnabled(bool value) {
     enabled = value;
 }
 void setBackdropProvider(BackdropProvider p){provider=std::move(p);}
+QImage captureBackdrop(const QRect &area,qreal dpr){return capture(area,dpr);}
+MaterialCacheStats materialCacheStats(){return {lensCache.totalCost(),lensBuilds,lensHits};}
+void clearMaterialCache(){lensCache.clear();lensBuilds=lensHits=0;}
 QRect place(QSize size,const QRect &anchor,const QRect &available) {
     const QRect safe=available.adjusted(8,8,-8,-8);
     size=size.boundedTo(safe.size());
@@ -465,30 +580,34 @@ QImage renderMaterial(const QImage &input,QSize logical,qreal dpr,bool light,QRe
     if(source.isNull()) {source=QImage(size,QImage::Format_RGB32);source.fill(light?QColor(222,227,234):QColor(40,47,57));}
     source=source.scaled(size,Qt::IgnoreAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_RGB32);
     QImage body=diffuse(source,size),out(size,QImage::Format_ARGB32_Premultiplied);
-    // Approximate edge lens. Cached raster backend; not a compositor shader.
-    for(int y=0;y<size.height();++y) for(int x=0;x<size.width();++x) {
-        const qreal px=(x+.5)/dpr,py=(y+.5)/dpr;
-        const qreal radius=qMin(theme().radius,qMin(bounds.width(),bounds.height())/2);
-        const qreal sx=px-bounds.center().x(),sy=py-bounds.center().y();
-        const qreal qx=std::abs(sx)-bounds.width()/2+radius;
-        const qreal qy=std::abs(sy)-bounds.height()/2+radius;
-        const qreal vx=qMax(qx,0.0),vy=qMax(qy,0.0),length=std::hypot(vx,vy);
-        const qreal distance=length+qMin(qMax(qx,qy),0.0)-radius;
-        const qreal edge=qMax(-distance,0.0);
-        const qreal rim=std::exp(-edge/6.0);
-        const qreal nx=(sx<0?-1:1)*(length>0?vx/length:(qx>qy?1:0));
-        const qreal ny=(sy<0?-1:1)*(length>0?vy/length:(qx>qy?0:1));
-        const qreal dx=-nx*theme().refraction*rim*dpr;
-        const qreal dy=-ny*theme().refraction*rim*dpr;
-        const QRgb clear=source.pixel(qBound(0,qRound(x+dx),size.width()-1),qBound(0,qRound(y+dy),size.height()-1));
-        const QRgb blur=body.pixel(x,y);
+    if(source.isNull() || body.isNull() || out.isNull())return {};
+    const qreal radius=qMin(theme().radius,qMin(bounds.width(),bounds.height())/2);
+    const auto *geometry=geometryFor(size,dpr,bounds,radius,theme().refraction);
+    const auto *clearPixels=reinterpret_cast<const QRgb *>(source.constBits());
+    // The optics and double precision are unchanged. Reuse geometry, move
+    // row-invariant glow outside the pixel loop, and write contiguous scanlines.
+    for(int y=0;y<size.height();++y) {
+      const qreal py=(y+.5)/dpr;
+      const qreal glow=theme().highlight*26*std::exp(-py/18.0);
+      const auto *blurPixels=reinterpret_cast<const QRgb *>(body.constScanLine(y));
+      auto *output=reinterpret_cast<QRgb *>(out.scanLine(y));
+      for(int x=0;x<size.width();++x) {
+        LensPoint point;
+        if(!geometry)point=lensPoint(x,y,size,dpr,bounds,radius,theme().refraction);
+        else if(geometry->cornerX[x]>=0 && geometry->cornerY[y]>=0) {
+            const int index=geometry->cornerY[y]*geometry->cornerWidth+geometry->cornerX[x];
+            point={geometry->cornerRim[index],geometry->cornerSample[index]};
+        } else if(geometry->qx[x]>geometry->qy[y])point={geometry->rimX[x],y*size.width()+geometry->sampleX[x]};
+        else point={geometry->rimY[y],geometry->sampleY[y]+x};
+        const qreal rim=point.rim;
+        const QRgb clear=clearPixels[point.sample],blur=blurPixels[x];
         const qreal luminance=(.2126*qRed(blur)+.7152*qGreen(blur)+.0722*qBlue(blur))/255.;
         const qreal contrastRisk=light ? qBound(0.0,(.55-luminance)/.55,1.0)
                                       : qBound(0.0,(luminance-.4)/.6,1.0);
         const qreal tint=qBound(0.0,(theme().tint+.23*contrastRisk)*(1-rim*.5),.9),target=light?244:15;
-        const qreal glow=theme().highlight*26*std::exp(-py/18.0);
         auto c=[&](int a,int b){return qBound(0,qRound((a*(1-rim*.7)+b*rim*.7)*(1-tint)+target*tint+glow),255);};
-        out.setPixel(x,y,qRgb(c(qRed(blur),qRed(clear)),c(qGreen(blur),qGreen(clear)),c(qBlue(blur),qBlue(clear))));
+        output[x]=qRgb(c(qRed(blur),qRed(clear)),c(qGreen(blur),qGreen(clear)),c(qBlue(blur),qBlue(clear)));
+      }
     }
     out.setDevicePixelRatio(dpr);return out;
 }

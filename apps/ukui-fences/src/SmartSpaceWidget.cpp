@@ -1,3 +1,6 @@
+#include "LiquidDialog.h"
+#include "PointerEffect.h"
+#include <QPaintEvent>
 #include "../../../shared/async-work/BackgroundTask.h"
 #include <QDBusPendingCall>
 #include "LiquidPopup.h"
@@ -105,7 +108,7 @@ QMessageBox::StandardButton smartMessage(QWidget *parent, const QString &title,
     const QString &text, QMessageBox::Icon icon, QMessageBox::StandardButtons buttons,
     QMessageBox::StandardButton defaultButton)
 {
-    QDialog dialog(parent);
+    LiquidDialog::Dialog dialog(parent);
     dialog.setObjectName("smartSpaceMessage"); dialog.setWindowTitle(title);
     const QColor inherited = parent->palette().color(QPalette::WindowText);
     const bool dark = inherited.lightness() > 128;
@@ -117,12 +120,12 @@ QMessageBox::StandardButton smartMessage(QWidget *parent, const QString &title,
     pal.setColor(QPalette::WindowText,QColor(fg));
     pal.setColor(QPalette::ButtonText,QColor(fg)); dialog.setPalette(pal);
     dialog.setStyleSheet(QStringLiteral(
-        "QDialog#smartSpaceMessage { background: %1; color: %2; }"
-        "QDialog#smartSpaceMessage QLabel { color: %2; background: transparent; font-size: 14px; }"
-        "QDialog#smartSpaceMessage QPushButton { color: %2; background: %3; border: 1px solid #72869a;"
+        "QDialog#smartSpaceMessage { background: transparent; color: %1; }"
+        "QDialog#smartSpaceMessage QLabel { color: %1; background: transparent; font-size: 14px; }"
+        "QDialog#smartSpaceMessage QPushButton { color: %1; background: %2; border: 1px solid #72869a;"
         "border-radius: 7px; padding: 7px 18px; min-width: 58px; }"
         "QDialog#smartSpaceMessage QPushButton:focus, QDialog#smartSpaceMessage QPushButton:hover {"
-        "border: 2px solid #339bdd; padding: 6px 17px; }").arg(bg,fg,button));
+        "border: 2px solid #339bdd; padding: 6px 17px; }").arg(fg,button));
     auto *layout = new QVBoxLayout(&dialog); layout->setContentsMargins(24,22,24,20);
     auto *row = new QHBoxLayout; row->setSpacing(16);
     auto *symbol = new QLabel(&dialog);
@@ -853,30 +856,17 @@ SmartSpaceWidget::SmartSpaceWidget(bool fenceEmbedded, QWidget *parent)
             break;
         }
     }
-    m_glassPointerTimer.setInterval(33);
-    connect(&m_glassPointerTimer, &QTimer::timeout, this, [this] {
-        if (m_themeMode != 3 || m_fenceEmbedded || m_edgeHidden || !isVisible()) {
-            if (m_glassPointerActive) {
-                m_glassPointerActive = false;
-                update();
-            }
-            if (m_themeMode != 3 || m_fenceEmbedded || m_edgeHidden)
-                m_glassPointerTimer.stop();
-            return;
-        }
-
-        const QPoint globalPosition = QCursor::pos();
-        const QPoint localPosition = mapFromGlobal(globalPosition);
-        // SmartSpace is normally a child of the desktop canvas. In that mode
-        // widgetAt() resolves to the canvas window instead of this child, so
-        // use the mapped geometry as the stable hit test for both modes.
-        const bool active = rect().contains(localPosition);
-        if (m_glassPointerActive != active ||
-            (active && m_glassPointerPosition != localPosition)) {
+    m_glassPointerEffect = new PointerEffect(this, [this](const QPoint &pos, bool inside) {
+        const bool active = inside && m_themeMode == 3 && !m_fenceEmbedded && !m_edgeHidden;
+        if (m_glassPointerActive != active || (active && m_glassPointerPosition != pos)) {
+            QRegion damage;
+            if (m_glassPointerActive) damage |= glassPointerDamage(m_glassPointerPosition);
+            if (active) damage |= glassPointerDamage(pos);
             m_glassPointerActive = active;
-            m_glassPointerPosition = localPosition;
-            update();
+            m_glassPointerPosition = pos;
+            if (!damage.isEmpty()) update(damage);
         }
+        return false;
     });
     applyTheme();
     if (m_themeMode == 3)
@@ -967,9 +957,9 @@ SmartSpaceWidget::SmartSpaceWidget(bool fenceEmbedded, QWidget *parent)
 
 SmartSpaceWidget::~SmartSpaceWidget()
 {
+    if (m_glassPointerEffect) m_glassPointerEffect->stop();
     delete m_edgeTransition.data();
     m_geometrySaveTimer.stop();
-    m_glassPointerTimer.stop();
     saveSettings();
     if (m_indexer && m_indexer->state() != QProcess::NotRunning) {
         if ((m_idleFullIndex || m_ocrBackfill) && m_idleUsesProcessGroup &&
@@ -1418,12 +1408,8 @@ void SmartSpaceWidget::applyTheme()
         const int inset = glassMode ? 12 : 4;
         layout()->setContentsMargins(inset, inset, inset, inset);
     }
-    if (glassMode && !m_fenceEmbedded && !m_edgeHidden)
-        m_glassPointerTimer.start();
-    else {
-        m_glassPointerTimer.stop();
-        m_glassPointerActive = false;
-    }
+    if (m_glassPointerEffect)
+        m_glassPointerEffect->setEnabled(glassMode && !m_fenceEmbedded && !m_edgeHidden);
     if (glassMode) {
         QPalette transparentPalette = palette();
         transparentPalette.setColor(QPalette::Window, Qt::transparent);
@@ -2532,6 +2518,17 @@ void SmartSpaceWidget::hideToNearestEdge()
         return;
     QElapsedTimer preparation;
     preparation.start();
+    // Login can retract before the canvas is mapped or pending layout events
+    // are delivered. Resolve both layout levels before reading the rail anchor;
+    // otherwise the first entry uses the hide button's construction geometry.
+    ensurePolished();
+    if (layout())
+        layout()->activate();
+    if (m_actionRail && m_actionRail->layout())
+        m_actionRail->layout()->activate();
+    // The initial reparent into a pinned window may also change its bounds.
+    // Apply the same snapping as revealFromEdge before capturing the anchor.
+    move(boundedPosition(pos()));
     const QPoint railAnchorGlobal = m_closeButton
         ? m_closeButton->mapToGlobal(m_closeButton->rect().center())
         : mapToGlobal(rect().center());
@@ -2581,7 +2578,7 @@ void SmartSpaceWidget::hideToNearestEdge()
 
     m_edgeHidden = true;
     m_glassPointerActive = false;
-    m_glassPointerTimer.stop();
+    if (m_glassPointerEffect) m_glassPointerEffect->setEnabled(false);
     m_actionRail->hide();
     m_contentContainer->hide();
     m_edgeRevealButton->show();
@@ -2653,8 +2650,8 @@ void SmartSpaceWidget::revealFromEdge()
     updateResponsiveLayout();
     if (layout()) layout()->activate();
     refreshGlassBackdrop();
-    if (m_themeMode == 3 && !m_fenceEmbedded)
-        m_glassPointerTimer.start();
+    if (m_glassPointerEffect)
+        m_glassPointerEffect->setEnabled(m_themeMode == 3 && !m_fenceEmbedded);
     m_expandedSize = size();
     m_expandedPosition = pos();
     updateRoundedMask();
@@ -5055,7 +5052,7 @@ void SmartSpaceWidget::showSettingsDialog()
         canvas->showSettingsPage("smart");
         return;
     }
-    QDialog dialog(this);
+    LiquidDialog::Dialog dialog(this);
     dialog.setWindowTitle(QStringLiteral("智能空间设置"));
     auto *layout = new QVBoxLayout(&dialog);
     layout->addWidget(createSettingsPage(&dialog));
@@ -5411,7 +5408,7 @@ QWidget *SmartSpaceWidget::createSettingsPage(QWidget *parent)
     knowledgeLayout->addLayout(knowledgePathRow);
     connect(browseKnowledge, &QPushButton::clicked, &dialog,
             [&dialog, knowledgePathEdit] {
-        const QString path = QFileDialog::getExistingDirectory(
+        const QString path = LiquidDialog::getExistingDirectory(
             dialog.window(), QStringLiteral("选择知识库保存位置"),
             knowledgePathEdit->text());
         if (!path.isEmpty())
@@ -5509,7 +5506,7 @@ QWidget *SmartSpaceWidget::createSettingsPage(QWidget *parent)
             skillStatus->setText(QStringLiteral("Skill 目录不存在，无法导出。"));
             return;
         }
-        const QString destination = QFileDialog::getExistingDirectory(
+        const QString destination = LiquidDialog::getExistingDirectory(
             dialog.window(), QStringLiteral("选择 Skill 导出目录"));
         if (destination.isEmpty())
             return;
@@ -5578,7 +5575,7 @@ QWidget *SmartSpaceWidget::createSettingsPage(QWidget *parent)
     }
     layout->addWidget(buttons);
     connect(addRoot, &QPushButton::clicked, &dialog, [&dialog, rootList] {
-        const QString path = QFileDialog::getExistingDirectory(
+        const QString path = LiquidDialog::getExistingDirectory(
             dialog.window(), QStringLiteral("选择索引目录"));
         if (!path.isEmpty()) {
             const QList<QListWidgetItem *> found = rootList->findItems(path, Qt::MatchExactly);
@@ -5591,7 +5588,7 @@ QWidget *SmartSpaceWidget::createSettingsPage(QWidget *parent)
     });
     connect(addExclude, &QPushButton::clicked, &dialog,
             [&dialog, rootList, excludeList] {
-        const QString path = QFileDialog::getExistingDirectory(
+        const QString path = LiquidDialog::getExistingDirectory(
             dialog.window(), QStringLiteral("选择要排除的文件夹"));
         if (path.isEmpty())
             return;
@@ -5662,7 +5659,7 @@ QWidget *SmartSpaceWidget::createSettingsPage(QWidget *parent)
                 indexFormatList->item(row)->checkState());
     });
     connect(browseProvider, &QPushButton::clicked, &dialog, [&dialog, providerEdit] {
-        const QString path = QFileDialog::getOpenFileName(
+        const QString path = LiquidDialog::getOpenFileName(
             dialog.window(), QStringLiteral("选择 Provider 配置"),
             QFileInfo(providerEdit->text()).absolutePath(), QStringLiteral("JSON (*.json)"));
         if (!path.isEmpty()) providerEdit->setText(path);
@@ -5703,7 +5700,7 @@ QWidget *SmartSpaceWidget::createSettingsPage(QWidget *parent)
   ]
 })");
         }
-        QDialog editor(&dialog);
+        LiquidDialog::Dialog editor(&dialog);
         editor.setWindowTitle(QStringLiteral("Provider JSON 配置"));
         editor.resize(720, 540);
         auto *editorLayout = new QVBoxLayout(&editor);
@@ -5896,10 +5893,34 @@ void SmartSpaceWidget::setEditMode(bool edit)
     update();
 }
 
+QRegion SmartSpaceWidget::glassPointerDamage(const QPoint &position) const
+{
+    const QRectF material = QRectF(rect()).adjusted(5,5,-5,-5);
+    const QPointF pointer(position);
+    const QPointF candidates[] = {
+        QPointF(qBound(material.left()+19,pointer.x(),material.right()-19),material.top()),
+        QPointF(qBound(material.left()+19,pointer.x(),material.right()-19),material.bottom()),
+        QPointF(material.left(),qBound(material.top()+19,pointer.y(),material.bottom()-19)),
+        QPointF(material.right(),qBound(material.top()+19,pointer.y(),material.bottom()-19))
+    };
+    qreal distance = std::numeric_limits<qreal>::max();
+    QPointF nearest;
+    for (const auto &candidate : candidates) {
+        const auto delta = pointer-candidate;
+        const qreal d = QPointF::dotProduct(delta,delta);
+        if (d < distance) {distance=d; nearest=candidate;}
+    }
+    if (distance >= 52.0*52.0) return {};
+    // The glow has radius 54; the curved streak extends 74 in either direction.
+    QRegion damage(QRectF(nearest.x()-77,nearest.y()-77,154,154).toAlignedRect());
+    const QRegion band(rect().adjusted(3,3,-3,-3));
+    return damage & (band-QRegion(rect().adjusted(21,21,-21,-21)));
+}
+
 void SmartSpaceWidget::paintEvent(QPaintEvent *event)
 {
-    Q_UNUSED(event)
     QPainter painter(this);
+    painter.setClipRegion(event->region());
     painter.setRenderHint(QPainter::Antialiasing);
     if (m_edgeHidden) {
         if (isWindow()) {
@@ -5920,7 +5941,7 @@ void SmartSpaceWidget::paintEvent(QPaintEvent *event)
         QPainterPath path;
         path.addRoundedRect(materialRect, 19, 19);
         painter.save();
-        painter.setClipPath(path);
+        painter.setClipPath(path, Qt::IntersectClip);
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         if (!m_glassBackdrop.isNull())
             painter.drawImage(rect(), m_glassBackdrop);
@@ -5984,7 +6005,7 @@ void SmartSpaceWidget::paintEvent(QPaintEvent *event)
                 edgeGlow.setColorAt(0.32, QColor(192, 232, 255, 48));
                 edgeGlow.setColorAt(1.0, QColor(210, 239, 255, 0));
                 painter.save();
-                painter.setClipPath(causticBand);
+                painter.setClipPath(causticBand, Qt::IntersectClip);
                 painter.fillPath(causticBand, edgeGlow);
 
                 QPointF start;

@@ -5,6 +5,7 @@ class MprisPlayer;
 class QSlider;
 class MusicDesklet final : public LiquidDesklet {
     Q_OBJECT
+    friend struct PointerEffectTestAccess;
 public:
     explicit MusicDesklet(DesktopCanvas *canvas);
     MprisPlayer *player() const { return m_player; }
@@ -20,6 +21,8 @@ private:
     void syncNotesAnimation();
     QRect notesArea() const;
     void paintFloatingNotes(QPainter &p);
+    QRegion notesDamage(qreal seconds) const;
+    qreal m_notesFrameSeconds=0;
     QTimer m_notesTimer;
     QElapsedTimer m_notesClock;
     MprisPlayer *m_player = nullptr;

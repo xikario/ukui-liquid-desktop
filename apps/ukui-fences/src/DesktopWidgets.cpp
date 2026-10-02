@@ -175,9 +175,9 @@ void LiquidDesklet::rebuildMaterial() {
         update();
     });
 }
-void LiquidDesklet::paintEvent(QPaintEvent *) {
+void LiquidDesklet::paintEvent(QPaintEvent *event) {
     if(!m_materialPending && (m_material.isNull() || m_material.devicePixelRatio()!=devicePixelRatioF()))rebuildMaterial();
-    QPainter p(this);p.setRenderHint(QPainter::Antialiasing);
+    QPainter p(this);p.setClipRegion(event->region());p.setRenderHint(QPainter::Antialiasing);
     if(m_material.isNull()){p.setPen(Qt::NoPen);p.setBrush(QColor(28,43,59,240));p.drawRoundedRect(QRectF(rect()),16,16);}
     else p.drawImage(QRectF(rect()),m_material,QRectF(m_material.rect()));
     paintContent(p);

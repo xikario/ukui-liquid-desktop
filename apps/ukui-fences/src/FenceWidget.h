@@ -1,4 +1,5 @@
 #pragma once
+class PointerEffect;
 #include "FileClipboard.h"
 
 #include <QWidget>
@@ -23,6 +24,7 @@ class QPropertyAnimation;
 class FenceWidget : public QWidget
 {
     Q_OBJECT
+    friend struct PointerEffectTestAccess;
     friend class DesktopCanvas;
 public:
     explicit FenceWidget(const QString &title,
@@ -38,6 +40,8 @@ public:
     bool    editMode()   const { return m_editMode; }
     bool    locked()     const { return m_locked; }
     QString titleIconPath() const { return m_titleIconPath; }
+    QString titleIconThemeName() const { return m_titleIconThemeName; }
+    bool hasTitleIcon() const { return !m_titleIconPath.isEmpty() || !m_titleIconThemeName.isEmpty(); }
     const QList<DesktopIcon*> &icons() const { return m_icons; }
 
     // 属性设置
@@ -56,6 +60,8 @@ public:
     void setIconFontBold(bool bold);
     void setIconFontItalic(bool italic);
     void setTitleIconPath(const QString &path);
+    void setTitleIconThemeName(const QString &name);
+    bool confirmClearTitleIcon(QWidget *parent = nullptr);
     void setTitleTextColor(const QColor &color);
     void setEmbeddedWidget(QWidget *widget);
     bool hasEmbeddedWidget() const { return m_embeddedWidget != nullptr; }
@@ -73,6 +79,8 @@ public:
 signals:
     void geometryChanged();
     void titleChanged(const QString &newTitle);
+    void titleIconChanged();
+    void fenceColorChanged(const QColor &color);
     void fileDropped(const QString &filePath);
     void deleteRequested(FenceWidget *self);
     void interactionStarted(FenceWidget *self);
@@ -85,8 +93,6 @@ signals:
     void fileCreated(const QString &path);
 
 protected:
-    void enterEvent(QEvent *) override;
-    void leaveEvent(QEvent *) override;
     void paintEvent(QPaintEvent *)            override;
     void mousePressEvent(QMouseEvent *)       override;
     void mouseMoveEvent(QMouseEvent *)        override;
@@ -170,15 +176,15 @@ private:
     int      m_scrollOffset = 0;
     int      m_contentHeight = 0;
     QString  m_titleIconPath;
+    QString  m_titleIconThemeName;
     QIcon    m_titleIcon;
     bool     m_liquidGlassEnabled = false;
     QImage   m_glassImage;
     QRect    m_glassGeometry;
     QPainterPath m_glassShape;
-    QTimer  *m_glassHoverTimer = nullptr;
+    PointerEffect *m_glassPointerEffect = nullptr;
     QPointF  m_glassPointer {-1000, -1000};
     qreal    m_glassHover = 0.0;
-    bool     m_glassPointerPresent = false;
     QWidget *m_iconViewport = nullptr;
     QWidget *m_embeddedWidget = nullptr;
 

@@ -55,25 +55,50 @@ MusicDesklet::MusicDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"music","
     connect(m_volume,&QSlider::valueChanged,this,[this](int v){if(!m_updating && !m_volume->isSliderDown())m_player->setVolume(v/100.0);});
     connect(m_player,&MprisPlayer::changed,this,&MusicDesklet::updateControls);
     m_notesTimer.setInterval(33);
-    connect(&m_notesTimer,&QTimer::timeout,this,[this]{update(notesArea());});
+    connect(&m_notesTimer,&QTimer::timeout,this,[this]{
+        const QRegion previous=notesDamage(m_notesFrameSeconds);
+        m_notesFrameSeconds=m_notesClock.elapsed()/1000.;
+        update(previous | notesDamage(m_notesFrameSeconds));
+    });
     arrangeControls();updateControls();
 }
 QRect MusicDesklet::notesArea() const {return QRect(6,4,width()-12,qMax(1,height()-54));}
 void MusicDesklet::syncNotesAnimation() {
     const bool animate=isVisible() && m_player->connected() && m_player->playing();
     if (animate && !m_notesTimer.isActive()) {
+        m_notesFrameSeconds=0;
         m_notesClock.start();
         m_notesTimer.start();
-        update(notesArea());
+        update(notesDamage(m_notesFrameSeconds));
     } else if (!animate && m_notesTimer.isActive()) {
         m_notesTimer.stop();
         m_notesClock.invalidate();
-        update(notesArea());
+        update(notesDamage(m_notesFrameSeconds));
     }
+}
+QRegion MusicDesklet::notesDamage(qreal seconds) const {
+    const QRect area=notesArea();
+    QRegion damage;
+    for(int i=0;i<5;++i) {
+        const qreal phase=std::fmod(seconds/(4.2+.23*i)+i/5.,1.);
+        const qreal x=area.left()+18+(area.width()-36)*(i+.5)/5.+std::sin(phase*6.283185+i*1.7)*9;
+        const qreal y=area.bottom()-10-phase*(area.height()-20);
+        // Includes the paired note, rotation, dark shadow and fractional-DPI AA.
+        damage |= QRectF(x-16,y-16,32,32).toAlignedRect();
+    }
+    // Transparent child buttons are composited over the notes. Repaint their
+    // complete AA silhouette when touched, so a fractional-DPI dirty boundary
+    // cannot accumulate an extra row of their translucent rounded background.
+    for (auto *control : {m_cover,m_previous,m_play,m_next,m_open})
+        if (control && control->isVisible()) {
+            const QRect footprint=control->geometry().adjusted(-2,-2,2,2);
+            if (damage.intersects(footprint)) damage |= footprint;
+        }
+    return damage.intersected(area);
 }
 void MusicDesklet::paintFloatingNotes(QPainter &p) {
     if (!m_notesTimer.isActive()) return;
-    const qreal seconds=m_notesClock.elapsed()/1000.;
+    const qreal seconds=m_notesFrameSeconds;
     const QColor colors[]={QColor("#a2f5df"),QColor("#fff0cc"),QColor("#e6c4ff")};
     p.save();p.setClipRect(notesArea(),Qt::IntersectClip);
     const QRect area=notesArea();
@@ -125,6 +150,9 @@ void MusicDesklet::updateControls(){
 void MusicDesklet::paintContent(QPainter &p){
     if(!m_player)return;
     const QRectF art(16,22,80,80);QPainterPath clip;clip.addRoundedRect(art,10,10);
+    // The widget backing-store clip still limits writes. Keep the cover's
+    // original path rasterization at fractional DPI rather than intersecting
+    // its AA mask with the disjoint note damage rectangles.
     p.save();p.setClipPath(clip);p.fillRect(art,QColor(195,234,228,24));
     const QImage cover=m_player->cover();
     if(!cover.isNull()){

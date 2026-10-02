@@ -36,6 +36,9 @@ static int runAppearanceTest(const QString &root)
     fixture.close();
     DesktopCanvas canvas;
     canvas.showAndActivate();settle(300);
+    auto loadedFences=canvas.findChildren<FenceWidget *>(QString(),Qt::FindDirectChildrenOnly);
+    check(!loadedFences.isEmpty() && loadedFences.first()->titleIconPath().isEmpty(),
+          "loading a saved cleared title icon does not restore a factory icon");
     const auto background = canvas.wallpaperBackdrop(QRect(canvas.mapToGlobal(QPoint(40,40)),QSize(20,20)),1);
     check(!background.isNull() && background.pixelColor(10,10).red()>200,
           "custom wallpaper reload uses content-aware decoder too");
@@ -62,8 +65,9 @@ static int runAppearanceTest(const QString &root)
               "old appearance and help submenus are merged");
         auto *fileManager=menu->findChild<QAction *>("desktopFileManagerAction");
         const int managerIndex=menu->actions().indexOf(fileManager);
-        check(managerIndex>0 && menu->actions().at(managerIndex-1)->text()=="刷新桌面",
-              "file manager sits directly below refresh desktop");
+        auto *terminal=menu->findChild<QAction *>("desktopTerminalAction");
+        check(managerIndex>1 && menu->actions().at(managerIndex-1)==terminal && menu->actions().at(managerIndex-2)->text()=="刷新桌面",
+              "desktop terminal sits between refresh and file manager");
         auto *widgets = menu->findChild<QMenu *>("desktopWidgetsMenu");
         check(widgets && widgets->actions().size()==6, "six widget visibility toggles available");
         if (widgets) {
@@ -98,5 +102,19 @@ static int runAppearanceTest(const QString &root)
     check(sample!=nullptr,"wallpaper sampling is reachable inside settings");
     if(sample){const QColor before=canvas.fontColor();sample->click();check(canvas.fontColor()==before,"wallpaper tint preserves label color");
         canvas.setFontColor(QColor("#273344"));sample->click();check(canvas.fontColor()==QColor("#273344"),"wallpaper tint preserves explicit dark labels");}
+    if(!loadedFences.isEmpty()) {
+        auto *fence=loadedFences.first();fence->setTitleIconPath(imagePath);
+        {
+            DesktopCanvas restored;
+            auto fences=restored.findChildren<FenceWidget *>(QString(),Qt::FindDirectChildrenOnly);
+            check(!fences.isEmpty() && fences.first()->titleIconPath()==imagePath,"saved custom title icon restores its exact path");
+        }
+        fence->setTitleIconPath(QString());
+        {
+            DesktopCanvas restored;
+            auto fences=restored.findChildren<FenceWidget *>(QString(),Qt::FindDirectChildrenOnly);
+            check(!fences.isEmpty() && fences.first()->titleIconPath().isEmpty(),"cleared title icon survives save and reload");
+        }
+    }
     return failures ? 1 : 0;
 }

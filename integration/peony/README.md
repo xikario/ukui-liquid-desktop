@@ -21,7 +21,7 @@
 
 ## 安装与停用
 
-需要 X11 会话、Python 3、Python Xlib（发行版包通常为 python3-xlib）及可用的用户 systemd。在**仓库根目录**执行：
+需要 X11 会话、Python 3、libX11 运行库及可用的用户 systemd；脚本通过标准库 ctypes 调用 libX11，不依赖 python3-xlib。在**仓库根目录**执行：
 
 ```sh
 python3 integration/peony/install-user.py

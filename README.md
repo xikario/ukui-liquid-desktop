@@ -2,9 +2,9 @@
 
 面向银河麒麟 / UKUI X11 的 Qt 5 液态桌面组件集合：开始菜单、桌面分区与六类小组件、系统任务栏主题。各应用可以分别构建和启用，构建源码不会自动改变当前桌面。
 
-**当前版本：v0.5.1 · 系统监视诊断与多播放器接入（2026-10-01）**。Fences 及其关于页版本为 0.5.1；开始菜单和面板保留各自的组件版本号。
+**当前版本：v0.6.0 · 公共液态弹窗与桌面资源优化（2026-10-03）**。Fences 及其关于页版本为 0.6.0；开始菜单和面板保留各自的组件版本号。
 
-[下载与版本说明](https://github.com/xikario/ukui-liquid-desktop/releases/tag/v0.5.1) · [更新日志](CHANGELOG.md) · [v0.5.1 详细说明](docs/versions/v0.5.1.md)
+[下载与版本说明](https://github.com/xikario/ukui-liquid-desktop/releases/tag/v0.6.0) · [更新日志](CHANGELOG.md) · [v0.6.0 详细说明](docs/versions/v0.6.0.md)
 
 ## 选择要使用的产品
 
