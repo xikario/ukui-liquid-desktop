@@ -1,6 +1,7 @@
 #include "PointerEffect.h"
 #include <QPaintEvent>
 #include <QScreen>
+#include <ctime>
 
 class PointerPaintProbe : public QObject {
 public:
@@ -16,6 +17,85 @@ public:
     void reset(){pixels=0;paints=0;}
 };
 struct PointerEffectTestAccess {
+    // Opt-in measurement, kept out of CTest: real production widgets and pointer
+    // events under a private X server/session bus. Telemetry sampling is stopped
+    // so its work does not get attributed to the monitor's edge reflection.
+    static int benchmark(const QString &root, const QString &output) {
+        QSettings settings;
+        for (const char *key : {"smartSpace/autoStart", "systemMonitor/autoStart",
+                 "desklets/clock/autoStart", "desklets/activity/autoStart",
+                 "desklets/music/autoStart", "desklets/calendar/autoStart"})
+            settings.setValue(key, false);
+        settings.setValue("smartSpace/themeMode", 3);
+        settings.setValue("smartSpace/defaultHidden", false);
+        settings.setValue("smartSpace/indexMode", 0);
+        settings.setValue("smartSpace/alwaysOnTop", false);
+        settings.sync();
+        const QString path = root + "/pointer-wall.png";
+        wallpaper(QSize(1440, 900), 1).save(path);
+        QDir().mkpath(root + "/config/kyfences");
+        QFile layout(root + "/config/kyfences/layout.json");
+        if (!layout.open(QIODevice::WriteOnly)) return 2;
+        layout.write(QJsonDocument(QJsonObject{{"wallpaperPath", path},
+            {"wallpaperMode", 2}, {"fences", QJsonArray{}}}).toJson());
+        layout.close();
+        DesktopCanvas canvas;
+        canvas.showAndActivate(); settle(600);
+        canvas.setClockWidgetVisible(false); canvas.setActivityWidgetVisible(false);
+        canvas.setMusicWidgetVisible(false); canvas.setCalendarWidgetVisible(false);
+        canvas.showSystemMonitorWidget();
+        auto *monitor = canvas.findChild<SystemMonitor *>();
+        if (!monitor) return 2;
+        monitor->setSkin(SystemMonitor::Skin::Liquid); monitor->setCompact(true);
+        monitor->move(80, 80); settle(6000);
+        monitor->m_timer.stop(); monitor->m_diagnosisTimer.stop();
+        QJsonArray measurements;
+        auto measure = [&](QWidget *widget, const QString &name, const QString &phase,
+                           int duration, bool moving) {
+            movePointer(widget, QPoint(15, 100)); settle(250);
+            PointerPaintProbe probe;
+            widget->installEventFilter(&probe);
+            QTimer motion;
+            motion.setTimerType(Qt::PreciseTimer); motion.setInterval(8);
+            int moves = 0;
+            QObject::connect(&motion, &QTimer::timeout, widget, [&] {
+                const int span = qMin(widget->height() - 130, 100);
+                const int offset = (moves++ * 3) % (span * 2);
+                movePointer(widget, QPoint(15, 100 + (offset < span ? offset : span * 2 - offset)));
+            });
+            QElapsedTimer wall; wall.start();
+            const std::clock_t begin = std::clock();
+            if (moving) motion.start();
+            settle(duration); motion.stop();
+            const double cpu = double(std::clock() - begin) / CLOCKS_PER_SEC;
+            const double seconds = wall.nsecsElapsed() / 1e9;
+            widget->removeEventFilter(&probe);
+            measurements.append(QJsonObject{{"widget", name}, {"phase", phase},
+                {"wallSeconds", seconds}, {"cpuSeconds", cpu},
+                {"cpuPercentOneCore", cpu / seconds * 100}, {"moves", moves},
+                {"paints", probe.paints}, {"logicalPixels", double(probe.pixels)},
+                {"width", widget->width()}, {"height", widget->height()},
+                {"dpr", widget->devicePixelRatioF()}});
+            settle(150);
+            check(settled(widget), "benchmark pointer timer settles after motion");
+            movePointer(widget, QPoint(15, 210)); settle(100);
+            widget->grab().save(output + "-" + name + ".png");
+        };
+        measure(monitor, "monitor", "still", 2000, false);
+        measure(monitor, "monitor", "edge-motion", 8000, true);
+        monitor->hide();
+        canvas.showSmartSpaceWidget(); canvas.moveSmartSpace(80, 80);
+        canvas.resizeSmartSpace(760, 450); settle(1000);
+        auto *smart = canvas.findChild<SmartSpaceWidget *>();
+        if (!smart || smart->m_indexer->state() != QProcess::NotRunning) return 2;
+        measure(smart, "smart-space", "still", 2000, false);
+        measure(smart, "smart-space", "edge-motion", 8000, true);
+        QFile result(output);
+        if (!result.open(QIODevice::WriteOnly)) return 2;
+        result.write(QJsonDocument(QJsonObject{{"measurements", measurements},
+            {"scope", "Private Xvfb raster rendering; synthetic wallpaper; no indexing; monitor telemetry stopped; 125 Hz pointer input"}}).toJson());
+        return failures ? 1 : 0;
+    }
     static bool settled(QWidget *widget) {
         // PointerEffect deliberately has no metaobject; locate its timer through QObject.
         auto *object=widget->findChild<QObject *>("pointerEffect");
@@ -101,9 +181,30 @@ struct PointerEffectTestAccess {
         for(QPoint pos:{QPoint(15,160),QPoint(15,300),QPoint(20,20),QPoint(300,15),QPoint(745,210),QPoint(400,435)}) {
             movePointer(smart,pos);settle(70);
             check(smart->m_glassPointerActive && smart->m_glassPointerPosition==pos
-                  && !smart->glassPointerDamage(pos).isEmpty(),"Smart Space retains active edge caustic at latest pointer");
+                  && !smart->glassPointerDamage(pos).isEmpty(),"Smart Space retains active rim reflection at latest pointer");
             compare(smart,canvas,"smart-"+QString::number(pos.x())+"-"+QString::number(pos.y()));
         }
+        const qint64 materialKey=smart->m_glassMaterial.cacheKey();
+        probe.reset();
+        for(int i=0;i<30;++i)movePointer(smart,QPoint(15,140+i*3));
+        settle(100);
+        check(probe.paints>0 && probe.paints<=3 && probe.pixels<qint64(smart->width())*smart->height()/4,
+              "Smart Space coalesces edge motion and repaints only old/new rim footprints");
+        check(!smart->m_glassMaterial.isNull() && smart->m_glassMaterial.cacheKey()==materialKey,
+              "Smart Space pointer motion reuses the composed stationary liquid material");
+        compare(smart,canvas,"smart-cached-motion");
+        canvas.resizeSmartSpace(770,460);settle(200);
+        check(smart->m_glassMaterialSize==smart->size() && smart->m_glassMaterial.cacheKey()!=materialKey,
+              "resizing Smart Space rebuilds the liquid material at the new geometry");
+        const qint64 resizedKey=smart->m_glassMaterial.cacheKey();
+        canvas.wallpaperChanged();settle(100);
+        check(!smart->m_glassMaterial.isNull() && smart->m_glassMaterial.cacheKey()!=resizedKey,
+              "wallpaper changes invalidate the composed Smart Space material");
+        compare(smart,canvas,"smart-refreshed-material");
+        movePointer(smart,QPoint(420,350));settle(100);
+        compare(smart,canvas,"smart-leave-rim");
+        probe.reset();settle(150);
+        check(probe.paints==0,"settled Smart Space edge reflection schedules no repaint");
         check(settled(smart),"Smart Space pointer frames stop when still");
         smart->hide();settle(80);check(settled(smart),"hidden Smart Space stops pointer frames");smart->removeEventFilter(&probe);
         FenceWidget fence("动态边缘",QRect(100,100,600,350),&canvas);fence.setLiquidGlassEnabled(true);fence.show();settle(300);

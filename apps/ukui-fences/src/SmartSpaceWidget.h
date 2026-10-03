@@ -287,12 +287,15 @@ private:
     QPoint m_expandedPosition;
     QSize m_expandedSize {920, 520};
     QImage m_glassBackdrop;
+    QImage m_glassMaterial;
+    QSize m_glassMaterialSize;
     QRect m_glassBackdropGeometry;
     qreal m_glassBackdropDpr = 0;
     QPointer<QWidget> m_edgeTransition;
     QTimer m_geometrySaveTimer;
     QTimer m_glassBackdropRefreshTimer;
     QRegion glassPointerDamage(const QPoint &position) const;
+    const QImage &glassMaterial();
     PointerEffect *m_glassPointerEffect = nullptr;
     QPoint m_glassPointerPosition;
     bool m_glassPointerActive = false;
@@ -334,6 +337,8 @@ private:
     QSplitter *m_splitter = nullptr;
     QWidget *m_folderPanel = nullptr;
     QWidget *m_filePanel = nullptr;
+    QStackedWidget *m_resultStack = nullptr;
+    QWidget *m_resultPage = nullptr;
     QWidget *m_statusContainer = nullptr;
     QProgressBar *m_indexProgress = nullptr;
     QByteArray m_indexOutputBuffer;

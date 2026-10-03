@@ -141,6 +141,9 @@ int main(int argc, char **argv)
         QTimer::singleShot(5000,&app,[&]{app.exit(1);});
         return app.exec();
     }
+    if (app.arguments().contains("--pointer-benchmark"))
+        return PointerEffectTestAccess::benchmark(isolated.path(),
+            app.arguments().value(app.arguments().indexOf("--pointer-benchmark") + 1));
     if (app.arguments().contains("--pointer-effect-only"))
         return PointerEffectTestAccess::run(isolated.path());
     if (app.arguments().contains("--menu-shortcut-only"))
