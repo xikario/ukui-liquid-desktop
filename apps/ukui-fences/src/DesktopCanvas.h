@@ -41,6 +41,7 @@ class QResizeEvent;
 class QWheelEvent;
 class QScreen;
 class QProcess;
+class VideoWallpaperTrial;
 
 class DesktopCanvas : public QWidget
 {
@@ -89,6 +90,7 @@ public:
     QImage wallpaperBackdrop(const QRect &globalArea, qreal dpr) const;
 
 signals:
+    void videoWallpaperTrialChanged();
     void desktopVisibilityChanged();
     void initialWallpaperReady();
     void wallpaperChanged();
@@ -140,6 +142,11 @@ public slots:
     Q_SCRIPTABLE QString desktopWidgetsStatus() const;
     Q_SCRIPTABLE QString smartSpaceAnimationStatus() const;
     Q_SCRIPTABLE void refreshAll();
+    Q_SCRIPTABLE bool setVideoWallpaper(const QString &path);
+    Q_SCRIPTABLE void disableVideoWallpaper();
+    Q_SCRIPTABLE bool startVideoWallpaperTrial(const QString &path);
+    Q_SCRIPTABLE void stopVideoWallpaperTrial();
+    Q_SCRIPTABLE QString videoWallpaperTrialStatus() const;
     Q_SCRIPTABLE void activateOnSessionStartup();
     Q_SCRIPTABLE void quitApp();
     Q_SCRIPTABLE void showUnifiedSettings();
@@ -164,6 +171,9 @@ private slots:
     void refreshDesktopIcons();
 
 private:
+    VideoWallpaperTrial *m_videoTrial=nullptr;
+    QString m_pendingVideoWallpaper;
+    void videoWallpaperStateChanged();
     QPointer<FencesSettingsWindow> m_settingsWindow;
     QWidget *createFontSettingsPage(QWidget *parent);
     QWidget *createSyncSettingsPage(QWidget *parent);

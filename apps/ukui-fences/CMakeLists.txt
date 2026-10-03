@@ -42,6 +42,7 @@ endif()
 add_executable(ukui-fences
     src/main.cpp
     src/DesktopCanvas.cpp
+    src/VideoWallpaperTrial.cpp
     src/FencesSettingsWindow.cpp
     src/LiquidWheelPicker.cpp
     src/SettingsComboPopup.cpp
@@ -70,6 +71,7 @@ add_executable(ukui-fences
 )
 
 target_compile_definitions(ukui-fences PRIVATE
+    UKUI_FENCES_VIDEO_TRIAL_PATH="${CMAKE_SOURCE_DIR}/scripts/video_wallpaper_trial.py"
     UKUI_FENCES_CREDENTIAL_STORE_PATH="${CMAKE_SOURCE_DIR}/scripts/credential_store.py"
     UKUI_FENCES_CALENDAR_READER_PATH="${CMAKE_SOURCE_DIR}/scripts/calendar_snapshot.py"
     UKUI_FENCES_SMART_INDEXER_PATH="${CMAKE_SOURCE_DIR}/scripts/smart_space_indexer.py"
@@ -101,6 +103,8 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             TIMEOUT 180)
         add_test(NAME calendar_holiday_sync COMMAND ${Python3_EXECUTABLE} -m unittest -v tests/test_holiday_sync.py)
+        add_test(NAME video_wallpaper_geometry COMMAND ${Python3_EXECUTABLE} -m unittest -v tests/test_video_wallpaper_trial.py)
+        set_tests_properties(video_wallpaper_geometry PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 10)
         set_tests_properties(calendar_holiday_sync PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 30)
         add_test(NAME smart_space_knowledge
             COMMAND ${Python3_EXECUTABLE} -m unittest -v
@@ -119,6 +123,9 @@ if(BUILD_TESTING)
         target_include_directories(fence-glass-test PRIVATE src ${UKUI_FENCES_X11_INCLUDE_DIR} ${UKUI_FENCES_GL_INCLUDE_DIR})
         target_compile_definitions(fence-glass-test PRIVATE $<TARGET_PROPERTY:ukui-fences,COMPILE_DEFINITIONS>)
         target_link_libraries(fence-glass-test PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets Qt5::DBus Qt5::Network ZLIB::ZLIB ${UKUI_FENCES_X11_LIBRARY})
+        add_test(NAME desktop_video_trial COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1920x1200x24"
+            ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --video-trial-only)
+        set_tests_properties(desktop_video_trial PROPERTIES TIMEOUT 25 ENVIRONMENT "QT_SCALE_FACTOR=1.5;QT_FONT_DPI=96")
         foreach(GLASS_BACKEND gpu cpu)
             add_test(NAME fence_glass_${GLASS_BACKEND}
                 COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
@@ -278,6 +285,7 @@ endif()
 
 install(TARGETS ukui-fences RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS packaging/ukui-fences-launcher DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(PROGRAMS scripts/video_wallpaper_trial.py DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME ukui-fences-video-trial)
 install(PROGRAMS scripts/smart_space_indexer.py
                  scripts/credential_store.py
                  scripts/smart_space_knowledge.py
