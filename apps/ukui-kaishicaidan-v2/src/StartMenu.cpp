@@ -3935,7 +3935,7 @@ void StartMenu::showAppContextMenu(const AppEntry &app, const QPoint &globalPos)
         QString dir = QFileInfo(app.desktopPath).absolutePath();
         QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
     } else if (chosen == actModifyIcon) {
-        QString newIconPath = LiquidDialog::getOpenFileName(this,
+        QString newIconPath = LiquidDialog::getOpenImageName(this,
             QString::fromUtf8("选择新图标"),
             QDir::homePath(),
             QString::fromUtf8("Images (*.png *.jpg *.jpeg *.svg *.xpm);;All Files (*)"));

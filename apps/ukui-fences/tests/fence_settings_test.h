@@ -172,13 +172,11 @@ static int runFenceSettingsTest(const QString &root)
             check(!text.boundsFor(index.data().toString(),row).isEmpty(),
                   "every built-in icon paints its complete label");
         }
-        const auto image=dialog->grab().toImage();
-        int white=0,total=0;
-        for(int y=4;y<image.height();y+=4)for(int x=4;x<image.width();x+=4) {
-            const auto color=image.pixelColor(x,y);
-            white+=color.red()>235 && color.green()>235 && color.blue()>235;++total;
-        }
-        check(white<total/10,"switching icon tabs does not expose a large opaque white page");
+        const auto image=view->viewport()->grab().toImage();
+        check(image.pixelColor(image.width()-14,image.height()-14)==QColor(Qt::white),
+              "built-in icon canvas is white for transparent icon contrast");
+        check(view->palette().color(QPalette::Text).lightness()<100,
+              "white icon canvas uses dark readable labels");
         QDir().mkpath("artifacts/fence-settings");
         dialog->grab().save(QString("artifacts/fence-settings/defaults-%1.png").arg(dialog->devicePixelRatioF()));
         dialog->findChild<QDialogButtonBox *>("fenceIconButtons")->button(QDialogButtonBox::Ok)->click();
@@ -204,6 +202,9 @@ static int runFenceSettingsTest(const QString &root)
         if(view->model()->rowCount()!=1)return false;
         view->setCurrentIndex(view->model()->index(0,0));
         settle(100);
+        const auto canvasImage=view->viewport()->grab().toImage();
+        check(canvasImage.pixelColor(canvasImage.width()-14,canvasImage.height()-14)==QColor(Qt::white),
+              "system icon canvas remains white after search and selection");
         check(view->currentIndex().data().toString()=="fixture-shared","system icon search is case insensitive");
         dialog->grab().save(QString("artifacts/fence-settings/system-%1.png").arg(dialog->devicePixelRatioF()));
         dialog->findChild<QLineEdit *>("fenceIconSearch")->setText("pending-filter-no-match");

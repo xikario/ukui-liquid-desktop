@@ -134,14 +134,14 @@ public:
         if (selected || option.state.testFlag(QStyle::State_MouseOver)) {
             p->setRenderHint(QPainter::Antialiasing);
             p->setPen(Qt::NoPen);
-            p->setBrush(selected ? QColor(54,127,134,180) : QColor(222,239,255,23));
+            p->setBrush(selected ? QColor("#cce9e7") : QColor("#edf4f5"));
             p->drawRoundedRect(option.rect.adjusted(3,3,-3,-3),8,8);
         }
         const auto icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
         icon.paint(p,QRect(option.rect.center().x()-18,option.rect.top()+6,36,36),
                    Qt::AlignCenter,QIcon::Normal);
         const QRect text = option.rect.adjusted(6,46,-6,-6);
-        p->setPen(QColor("#edf5ff"));p->setFont(option.font);
+        p->setPen(QColor("#20343b"));p->setFont(option.font);
         p->drawText(text,Qt::AlignHCenter|Qt::AlignTop,
             option.fontMetrics.elidedText(index.data().toString(),Qt::ElideRight,text.width()));
         p->restore();
@@ -152,6 +152,14 @@ QListView *iconView(QWidget *parent, const QString &id)
 {
     auto *view = new QListView(parent);
     view->setObjectName(id);
+    // The glass shell stays translucent; only the icon canvas is opaque so
+    // monochrome/transparent theme icons have reliable contrast.
+    view->setStyleSheet("QListView {background:#ffffff;color:#20343b;"
+                       "border:1px solid #d5dfe3;border-radius:6px;padding:4px;}");
+    QPalette palette=view->palette();
+    palette.setColor(QPalette::Base,Qt::white);
+    palette.setColor(QPalette::Text,QColor("#20343b"));
+    view->setPalette(palette);
     auto *style = QStyleFactory::create("Fusion");
     style->setParent(view);
     view->setStyle(style);

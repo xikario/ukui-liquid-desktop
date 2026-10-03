@@ -8,6 +8,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include "LiquidButtons.h"
 #include <QSpinBox>
 #include <QSettings>
 #include <QJsonDocument>
@@ -88,6 +89,7 @@ QPushButton *LiquidDesklet::button(const QString &label,const QString &name) {
                      "QPushButton:hover {background:rgba(190,238,241,48);border-color:rgba(224,255,253,95);}"
                      "QPushButton:pressed,QPushButton:checked {background:rgba(123,213,208,74);}"
                      "QPushButton:disabled {color:rgba(219,231,247,85);background:rgba(225,242,255,9);}");
+    LiquidButtons::install(b);
     return b;
 }
 void LiquidDesklet::text(QPainter &p,const QRectF &r,const QString &s,int size,const QColor &c,bool bold,int align) const {

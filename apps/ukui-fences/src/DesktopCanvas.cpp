@@ -2302,7 +2302,7 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
         const QString startDir = chosenPath->isEmpty()
             ? QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
             : QFileInfo(*chosenPath).absolutePath();
-        const QString path = LiquidDialog::getOpenFileName(
+        const QString path = LiquidDialog::getOpenImageName(
             dlg.window(),
             "选择 Fences 壁纸",
             startDir,

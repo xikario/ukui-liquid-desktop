@@ -106,9 +106,11 @@ FencesSettingsWindow::FencesSettingsWindow(DesktopCanvas *canvas)
     titleRow->addWidget(title,1);
     auto *minimize=new QPushButton("−",titlebar);minimize->setAccessibleName("最小化");minimize->setFixedSize(34,30);
     minimize->setObjectName("settingsMinimize");
+    minimize->setProperty("liquidButtonGlyph","minimize");
     connect(minimize,&QPushButton::clicked,this,&QWidget::showMinimized);titleRow->addWidget(minimize);
     auto *closeButton=new QPushButton("×",titlebar);closeButton->setAccessibleName("关闭设置");closeButton->setFixedSize(34,30);
     closeButton->setObjectName("settingsClose");
+    closeButton->setProperty("liquidButtonGlyph","close");
     connect(closeButton,&QPushButton::clicked,this,&QWidget::close);titleRow->addWidget(closeButton);root->addWidget(titlebar);
     auto *body=new QHBoxLayout;body->setSpacing(16);root->addLayout(body,1);
     m_navigation=new QListWidget(this);m_navigation->setObjectName("settingsNavigation");m_navigation->setFixedWidth(186);
@@ -361,7 +363,7 @@ QWidget *FencesSettingsWindow::buildPage(const QString &id) {
                 if(!choice.themeName.isEmpty())fence->setTitleIconThemeName(choice.themeName);
                 else fence->setTitleIconPath(choice.path);
             },"fenceChooseLibraryIcon");
-            button(c,"从图片文件选择…",[this,fence]{if(!fence)return;QString file=LiquidDialog::getOpenFileName(this,"选择分区图标",QString(),"图片 (*.png *.jpg *.jpeg *.svg *.ico);;所有文件 (*)");if(fence && !file.isEmpty())fence->setTitleIconPath(file);},"fenceChooseFileIcon");
+            button(c,"从图片文件选择…",[this,fence]{if(!fence)return;QString file=LiquidDialog::getOpenImageName(this,"选择分区图标",QString(),"图片 (*.png *.jpg *.jpeg *.svg *.ico);;所有文件 (*)");if(fence && !file.isEmpty())fence->setTitleIconPath(file);},"fenceChooseFileIcon");
             auto *clearIcon=button(c,"清除分区图标…",[this,fence]{if(fence)fence->confirmClearTitleIcon(this);},"fenceClearTitleIcon");
             const auto refreshIcon=[fence,iconPreview,iconStatus,clearIcon]{
                 if(!fence)return;

@@ -1,4 +1,5 @@
 #include "LiquidDialog.h"
+#include "LiquidButtons.h"
 #include <QApplication>
 #include <QDialogButtonBox>
 #include <QEvent>
@@ -117,6 +118,10 @@ public:
             ));
         }
         if(options.chrome)createChrome();
+        // Install before handling Show. Adding a root event filter inside its
+        // current Show dispatch can visit this controller twice and recapture
+        // the backdrop; child polish/show adoption already handles late pages.
+        LiquidButtons::install(window);
         window->installEventFilter(this);
         connect(&motion,&QVariantAnimation::valueChanged,this,[this](const QVariant &value){
             if(this->window)this->window->setWindowOpacity(value.toReal());
@@ -393,13 +398,14 @@ QMessageBox::StandardButton execute(QWidget *parent,const QString &title,const Q
     return static_cast<QMessageBox::StandardButton>(result);
 }
 QString chooseFile(QWidget *parent,const QString &title,const QString &dir,const QString &filter,
-    QString *selectedFilter,QFileDialog::Options options,bool save,bool directory) {
+    QString *selectedFilter,QFileDialog::Options options,bool save,bool directory,bool images=false) {
     QPointer<FileDialog> picker=new FileDialog(parent,title,dir,filter);
     picker->setOptions(options|QFileDialog::DontUseNativeDialog);
     picker->setAcceptMode(save?QFileDialog::AcceptSave:QFileDialog::AcceptOpen);
     picker->setFileMode(directory?QFileDialog::Directory:save?QFileDialog::AnyFile:QFileDialog::ExistingFile);
     if(selectedFilter && !selectedFilter->isEmpty())picker->selectNameFilter(*selectedFilter);
     install(picker);
+    if(images)installImageThumbnails(picker);
     const int result=picker->exec();
     QString path;
     if(picker) {
@@ -505,6 +511,7 @@ QString getText(QWidget *parent,const QString &title,const QString &label,QLineE
     return value;
 }
 QString getOpenFileName(QWidget *p,const QString &c,const QString &d,const QString &f,QString *selected,QFileDialog::Options o){return chooseFile(p,c,d,f,selected,o,false,false);}
+QString getOpenImageName(QWidget *p,const QString &c,const QString &d,const QString &f,QString *selected,QFileDialog::Options o){return chooseFile(p,c,d,f,selected,o,false,false,true);}
 QString getSaveFileName(QWidget *p,const QString &c,const QString &d,const QString &f,QString *selected,QFileDialog::Options o){return chooseFile(p,c,d,f,selected,o,true,false);}
 QString getExistingDirectory(QWidget *p,const QString &c,const QString &d,QFileDialog::Options o){return chooseFile(p,c,d,{},nullptr,o,false,true);}
 QColor getColor(const QColor &initial,QWidget *parent,const QString &title,QColorDialog::ColorDialogOptions options) {

@@ -46,6 +46,11 @@ QString getText(QWidget *,const QString &,const QString &,QLineEdit::EchoMode=QL
                 const QString &text={},bool *ok=nullptr);
 QString getOpenFileName(QWidget *parent=nullptr,const QString &caption={},const QString &dir={},
     const QString &filter={},QString *selectedFilter=nullptr,QFileDialog::Options options={});
+// Opt-in image browsing: visible items get bounded asynchronous thumbnails.
+// Ordinary file/save/directory pickers keep their existing Qt views.
+void installImageThumbnails(QFileDialog *picker);
+QString getOpenImageName(QWidget *parent=nullptr,const QString &caption={},const QString &dir={},
+    const QString &filter={},QString *selectedFilter=nullptr,QFileDialog::Options options={});
 QString getSaveFileName(QWidget *parent=nullptr,const QString &caption={},const QString &dir={},
     const QString &filter={},QString *selectedFilter=nullptr,QFileDialog::Options options={});
 QString getExistingDirectory(QWidget *parent=nullptr,const QString &caption={},const QString &dir={},

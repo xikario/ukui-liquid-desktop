@@ -29,13 +29,20 @@ QIcon transportIcon(int kind) {
     QPainter p(&pix);p.setRenderHint(QPainter::Antialiasing);p.setPen(Qt::NoPen);p.setBrush(QColor("#f4f7ff"));
     if(kind==1){p.drawRoundedRect(QRectF(5,4,3,12),.7,.7);p.drawRoundedRect(QRectF(12,4,3,12),.7,.7);}
     else {if(kind==2){p.translate(20,0);p.scale(-1,1);}QPainterPath triangle;triangle.moveTo(5,4);triangle.lineTo(15,10);triangle.lineTo(5,16);triangle.closeSubpath();p.drawPath(triangle);if(kind==2 || kind==3)p.drawRoundedRect(QRectF(15,4,2,12),.5,.5);}
-    return QIcon(pix);
+    QIcon icon(pix);
+    // OEM generated disabled icons can turn white transport glyphs black.
+    // Supply the same vector silhouette with reduced alpha explicitly.
+    QPixmap disabled(pix.size());disabled.fill(Qt::transparent);disabled.setDevicePixelRatio(pix.devicePixelRatio());
+    QPainter fade(&disabled);fade.setOpacity(.38);fade.drawPixmap(0,0,pix);fade.end();
+    icon.addPixmap(disabled,QIcon::Disabled);
+    return icon;
 }
 }
 MusicDesklet::MusicDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"music","音乐",QSize(360,180)),m_player(new MprisPlayer(this)) {
     m_previous=button("","musicPrevious");m_play=button("","musicPlayPause");m_next=button("","musicNext");
     m_open=button("打开播放器","musicOpen");m_cover=button("","musicCover");
     m_cover->setStyleSheet("QPushButton{background:transparent;border:0;border-radius:10px;}QPushButton:hover{background:rgba(255,255,255,20);}");
+    m_cover->setProperty("liquidButtonFlat",true);
     m_previous->setIcon(transportIcon(2));m_next->setIcon(transportIcon(3));
     m_previous->setToolTip("上一首");m_next->setToolTip("下一首");m_cover->setToolTip("打开当前播放器");
     for(auto *b:{m_previous,m_play,m_next})b->setIconSize(QSize(20,20));
