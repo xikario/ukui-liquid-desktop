@@ -1,5 +1,6 @@
 #include "LiquidDialog.h"
 #include "VideoWallpaperTrial.h"
+#include "VideoWallpaperPreview.h"
 #include "FencesSettingsWindow.h"
 #include "WidgetResizeSnap.h"
 #include "../../../shared/async-work/BackgroundTask.h"
@@ -1307,6 +1308,11 @@ void DesktopCanvas::syncScreenGeometry()
         if (m_smartSpace->pos() != bounded)
             m_smartSpace->move(bounded);
     }
+    // RandR mode switches let Peony recreate/raise its desktop after ours.
+    // Reassert only the desktop-layer order, with bounded settling retries;
+    // never override an explicit switch to the system desktop.
+    if (!m_userHidden && m_initialWallpaperReady) restackDesktopLayer();
+    if (m_videoTrial) m_videoTrial->refreshGeometry();
     update();
 }
 
@@ -1364,6 +1370,7 @@ void DesktopCanvas::videoWallpaperStateChanged()
         && state.value("hardwareReady").toBool()) {
         QSettings settings;
         settings.setValue("wallpaper/videoPath", m_pendingVideoWallpaper);
+        settings.setValue("wallpaper/lastVideoPath", m_pendingVideoWallpaper);
         settings.sync();
         m_pendingVideoWallpaper.clear();
     }
@@ -2238,7 +2245,11 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
     preview->setStyleSheet(
         "QLabel { background: #101827; border: 1px solid #39445a; "
         "border-radius: 10px; color: #cbd5e1; }");
-    form->addRow("预览：", preview);
+    auto *previewArea = new QWidget(&dlg);
+    auto *previewLayout = new QVBoxLayout(previewArea);previewLayout->setContentsMargins(0,0,0,0);
+    auto *videoFrames = new VideoWallpaperPreview(previewArea);
+    previewLayout->addWidget(preview);previewLayout->addWidget(videoFrames);
+    form->addRow("预览：", previewArea);
 
     auto *pathLabel = new QLabel(&dlg);
     pathLabel->setWordWrap(true);
@@ -2255,43 +2266,40 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
     pathLayout->addStretch();
     form->addRow("", pathButtons);
 
-    auto *videoButtons=new QWidget(&dlg);auto *videoRow=new QHBoxLayout(videoButtons);
+    dlg.setObjectName("wallpaperSettingsForm");
+    dlg.setProperty("settingsManagesDraft", true);
+    const QString savedVideo = QSettings().value("wallpaper/videoPath").toString();
+    auto *kindCombo = new QComboBox(&dlg);
+    kindCombo->setObjectName("wallpaperKind");
+    kindCombo->addItem("静态图片", false);
+    kindCombo->addItem("视频壁纸", true);
+    kindCombo->setCurrentIndex(savedVideo.isEmpty() ? 0 : 1);
+    form->insertRow(0, "壁纸类型：", kindCombo);
+    auto *videoPath = new QLineEdit(&dlg);
+    videoPath->setObjectName("videoWallpaperPath");
+    videoPath->setPlaceholderText("选择本地 MP4 视频，点击应用后生效");
+    videoPath->setText(savedVideo.isEmpty()
+        ? QSettings().value("wallpaper/lastVideoPath").toString() : savedVideo);
+    auto *videoButtons = new QWidget(&dlg);
+    auto *videoRow = new QHBoxLayout(videoButtons);
     videoRow->setContentsMargins(0,0,0,0);
-    auto *videoStart=new QPushButton("选择视频壁纸…",videoButtons);videoStart->setObjectName("videoWallpaperStart");
-    auto *videoStop=new QPushButton("恢复图片壁纸",videoButtons);videoStop->setObjectName("videoWallpaperStop");
-    videoRow->addWidget(videoStart);videoRow->addWidget(videoStop);videoRow->addStretch();
-    form->addRow("视频壁纸：",videoButtons);
-    auto *videoStatus=new QLabel(&dlg);videoStatus->setWordWrap(true);form->addRow("",videoStatus);
-    auto updateVideoStatus=[this,videoStatus,videoStop]{
-        const auto status=QJsonDocument::fromJson(videoWallpaperTrialStatus().toUtf8()).object();
-        const auto state=status.value("state").toString();
-        QString text=state=="playing"?QStringLiteral("正在播放")
-            :state=="paused"?QStringLiteral("已暂停（桌面隐藏、窗口遮挡或锁屏）")
-            :state=="preparing"||state=="starting"?QStringLiteral("正在准备视频")
-            :state=="error"?QStringLiteral("视频播放失败，已恢复图片壁纸：%1").arg(status.value("reason").toString())
-            :QStringLiteral("当前使用图片壁纸");
-        if(status.value("active").toBool() && status.value("sourceFps").toDouble()>0)
-            text+=QStringLiteral(" · %1×%2 · 原片 %3 帧/秒 · 硬件解码")
-                .arg(status.value("width").toInt()).arg(status.value("height").toInt())
-                .arg(status.value("sourceFps").toDouble(),0,'g',6);
-        if (status.value("saving").toBool())
-            text += QStringLiteral("。播放成功后自动保存");
-        else if (status.value("persistent").toBool())
-            text += QStringLiteral("。已保存：%1；随 Fences 启动恢复").arg(QFileInfo(status.value("savedPath").toString()).fileName());
-        else if (status.value("active").toBool())
-            text += QStringLiteral("。仅本次会话预览");
-        videoStatus->setText(text);
-        videoStop->setEnabled(status.value("active").toBool() || status.value("persistent").toBool());
-    };
-    connect(this,&DesktopCanvas::videoWallpaperTrialChanged,videoStatus,updateVideoStatus);updateVideoStatus();
-    connect(videoStop,&QPushButton::clicked,this,&DesktopCanvas::disableVideoWallpaper);
-    connect(videoStart,&QPushButton::clicked,&dlg,[this,&dlg]{
+    auto *videoChoose = new QPushButton("选择视频…", videoButtons);
+    videoChoose->setObjectName("videoWallpaperStart");
+    videoRow->addWidget(videoPath); videoRow->addWidget(videoChoose);
+    form->addRow("视频：", videoButtons);
+    auto *videoStatus = new QLabel(&dlg);
+    videoStatus->setObjectName("videoWallpaperStatus");
+    videoStatus->setWordWrap(true);form->addRow("",videoStatus);
+    videoStatus->setText("选择仅修改草稿；点击应用后保存并生效。视频按屏幕等比填满，保持原片帧率。");
+    connect(videoChoose,&QPushButton::clicked,&dlg,[=,&dlg]{
         const auto path=LiquidDialog::getOpenFileName(dlg.window(),"选择视频壁纸",
-            QStandardPaths::writableLocation(QStandardPaths::PicturesLocation),"MP4 视频 (*.mp4)");
-        if(!path.isEmpty()&&!setVideoWallpaper(path))LiquidDialog::warning(dlg.window(),"视频壁纸","当前无法启动视频壁纸，请确认本地 MP4 文件和播放环境可用。");
+            videoPath->text().isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
+                                       : QFileInfo(videoPath->text()).absolutePath(), "MP4 视频 (*.mp4)");
+        if (!path.isEmpty()) videoPath->setText(path);
     });
 
     auto *modeCombo = new QComboBox(&dlg);
+    modeCombo->setObjectName("wallpaperImageMode");
     modeCombo->addItem("系统默认（跟随桌面）",
                        static_cast<int>(WallpaperMode::System));
     modeCombo->addItem("填满（等比裁切）",
@@ -2366,7 +2374,28 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
         return QPixmap::fromImage(result);
     };
 
+    auto baseline = std::make_shared<QStringList>(QStringList{
+        *chosenPath, QString::number(modeCombo->currentIndex()),
+        QString::number(kindCombo->currentIndex()), videoPath->text()});
+    auto applying = std::make_shared<bool>(false);
+    auto awaitingPlayback = std::make_shared<bool>(false);
+    auto draft = [=] { return QStringList{*chosenPath, QString::number(modeCombo->currentIndex()),
+        QString::number(kindCombo->currentIndex()), videoPath->text()}; };
+    auto updateDirty = [=,&dlg] {
+        dlg.setProperty("settingsDirty", draft() != *baseline);
+    };
     auto updatePreview = [=, &dlg] {
+        updateDirty();
+        const bool video = kindCombo->currentData().toBool();
+        videoButtons->setEnabled(video && !*applying);
+        pathButtons->setEnabled(!video && !*applying);
+        modeCombo->setEnabled(!video && !*applying);
+        preview->setVisible(!video);videoFrames->setVisible(video);
+        videoFrames->setFile(video ? videoPath->text() : QString());
+        if (video) {
+            pathLabel->setText("切换为静态图片后可编辑；视频不可用时使用已保存的图片。");
+            return;
+        }
         WallpaperMode mode = static_cast<WallpaperMode>(
             modeCombo->currentData().toInt());
         bool customMode = false;
@@ -2401,6 +2430,8 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
 
     connect(modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             [=, &dlg] { updatePreview(); });
+    connect(kindCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), &dlg, [=]{updatePreview();});
+    connect(videoPath, &QLineEdit::textChanged, &dlg, [=]{updatePreview();});
     connect(chooseBtn, &QPushButton::clicked, &dlg, [=, &dlg] {
         const QString startDir = chosenPath->isEmpty()
             ? QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
@@ -2450,21 +2481,78 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
 
     updatePreview();
 
-    connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dlg, [=, &dlg] {
-
-    WallpaperMode selectedMode = static_cast<WallpaperMode>(
-        modeCombo->currentData().toInt());
-    if (chosenPath->isEmpty())
-        selectedMode = WallpaperMode::System;
-
-    m_wallpaperPath = *chosenPath;
-    m_wallpaperMode = selectedMode;
-    disableVideoWallpaper();
-    loadWallpaper();
-    if (m_monitor)
-        m_monitor->refreshWallpaperTheme();
-    saveLayout();
-    dlg.setProperty("settingsDirty", false);
+    auto *apply = buttons->button(QDialogButtonBox::Apply);
+    apply->setObjectName("wallpaperApply");
+    auto saveImage = [=] {
+        auto mode = static_cast<WallpaperMode>(modeCombo->currentData().toInt());
+        m_wallpaperPath = *chosenPath;
+        m_wallpaperMode = chosenPath->isEmpty() ? WallpaperMode::System : mode;
+        saveLayout();
+    };
+    auto finish = [=,&dlg](bool success, const QString &message) {
+        *applying = false;*awaitingPlayback = false;
+        apply->setEnabled(true);kindCombo->setEnabled(true);
+        if (success) { saveImage(); *baseline = draft(); }
+        updatePreview();
+        videoStatus->setText(message);
+    };
+    connect(this,&DesktopCanvas::videoWallpaperTrialChanged,&dlg,[=]{
+        if (!*applying || !*awaitingPlayback) return;
+        const auto status=QJsonDocument::fromJson(videoWallpaperTrialStatus().toUtf8()).object();
+        if (status.value("state")=="error")
+            finish(false, "视频应用失败，已恢复图片；草稿未保存：" + status.value("reason").toString());
+        else if (status.value("active").toBool() && status.value("hardwareReady").toBool() && status.value("currentIsSaved").toBool()
+                 && status.value("source").toString()==QFileInfo(videoPath->text()).canonicalFilePath())
+            finish(true, "视频壁纸已应用并保存，随 Fences 启动恢复。");
+    });
+    connect(apply, &QPushButton::clicked, &dlg, [=,&dlg] {
+        if (*applying) return;
+        if (!kindCombo->currentData().toBool()) {
+            saveImage();disableVideoWallpaper();loadWallpaper();
+            finish(true, "静态壁纸已应用并保存。");
+            return;
+        }
+        const QString selected = videoPath->text().trimmed();
+        if (!QFileInfo(selected).isFile() || QFileInfo(selected).suffix().toLower()!="mp4") {
+            videoStatus->setText("请选择存在的本地 MP4 视频；当前壁纸保持不变。");return;
+        }
+        *applying=true;apply->setEnabled(false);kindCombo->setEnabled(false);updatePreview();
+        videoStatus->setText("正在检查视频分辨率…");
+        BackgroundTask::run(&dlg,[selected] {
+            QProcess probe;
+            probe.start("ffprobe", {"-v","error","-select_streams","v:0","-show_entries",
+                "stream=width,height","-of","json",selected});
+            if (!probe.waitForFinished(5000)) { probe.kill();probe.waitForFinished(500);return QSize(); }
+            if (probe.exitCode()!=0) return QSize();
+            const auto streams=QJsonDocument::fromJson(probe.readAllStandardOutput()).object().value("streams").toArray();
+            if (streams.isEmpty()) return QSize();
+            const auto stream=streams.first().toObject();
+            return QSize(stream.value("width").toInt(),stream.value("height").toInt());
+        },[=,&dlg](const QSize &sourceSize) {
+            if (!sourceSize.isValid() || sourceSize.isEmpty()) {
+                finish(false,"无法读取视频分辨率，当前壁纸保持不变。");return;
+            }
+            QScreen *screen=QApplication::primaryScreen();
+            const QSize screenSize=screen ? QSize(qRound(screen->geometry().width()*screen->devicePixelRatio()),
+                qRound(screen->geometry().height()*screen->devicePixelRatio())) : size()*devicePixelRatioF();
+            if ((sourceSize.width()<screenSize.width() || sourceSize.height()<screenSize.height())
+                && LiquidDialog::question(dlg.window(),"视频分辨率较低",
+                    QString("视频分辨率为 %1×%2，当前屏幕为 %3×%4。\n放大后效果可能不够清晰，是否仍然应用？")
+                        .arg(sourceSize.width()).arg(sourceSize.height()).arg(screenSize.width()).arg(screenSize.height()))!=QMessageBox::Yes) {
+                finish(false,"已取消应用低分辨率视频，当前壁纸保持不变。");return;
+            }
+            // Validation and confirmation have completed. Do not restart a saved
+            // active video merely to acknowledge the same wallpaper settings.
+            const auto status=QJsonDocument::fromJson(videoWallpaperTrialStatus().toUtf8()).object();
+            if(status.value("active").toBool() && status.value("hardwareReady").toBool()
+                && status.value("currentIsSaved").toBool()
+                && status.value("source").toString()==QFileInfo(selected).canonicalFilePath()) {
+                finish(true,"视频壁纸已应用并保存。");return;
+            }
+            *awaitingPlayback = true;
+            videoStatus->setText("正在应用视频，播放成功后保存…");
+            if(!setVideoWallpaper(selected)) finish(false,"无法启动视频，草稿未保存。");
+        });
     });
     return pageWidget;
 }

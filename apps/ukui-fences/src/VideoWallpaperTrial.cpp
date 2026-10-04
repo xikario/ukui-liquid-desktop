@@ -91,6 +91,7 @@ void VideoWallpaperTrial::receive() {
         if(changed)changed();
     }
 }
+void VideoWallpaperTrial::refreshGeometry(){lastGeometry.clear();scheduleGeometry();}
 void VideoWallpaperTrial::scheduleGeometry(){if(enabled&&!geometryTimer.isActive())geometryTimer.start();}
 void VideoWallpaperTrial::sendGeometry() {
     if(!enabled || process.state()!=QProcess::Running)return;

@@ -14,6 +14,7 @@ public:
     ~VideoWallpaperTrial() override;
     bool start(const QString &);
     void stop();
+    void refreshGeometry();
     bool active() const {return enabled;}
     QString status() const;
     std::function<void()> changed;
