@@ -14,7 +14,9 @@
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QDBusMessage>
 #include "DesktopCanvas.h"
+#include "StartupWallpaperCover.h"
 #include "MenuStyle.h"
+#include "DesktopLayerWatch.h"
 
 namespace {
 
@@ -157,13 +159,25 @@ int main(int argc, char *argv[])
     if (args.contains("--quit"))
         return 0;
 
+    StartupWallpaperCover cover;
+    if(!args.contains("--hide")) {
+        cover.show();
+        app.processEvents(QEventLoop::ExcludeUserInputEvents);
+    }
     DesktopCanvas canvas;
+    QObject::connect(&canvas,&DesktopCanvas::desktopVisibilityChanged,&cover,[&]{
+        // The mapped canvas already carries the cached video poster.
+        QTimer::singleShot(0,&cover,&QWidget::hide);
+    });
+    if(args.contains("--hide"))cover.hide();
     if (!bus.registerObject(kDbusPath, &canvas, QDBusConnection::ExportScriptableSlots)) {
         qCritical() << "Cannot register desktop D-Bus object:" << bus.lastError().message();
         bus.unregisterService(kDbusService);
         return 1;
     }
     setupTrayIcon(canvas, icon);
+    DesktopLayerWatch layer(canvas.winId(),[&]{return canvas.fencesDesktopVisible();},
+        [&]{canvas.showAndActivate();});
 
     if (args.contains("--settings")) {
         canvas.showAndActivate();

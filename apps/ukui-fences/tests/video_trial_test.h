@@ -77,12 +77,19 @@ for line in sys.stdin:
 )PY");
     canvas.hideFences();
     {
-        DesktopCanvas restored;restored.showAndActivate();
+        DesktopCanvas restored;
+        bool cachedAtFirstMap=false;
+        QObject::connect(&restored,&DesktopCanvas::initialWallpaperReady,&restored,[&]{
+            const auto image=restored.wallpaperBackdrop(QRect(restored.mapToGlobal(QPoint()),QSize(10,10)),1);
+            cachedAtFirstMap=!image.isNull() && image.pixelColor(5,5).blue()>180;
+        });
+        restored.showAndActivate();
         timer.restart();
         auto restoredState=[&]{return QJsonDocument::fromJson(restored.videoWallpaperTrialStatus().toUtf8()).object();};
         while(!restoredState().value("hardwareReady").toBool() && timer.elapsed()<5000)settle(10);
         check(restoredState().value("active").toBool() && restoredState().value("currentIsSaved").toBool(),
               "fresh desktop automatically restores saved video after static wallpaper readiness");
+        check(cachedAtFirstMap,"saved video poster is prepared before first desktop mapping");
         restored.disableVideoWallpaper();settle(150);
         check(!restoredState().value("active").toBool() && !QSettings().contains("wallpaper/videoPath"),
               "restore image stops playback and clears future startup selection");
@@ -227,6 +234,17 @@ print('{"streams":[{"width":640,"height":360}],"format":{"duration":"10.0"}}')
         check(first && last && first->pixmap() && last->pixmap()
             && first->pixmap()->toImage()!=last->pixmap()->toImage(),"real preview frames show different points in the clip");
         QDir().mkpath("artifacts");preview.grab().save("artifacts/video-thumbnail-preview.png");
+        preview.confirmFile(realClip);
+        {
+            VideoWallpaperPreview reopened;
+            reopened.setFile(realClip);reopened.show();
+            check(reopened.property("cacheHit").toBool() && reopened.property("frameCount").toInt()==3,
+                  "confirmed preview reloads persistent frames without FFmpeg");
+            const int before=reopened.property("animationFrame").toInt();settle(1050);
+            check(reopened.property("animationFrame").toInt()!=before,"visible preview animates cached frames");
+            reopened.hide();const int hidden=reopened.property("animationFrame").toInt();settle(1050);
+            check(reopened.property("animationFrame").toInt()==hidden,"hidden preview does not keep animating");
+        }
         preview.setFile(root+"/missing.mp4");preview.setFile(QString());settle(400);
         check(preview.property("frameCount").toInt()==0 && preview.property("previewState")=="empty",
             "cancelling preview clears stale images and stops extraction");

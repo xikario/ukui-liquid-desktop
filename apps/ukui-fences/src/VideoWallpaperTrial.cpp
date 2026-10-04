@@ -1,4 +1,5 @@
 #include "VideoWallpaperTrial.h"
+#include "VideoWallpaperCache.h"
 #include "../../../shared/async-work/BackgroundTask.h"
 #include <QApplication>
 #include <QChildEvent>
@@ -40,11 +41,15 @@ bool VideoWallpaperTrial::start(const QString &path) {
     if(changed)changed();
     const auto stamp=++revision;const auto video=source;
     BackgroundTask::run(this,[ffmpeg,video]{
+        const QImage cached=VideoWallpaperCache::poster(video);
+        if(!cached.isNull())return cached;
         QProcess decode;decode.start(ffmpeg,{"-hide_banner","-loglevel","error","-nostdin","-threads","2",
             "-i",video,"-an","-frames:v","1","-vf","scale=1920:-2","-f","image2pipe","-vcodec","png","pipe:1"});
         if(!decode.waitForFinished(15000)){decode.kill();decode.waitForFinished(500);return QImage();}
         if(decode.exitCode()!=0)return QImage();
-        return QImage::fromData(decode.readAllStandardOutput(),"PNG");
+        const QImage image=QImage::fromData(decode.readAllStandardOutput(),"PNG");
+        VideoWallpaperCache::saveImage(VideoWallpaperCache::directory(video), "poster.png", image);
+        return image;
     },[this,stamp,python,helper](const QImage &image){
         if(!enabled || stamp!=revision)return;
         if(image.isNull()){reason="cannot decode first frame";stop();state="error";if(changed)changed();return;}
@@ -86,7 +91,7 @@ void VideoWallpaperTrial::receive() {
         if(message.contains("state"))state=message.value("state").toString();
         if(message.contains("loops"))loops=message.value("loops").toInt();
         for(const char *key:{"decoder","sourceFps","decodedFps","displayFps","frameDrops",
-            "decoderDrops","delayedFrames","position","width","height","originalSource"})
+            "decoderDrops","delayedFrames","position","width","height","originalSource","visibleFraction","covered"})
             if(message.contains(key))playback.insert(key,message.value(key));
         if(changed)changed();
     }
@@ -115,7 +120,23 @@ bool VideoWallpaperTrial::eventFilter(QObject *object,QEvent *event) {
         if(auto *child=qobject_cast<QWidget *>(static_cast<QChildEvent *>(event)->child()))child->installEventFilter(this);
     switch(event->type()){
     case QEvent::Move:case QEvent::Resize:case QEvent::Show:case QEvent::Hide:
-    case QEvent::WindowStateChange:case QEvent::Paint:scheduleGeometry();break;
+    case QEvent::WindowStateChange:scheduleGeometry();break;
+    case QEvent::Paint: {
+        // Painting digits/clocks does not change the video cutout. Masks may
+        // change without a resize, so retain that check instead of dropping it.
+        if(auto *widget=qobject_cast<QWidget *>(object)) {
+            const QRegion mask=widget->mask();
+            const QRegion extra=object==canvas && overlay ? overlay() : QRegion();
+            if(!lastMasks.contains(object) || lastMasks.value(object)!=mask
+                || (object==canvas && lastOverlay!=extra)) {
+                lastMasks.insert(object,mask);
+                if(object==canvas)lastOverlay=extra;
+                scheduleGeometry();
+            }
+        }
+        break;
+    }
+    case QEvent::Destroy:lastMasks.remove(object);scheduleGeometry();break;
     default:break;
     }return false;
 }

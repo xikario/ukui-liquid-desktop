@@ -42,6 +42,7 @@ class QWheelEvent;
 class QScreen;
 class QProcess;
 class VideoWallpaperTrial;
+class VideoWallpaperPreview;
 
 class DesktopCanvas : public QWidget
 {
@@ -172,6 +173,7 @@ private slots:
 
 private:
     VideoWallpaperTrial *m_videoTrial=nullptr;
+    VideoWallpaperPreview *m_videoPreviewStore=nullptr;
     QString m_pendingVideoWallpaper;
     void videoWallpaperStateChanged();
     QPointer<FencesSettingsWindow> m_settingsWindow;

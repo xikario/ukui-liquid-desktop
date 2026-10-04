@@ -12,23 +12,29 @@ spec.loader.exec_module(trial)
 
 
 class FillGeometryTest(unittest.TestCase):
-    def test_native_16_by_10_crop(self):
-        self.assertEqual(trial.fill_geometry(2880, 1800, 16 / 9), (-160, 0, 3200, 1800))
+    def test_drawable_matches_display_including_portrait(self):
+        for width,height in [(2880,1800),(1920,1080),(2560,1080),(1080,1920)]:
+            self.assertEqual(trial.fill_geometry(width,height,16/9),(0,0,width,height))
 
-    def test_wide_display(self):
-        x, y, width, height = trial.fill_geometry(2560, 1080, 16 / 9)
-        self.assertEqual((x, width), (0, 2560))
-        self.assertLess(y, 0)
-        self.assertGreater(height, 1080)
 
-    def test_equal_aspect(self):
-        self.assertEqual(trial.fill_geometry(1920, 1080, 16 / 9), (0, 0, 1920, 1080))
+class VisibilityTest(unittest.TestCase):
+    def test_two_windows_cover_desktop_together(self):
+        self.assertEqual(trial.exposed_fraction([(0,0,100,100)],[(0,0,55,100),(45,0,55,100)]),0)
 
-    def test_portrait(self):
-        x, y, width, height = trial.fill_geometry(1080, 1920, 16 / 9)
-        self.assertLess(x, 0)
-        self.assertEqual((y, height), (0, 1920))
-        self.assertGreater(width, 1080)
+    def test_overlapping_windows_are_not_double_counted(self):
+        self.assertEqual(trial.exposed_fraction([(0,0,100,100)],[(0,0,60,100)]*2),0.4)
+
+    def test_offscreen_and_multiple_video_regions(self):
+        self.assertEqual(trial.exposed_fraction([(0,0,40,100),(60,0,40,100)], [(-100,0,120,100)]),0.75)
+
+    def test_hysteresis(self):
+        self.assertTrue(trial.should_pause(0.09,False))
+        self.assertFalse(trial.should_pause(0.11,False))
+        self.assertTrue(trial.should_pause(0.11,True))
+        self.assertFalse(trial.should_pause(0.16,True))
+
+    def test_empty_region(self):
+        self.assertEqual(trial.exposed_fraction([],[]),0)
 
 
 class NativeRateMediaTest(unittest.TestCase):

@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QProcess>
 #include <QRegion>
+#include <QHash>
 #include <QJsonObject>
 #include <QTimer>
 #include <functional>
@@ -27,6 +28,7 @@ private:
     std::function<QRegion()> overlay;
     QProcess process;QTimer geometryTimer;QByteArray output,lastGeometry;
     QJsonObject playback;
+    QHash<QObject *,QRegion> lastMasks;QRegion lastOverlay;
     QString state="stopped",reason,source;
     quint64 revision=0;int loops=0;bool enabled=false;
 };

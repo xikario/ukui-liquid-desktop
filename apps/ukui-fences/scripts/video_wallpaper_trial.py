@@ -17,11 +17,37 @@ from fractions import Fraction
 
 
 def fill_geometry(width, height, aspect):
-    if width / height < aspect:
-        vw, vh = round(height * aspect), height
-    else:
-        vw, vh = width, round(width / aspect)
-    return (width - vw) // 2, (height - vh) // 2, vw, vh
+    # mpv panscan crops inside a screen-sized drawable, without offscreen pixels.
+    return 0, 0, width, height
+
+
+def subtract_rectangles(regions, cover):
+    cx, cy, cw, ch = cover
+    result = []
+    for x, y, w, h in regions:
+        left, top = max(x, cx), max(y, cy)
+        right, bottom = min(x + w, cx + cw), min(y + h, cy + ch)
+        if left >= right or top >= bottom:
+            result.append((x, y, w, h)); continue
+        for rect in ((x, y, w, top-y), (x, bottom, w, y+h-bottom),
+                     (x, top, left-x, bottom-top), (right, top, x+w-right, bottom-top)):
+            if rect[2] > 0 and rect[3] > 0: result.append(rect)
+    return result
+
+
+def exposed_fraction(regions, covers):
+    total = sum(w*h for x,y,w,h in regions)
+    if not total: return 0.0
+    remaining = list(regions)
+    for cover in covers:
+        remaining = subtract_rectangles(remaining, cover)
+        if len(remaining) > 4096: return 1.0  # Complex shapes: keep playing conservatively.
+    return sum(w*h for x,y,w,h in remaining) / total
+
+
+def should_pause(fraction, was_covered):
+    # Hysteresis avoids rapid pause/resume while dragging a window near 10%.
+    return fraction < (0.15 if was_covered else 0.10)
 
 
 def inspect_media(path):
@@ -71,7 +97,9 @@ class Player:
                 'audio': 'no', 'loop-file': 'inf', 'pause': 'yes', 'terminal': 'no',
                 'input-default-bindings': 'no', 'input-vo-keyboard': 'no',
                 'osc': 'no', 'stop-screensaver': 'no', 'keep-open': 'yes',
-                'cursor-autohide': 'no'}
+                'cursor-autohide': 'no', 'panscan': '1.0',
+                'gpu-dumb-mode': 'yes', 'scale': 'bilinear', 'dscale': 'bilinear',
+                'cscale': 'bilinear', 'linear-downscaling': 'no', 'dither-depth': 'no'}
             for key, value in options.items():
                 self.check(self.lib.mpv_set_option_string(self.handle, key.encode(), value.encode()))
             self.check(self.lib.mpv_initialize(self.handle))
@@ -155,6 +183,10 @@ class X11:
         if not self.display:
             raise RuntimeError('X11 display unavailable')
         self.atoms = {}
+        self.rectangles = []
+        self.was_covered = False
+        self.visible_fraction = 1.0
+        self.watched = set()
         self.parent = parent; self.root = self.lib.XDefaultRootWindow(self.display)
         self.window = self.lib.XCreateSimpleWindow(self.display, parent, 0, 0, 1, 1, 0, 0, 0)
         self.ext.XShapeCombineRectangles(self.display, self.window, 2, 0, 0, None, 0, 0, 0)  # empty input
@@ -188,25 +220,41 @@ class X11:
         return x.value, y.value
 
     def covered(self):
-        # Conservative: pause only for a mapped normal window covering the work
-        # area. Partially visible desktops keep playing. No screen capture/poll.
-        if self.values(self.root, '_NET_SHOWING_DESKTOP')[:1] == [1]: return False
-        area = self.values(self.root, '_NET_WORKAREA')[:4]
-        if len(area) != 4: return False
-        x, y, w, h = area
-        for window in self.values(self.root, '_NET_CLIENT_LIST_STACKING'):
-            if window == self.parent: continue
+        if self.values(self.root, '_NET_SHOWING_DESKTOP')[:1] == [1]:
+            self.was_covered = False; self.visible_fraction = 1.0
+            return False
+        clients = self.values(self.root, '_NET_CLIENT_LIST_STACKING')
+        if self.parent not in clients:
+            return False  # Fail open while the WM is still managing the canvas.
+        current = self.values(self.root, '_NET_CURRENT_DESKTOP')[:1]
+        px, py = self.origin(self.parent)
+        covers = []
+        live = set(clients)
+        self.watched.intersection_update(live)
+        for window in clients[clients.index(self.parent)+1:]:
+            if window not in self.watched:
+                # Root events alone miss moves of reparented client windows.
+                self.lib.XSelectInput(self.display, window, (1 << 22) | (1 << 17))
+                self.watched.add(window)
             kinds = self.values(window, '_NET_WM_WINDOW_TYPE')
-            if any(self.atom(k) in kinds for k in ('_NET_WM_WINDOW_TYPE_DESKTOP', '_NET_WM_WINDOW_TYPE_DOCK')): continue
+            if kinds and self.atom('_NET_WM_WINDOW_TYPE_NORMAL') not in kinds: continue
             if self.atom('_NET_WM_STATE_HIDDEN') in self.values(window, '_NET_WM_STATE'): continue
+            desktop = self.values(window, '_NET_WM_DESKTOP')[:1]
+            if current and desktop and desktop != current and desktop != [0xffffffff]: continue
+            opacity = self.values(window, '_NET_WM_WINDOW_OPACITY')[:1]
+            if opacity and opacity[0] < 0xffffffff: continue
             attributes = self.attributes(window)
             if not attributes or attributes.map_state != 2: continue
             wx, wy = self.origin(window)
-            if wx <= x + 2 and wy <= y + 2 and wx + attributes.width >= x + w - 2 and wy + attributes.height >= y + h - 2:
-                return True
-        return False
+            covers.append((wx-px, wy-py, attributes.width, attributes.height))
+        # The input regions already exclude Fences and desklets. Subtract each
+        # ordinary window once, so overlapping windows are never double-counted.
+        self.visible_fraction = exposed_fraction(self.rectangles, covers)
+        self.was_covered = should_pause(self.visible_fraction, self.was_covered)
+        return self.was_covered
 
     def shape(self, width, height, aspect, rectangles):
+        self.rectangles = rectangles
         x, y, vw, vh = fill_geometry(width, height, aspect)
         self.lib.XMoveResizeWindow(self.display, self.window, x, y, vw, vh)
         values = (Rect * len(rectangles))(*(Rect(rx - x, ry - y, rw, rh) for rx, ry, rw, rh in rectangles))
@@ -223,7 +271,14 @@ def main():
     parser.add_argument('--parent', type=int, required=True)
     parser.add_argument('--file', required=True)
     args = parser.parse_args()
-    C.CDLL(ctypes.util.find_library('X11')).XInitThreads()
+    xlib = C.CDLL(ctypes.util.find_library('X11'))
+    xlib.XInitThreads()
+    # A client can disappear between reading the stacking list and its geometry.
+    # Keep the callback alive for this process; such X11 races must not kill playback.
+    handler_type = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p)
+    xerror_handler = handler_type(lambda display, event: 0)
+    xlib.XSetErrorHandler.argtypes = [handler_type]
+    xlib.XSetErrorHandler(xerror_handler)
     # Only opt this isolated player into the OEM driver on the matching device.
     driver = Path('/sys/class/drm/card0/device/driver')
     if driver.exists() and driver.resolve().name == 'ftd330':
@@ -263,6 +318,7 @@ def main():
     pending = False
     loops = 0
     stats_timer = None
+    reported_fraction = -1.0
     failed = False
 
     def emit(**values):
@@ -284,20 +340,23 @@ def main():
         return True
 
     def update():
-        nonlocal playing, pending, stats_timer
+        nonlocal playing, pending, stats_timer, reported_fraction
         pending = False
         parent = x11.attributes(args.parent)
         covered = x11.covered()
         wanted = bool(ready and visible and not locked and parent and parent.map_state == 2 and not covered)
-        if wanted != playing:
+        state_changed = wanted != playing
+        if state_changed:
             playing = wanted
             player.pause(not wanted)
             if stats_timer is not None:
                 GLib.source_remove(stats_timer); stats_timer = None
             if wanted: stats_timer = GLib.timeout_add_seconds(5, report)
+        if state_changed or abs(x11.visible_fraction-reported_fraction)>0.005:
+            reported_fraction=x11.visible_fraction
             emit(event='state', state='starting' if not ready else 'playing' if wanted else 'paused',
                  loops=loops, visible=visible, mapped=parent.map_state if parent else None,
-                 locked=locked, covered=covered)
+                 locked=locked, covered=covered, visibleFraction=x11.visible_fraction)
         return False
 
     def schedule():

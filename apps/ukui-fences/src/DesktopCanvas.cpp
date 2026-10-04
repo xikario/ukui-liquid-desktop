@@ -1,6 +1,7 @@
 #include "LiquidDialog.h"
 #include "VideoWallpaperTrial.h"
 #include "VideoWallpaperPreview.h"
+#include "VideoWallpaperCache.h"
 #include "FencesSettingsWindow.h"
 #include "WidgetResizeSnap.h"
 #include "../../../shared/async-work/BackgroundTask.h"
@@ -811,7 +812,7 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
         traceStartup("widgets-ready");
         // Restore video only after the static fallback and desktop layout exist.
         // A failed file/driver is tried once per launch, without a restart loop.
-        QTimer::singleShot(500, this, [this] {
+        QTimer::singleShot(0, this, [this] {
             if (m_videoTrial) return; // an explicit user action takes precedence
             const QString path = QSettings().value("wallpaper/videoPath").toString();
             if (!path.isEmpty() && !startVideoWallpaperTrial(path))
@@ -1374,6 +1375,12 @@ void DesktopCanvas::videoWallpaperStateChanged()
         settings.sync();
         m_pendingVideoWallpaper.clear();
     }
+    if (state.value("active").toBool() && state.value("hardwareReady").toBool()
+        && state.value("source").toString()==QSettings().value("wallpaper/videoPath").toString()) {
+        if(!m_videoPreviewStore)m_videoPreviewStore=new VideoWallpaperPreview(this);
+        m_videoPreviewStore->hide();
+        m_videoPreviewStore->confirmFile(state.value("source").toString());
+    }
     if (state.value("state") == "error") m_pendingVideoWallpaper.clear();
     emit videoWallpaperTrialChanged();
 }
@@ -1381,6 +1388,7 @@ bool DesktopCanvas::startVideoWallpaperTrial(const QString &path)
 {
     m_pendingVideoWallpaper.clear();
     if(!m_videoTrial)m_videoTrial=new VideoWallpaperTrial(this,[this](const QImage &image){
+        if(m_wallpaperSourceImage==image)return; // Startup already prepared this cached poster.
         m_wallpaperSourceImage=image;m_wallpaper=QPixmap::fromImage(image);
         clearWallpaperCache();rebuildWallpaperCache();update();
         if(m_monitor)m_monitor->refreshWallpaperTheme();
@@ -1410,9 +1418,11 @@ void DesktopCanvas::loadWallpaper()
     m_wallpaperLoading = true; m_wallpaperReloadPending = false;
     const QString path = m_wallpaperPath;
     const auto mode = m_wallpaperMode;
+    const QString startupVideo = !m_initialWallpaperReady ? QSettings().value("wallpaper/videoPath").toString() : QString();
     const QSize target = mode == WallpaperMode::Tile || mode == WallpaperMode::Center ? QSize() : wallpaperDecodeSize();
     BackgroundTask::run(this, [=] {
-        QImage image;
+        QImage image=VideoWallpaperCache::poster(startupVideo);
+        if(!image.isNull())return qMakePair(image, false);
         if (mode != WallpaperMode::System && !path.isEmpty()) image = readWallpaperImage(path, nullptr, target);
         const bool custom = !image.isNull();
         if (!custom) image = loadSystemWallpaperImage(target);
@@ -2492,7 +2502,8 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
     auto finish = [=,&dlg](bool success, const QString &message) {
         *applying = false;*awaitingPlayback = false;
         apply->setEnabled(true);kindCombo->setEnabled(true);
-        if (success) { saveImage(); *baseline = draft(); }
+        if (success) { saveImage(); *baseline = draft();
+            if(kindCombo->currentData().toBool())videoFrames->confirmFile(videoPath->text()); }
         updatePreview();
         videoStatus->setText(message);
     };
