@@ -182,6 +182,13 @@ if(BUILD_TESTING)
                 TIMEOUT 30 LABELS "integration;ui;files;wallpaper"
                 ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1;QT_SCREEN_SCALE_FACTORS=1;QT_SCALE_FACTOR=${REFRESH_SCALE}")
         endforeach()
+        foreach(REORDER_SCALE 1 1.5 2)
+            add_test(NAME desktop_fence_reorder_${REORDER_SCALE}
+                COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2560x1600x24"
+                    ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --fence-reorder-only)
+            set_tests_properties(desktop_fence_reorder_${REORDER_SCALE} PROPERTIES TIMEOUT 30 LABELS "integration;ui;files"
+                ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1;QT_SCREEN_SCALE_FACTORS=1;QT_SCALE_FACTOR=${REORDER_SCALE}")
+        endforeach()
         add_test(NAME desktop_folder_drop_undo
             COMMAND ${XVFB_RUN_EXECUTABLE} -a ${DBUS_RUN_SESSION_EXECUTABLE} --
                 $<TARGET_FILE:fence-glass-test> --folder-drop-undo-only)

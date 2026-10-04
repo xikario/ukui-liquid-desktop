@@ -15,6 +15,7 @@
 #include <QContextMenuEvent>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
+#include <QDragLeaveEvent>
 #include <QDropEvent>
 #include <QDateTime>
 #include <QMimeData>
@@ -164,6 +165,12 @@ FenceWidget::FenceWidget(const QString &title,
         return next != target;
     });
     m_glassPointerEffect->setEnabled(m_liquidGlassEnabled);
+    m_reorderTimer=new QTimer(this);m_reorderTimer->setSingleShot(true);m_reorderTimer->setInterval(180);
+    connect(m_reorderTimer,&QTimer::timeout,this,[this]{
+        if(m_reorderTarget<0)return;
+        m_reorderPreview=reorderedIcons(m_reorderPaths,m_reorderTarget);
+        m_animateReorder=true;layoutIcons();m_animateReorder=false;
+    });
 }
 
 void FenceWidget::setLiquidGlassEnabled(bool enabled)
@@ -603,6 +610,7 @@ void FenceWidget::addItem(const DesktopItem &item)
 void FenceWidget::insertItem(const DesktopItem &item, int index)
 {
     if (hasItem(item.filePath)) return;
+    clearReorderPreview(false);
 
     auto *icon = new DesktopIcon(item, m_iconViewport ? m_iconViewport : this);
     if (auto *canvas=qobject_cast<DesktopCanvas *>(parentWidget()))
@@ -650,6 +658,7 @@ void FenceWidget::insertItem(const DesktopItem &item, int index)
                 urls->append(url);
         }
     });
+    connect(icon, &DesktopIcon::dragFinished,this,&FenceWidget::cancelIconReorder);
     connect(icon, &DesktopIcon::fileRemoved,
             this, [this](const QString &path) {
         removeItem(path);
@@ -714,51 +723,97 @@ int FenceWidget::dropInsertionIndex(const QPoint &pos) const
     return qBound(0, index, count);
 }
 
+QList<DesktopIcon *> FenceWidget::reorderedIcons(const QStringList &paths,int targetIndex) const
+{
+    QSet<QString> keys;
+    for(const auto &path:paths)keys.insert(normalizedStoredPath(path));
+    QList<DesktopIcon *> moving,remaining;
+    const int target=qBound(0,targetIndex,m_icons.size());
+    int adjusted=target;
+    for(int i=0;i<m_icons.size();++i) {
+        auto *icon=m_icons[i];
+        if(keys.contains(normalizedStoredPath(icon->item().filePath))) {
+            moving.append(icon);
+            if(i<target)--adjusted;
+        } else remaining.append(icon);
+    }
+    adjusted=qBound(0,adjusted,remaining.size());
+    for(auto *icon:moving)remaining.insert(adjusted++,icon);
+    return remaining;
+}
+
 bool FenceWidget::moveItemsToIndex(const QStringList &paths, int targetIndex)
 {
-    QSet<QString> normalizedPaths;
-    for (const QString &path : paths) {
-        const QString normalized = normalizedStoredPath(path);
-        if (!normalized.isEmpty())
-            normalizedPaths.insert(normalized);
-    }
-    if (normalizedPaths.isEmpty())
-        return false;
+    const auto order=reorderedIcons(paths,targetIndex);
+    if(order==m_icons)return false;
+    m_icons=order;layoutIcons();emit geometryChanged();return true;
+}
 
-    QList<DesktopIcon *> movingIcons;
-    int adjustedTarget = qBound(0, targetIndex, m_icons.size());
-    for (int i = 0; i < m_icons.size(); ++i) {
-        DesktopIcon *icon = m_icons[i];
-        if (!icon)
-            continue;
+QStringList FenceWidget::reorderPaths(const QMimeData *mime) const
+{
+    QStringList paths;
+    if(mime->hasFormat("application/x-kyfences-sysicon"))
+        paths.append(QString::fromUtf8(mime->data("application/x-kyfences-sysicon")).trimmed());
+    else if(mime->hasFormat(kInternalFileDragMime))
+        for(const auto &url:mime->urls())if(url.isLocalFile() && !paths.contains(url.toLocalFile()))paths.append(url.toLocalFile());
+    return paths;
+}
 
-        if (normalizedPaths.contains(normalizedStoredPath(icon->item().filePath))) {
-            movingIcons.append(icon);
-            if (i < adjustedTarget)
-                --adjustedTarget;
-        }
-    }
-    if (movingIcons.isEmpty())
-        return false;
-
-    const QList<DesktopIcon *> before = m_icons;
-    for (auto *icon : movingIcons)
-        m_icons.removeAll(icon);
-
-    adjustedTarget = qBound(0, adjustedTarget, m_icons.size());
-    for (auto *icon : movingIcons)
-        m_icons.insert(adjustedTarget++, icon);
-
-    if (m_icons == before)
-        return false;
-
-    layoutIcons();
-    emit geometryChanged();
+bool FenceWidget::acceptsIconReorder(const QMimeData *mime,QObject *source) const
+{
+    if(m_collapsed || m_embeddedWidget || !mime)return false;
+    if(source && !iconBelongsToThisFence(qobject_cast<DesktopIcon *>(source)))return false;
+    const auto paths=reorderPaths(mime);
+    if(paths.isEmpty())return false;
+    for(const auto &path:paths)if(!hasItem(path))return false;
     return true;
+}
+
+void FenceWidget::previewIconReorder(const QMimeData *mime,const QPoint &position)
+{
+    const auto paths=reorderPaths(mime);const int target=dropInsertionIndex(position);
+    if(paths==m_reorderPaths && target==m_reorderTarget)return;
+    m_reorderPaths=paths;m_reorderTarget=target;
+    if(m_reorderTimer)m_reorderTimer->start();
+}
+
+void FenceWidget::clearReorderPreview(bool animate)
+{
+    if(m_reorderTimer)m_reorderTimer->stop();
+    const bool hadPreview=!m_reorderPreview.isEmpty();
+    m_reorderPaths.clear();m_reorderPreview.clear();m_reorderTarget=-1;
+    if(hadPreview){m_animateReorder=animate;layoutIcons();m_animateReorder=false;}
+}
+
+void FenceWidget::cancelIconReorder(){clearReorderPreview(true);}
+
+void FenceWidget::commitIconReorder(const QMimeData *mime,const QPoint &position)
+{
+    const auto paths=reorderPaths(mime);const int target=dropInsertionIndex(position);
+    if(m_reorderTimer)m_reorderTimer->stop();
+    m_reorderPaths.clear();m_reorderPreview.clear();m_reorderTarget=-1;
+    m_animateReorder=true;
+    if(!moveItemsToIndex(paths,target))layoutIcons();
+    m_animateReorder=false;
+}
+
+void FenceWidget::leaveIconReorder()
+{
+    // Moving between the fence and a child icon is not leaving the fence.
+    QTimer::singleShot(0,this,[this]{
+        if(!rect().contains(mapFromGlobal(QCursor::pos())))cancelIconReorder();
+    });
+}
+
+void FenceWidget::dragLeaveEvent(QDragLeaveEvent *event)
+{
+    leaveIconReorder();
+    event->accept();
 }
 
 void FenceWidget::removeItem(const QString &filePath)
 {
+    clearReorderPreview(false);
     for (int i = 0; i < m_icons.size(); ++i) {
         if (sameStoredPath(m_icons[i]->item().filePath, filePath)) {
             m_selectedIcons.remove(m_icons[i]);
@@ -847,16 +902,22 @@ void FenceWidget::layoutIcons()
     }
 
     const QRect visibleRect(0, 0, width(), viewportH);
-    for (int i = 0; i < m_icons.size(); ++i) {
-        const int col = i % cols;
-        const int row = i / cols;
-        const QPoint pos(
-            leftInset + col * (iconW + ICON_GAP),
-            row * (iconH + ICON_GAP) - m_scrollOffset);
-        m_icons[i]->move(pos);
-        const QRect iconRect(pos, m_icons[i]->size());
-        m_icons[i]->setVisible(!m_collapsed &&
-                               visibleRect.intersects(iconRect));
+    const auto order=m_reorderPreview.isEmpty()?m_icons:m_reorderPreview;
+    for (int i = 0; i < order.size(); ++i) {
+        auto *icon=order[i];
+        const QPoint pos(leftInset + (i%cols)*(iconW+ICON_GAP),
+                         (i/cols)*(iconH+ICON_GAP)-m_scrollOffset);
+        auto *animation=icon->findChild<QPropertyAnimation *>("fenceReorderAnimation",Qt::FindDirectChildrenOnly);
+        if(animation)animation->stop();
+        if(m_animateReorder && icon->isVisible() && icon->pos()!=pos) {
+            if(!animation){animation=new QPropertyAnimation(icon,"pos",icon);animation->setObjectName("fenceReorderAnimation");}
+            animation->setDuration(160);animation->setEasingCurve(QEasingCurve::OutCubic);
+            animation->setStartValue(icon->pos());animation->setEndValue(pos);animation->start();
+        } else icon->move(pos);
+        bool moving=false;
+        if(!m_reorderPreview.isEmpty())for(const auto &path:m_reorderPaths)
+            moving|=sameStoredPath(path,icon->item().filePath);
+        icon->setVisible(!m_collapsed && !moving && visibleRect.intersects(QRect(pos,icon->size())));
     }
     update();
 }
@@ -1787,6 +1848,7 @@ void FenceWidget::showRenameDialog()
 
 void FenceWidget::sortItems(SortMode mode)
 {
+    clearReorderPreview(false);
     std::sort(m_icons.begin(), m_icons.end(),
         [mode](DesktopIcon *a, DesktopIcon *b) {
             const DesktopItem &ia = a->item();
@@ -2018,6 +2080,10 @@ void FenceWidget::contextMenuEvent(QContextMenuEvent *e)
 
 void FenceWidget::dragEnterEvent(QDragEnterEvent *e)
 {
+    if(acceptsIconReorder(e->mimeData(),e->source())) {
+        previewIconReorder(e->mimeData(),e->pos());e->setDropAction(Qt::MoveAction);e->accept();return;
+    }
+    clearReorderPreview(true);
     if (e->mimeData()->hasUrls() ||
         e->mimeData()->hasFormat("application/x-kyfences-sysicon")) {
         if (e->mimeData()->hasFormat(kInternalFileDragMime))
@@ -2028,6 +2094,10 @@ void FenceWidget::dragEnterEvent(QDragEnterEvent *e)
 
 void FenceWidget::dragMoveEvent(QDragMoveEvent *e)
 {
+    if(acceptsIconReorder(e->mimeData(),e->source())) {
+        previewIconReorder(e->mimeData(),e->pos());e->setDropAction(Qt::MoveAction);e->accept();return;
+    }
+    clearReorderPreview(true);
     if (e->mimeData()->hasUrls() ||
         e->mimeData()->hasFormat("application/x-kyfences-sysicon")) {
         if (e->mimeData()->hasFormat(kInternalFileDragMime))
@@ -2038,6 +2108,10 @@ void FenceWidget::dragMoveEvent(QDragMoveEvent *e)
 
 void FenceWidget::dropEvent(QDropEvent *e)
 {
+    if(acceptsIconReorder(e->mimeData(),e->source())) {
+        commitIconReorder(e->mimeData(),e->pos());e->setDropAction(Qt::MoveAction);e->accept();return;
+    }
+    clearReorderPreview(false);
     if (e->mimeData()->hasFormat("application/x-kyfences-sysicon")) {
         const QString path = QString::fromUtf8(
             e->mimeData()->data("application/x-kyfences-sysicon")).trimmed();

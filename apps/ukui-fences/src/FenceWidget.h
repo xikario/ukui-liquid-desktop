@@ -13,9 +13,12 @@ class PointerEffect;
 #include <QPainterPath>
 #include <QVector>
 #include <QImage>
+#include <QPointer>
 #include "DesktopItem.h"
 
 class DesktopIcon;
+class QMimeData;
+class QDragLeaveEvent;
 class QKeyEvent;
 class QWheelEvent;
 class QTimer;
@@ -75,6 +78,11 @@ public:
     void removeItem(const QString &filePath);
     bool hasItem(const QString &filePath) const;
     QList<DesktopItem> items() const;
+    bool acceptsIconReorder(const QMimeData *mime, QObject *source) const;
+    void previewIconReorder(const QMimeData *mime, const QPoint &position);
+    void commitIconReorder(const QMimeData *mime, const QPoint &position);
+    void cancelIconReorder();
+    void leaveIconReorder();
 
 signals:
     void geometryChanged();
@@ -101,6 +109,7 @@ protected:
     void contextMenuEvent(QContextMenuEvent *) override;
     void dragEnterEvent(QDragEnterEvent *)    override;
     void dragMoveEvent(QDragMoveEvent *)      override;
+    void dragLeaveEvent(QDragLeaveEvent *) override;
     void dropEvent(QDropEvent *)              override;
     void keyPressEvent(QKeyEvent *)           override;
     void resizeEvent(QResizeEvent *)          override;
@@ -129,6 +138,14 @@ private:
     int dropInsertionIndex(const QPoint &pos) const;
     bool moveItemsToIndex(const QStringList &paths, int targetIndex);
     void layoutIcons();
+    QList<DesktopIcon *> reorderedIcons(const QStringList &paths, int targetIndex) const;
+    QStringList reorderPaths(const QMimeData *mime) const;
+    void clearReorderPreview(bool animate);
+    QTimer *m_reorderTimer = nullptr;
+    QStringList m_reorderPaths;
+    QList<DesktopIcon *> m_reorderPreview;
+    int m_reorderTarget = -1;
+    bool m_animateReorder = false;
     void showRenameDialog();
     void drawHandles(QPainter &p);   // 编辑模式角点手柄
     void drawSnapGuides(QPainter &p); // 吸附对齐辅助线

@@ -1,5 +1,6 @@
 #include "LiquidDialog.h"
 #include "DesktopIcon.h"
+#include "FenceWidget.h"
 #include "DesktopCanvas.h"
 #include "FileClipboard.h"
 #include "MenuStyle.h"
@@ -14,6 +15,7 @@
 #include <QDrag>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
+#include <QDragLeaveEvent>
 #include <QDropEvent>
 #include <QEvent>
 #include <QMimeData>
@@ -844,6 +846,7 @@ void DesktopIcon::mouseMoveEvent(QMouseEvent *e)
         drag->setHotSpot(QPoint(qRound(preview.width()/preview.devicePixelRatioF()/2),
                                qRound(preview.height()/preview.devicePixelRatioF()/2)));
         drag->exec(Qt::MoveAction);
+        emit dragFinished();
         e->accept();
         return;
     }
@@ -863,6 +866,7 @@ void DesktopIcon::mouseMoveEvent(QMouseEvent *e)
                                qRound(preview.height()/preview.devicePixelRatioF()/2)));
     const Qt::DropAction action =
         drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction);
+    emit dragFinished();
     if (action == Qt::MoveAction) {
         QStringList draggedPaths;
         for (const QUrl &url : urls) {
@@ -1077,8 +1081,36 @@ void DesktopIcon::contextMenuEvent(QContextMenuEvent *e)
 
 // ── 回收站拖放支持 ─────────────────────────────────────
 
+namespace {
+FenceWidget *reorderFence(DesktopIcon *icon, const QMimeData *mime, QObject *source)
+{
+    for(QWidget *parent=icon->parentWidget();parent;parent=parent->parentWidget())
+        if(auto *fence=qobject_cast<FenceWidget *>(parent))
+            return fence->acceptsIconReorder(mime,source) ? fence : nullptr;
+    return nullptr;
+}
+bool dropsOntoSelf(DesktopIcon *icon,const QMimeData *mime)
+{
+    if(!mime->hasFormat(kInternalFileDragMime))return false;
+    const QFileInfo target(icon->item().filePath);
+    for(const auto &url:mime->urls()) {
+        const QFileInfo source(url.toLocalFile());
+        if(url.isLocalFile() && (source.absoluteFilePath()==target.absoluteFilePath()
+            || (!source.canonicalFilePath().isEmpty() && source.canonicalFilePath()==target.canonicalFilePath())))return true;
+    }
+    return false;
+}
+}
+
 void DesktopIcon::dragEnterEvent(QDragEnterEvent *e)
 {
+    if(auto *fence=reorderFence(this,e->mimeData(),e->source())) {
+        fence->previewIconReorder(e->mimeData(),fence->mapFromGlobal(mapToGlobal(e->pos())));
+        e->setDropAction(Qt::MoveAction);e->accept();return;
+    }
+    if(dropsOntoSelf(this,e->mimeData())) {
+        e->setDropAction(Qt::MoveAction);e->accept();return;
+    }
     if (m_item.isSystemIcon && m_item.filePath == QLatin1String("trash:///")) {
         if (e->mimeData()->hasUrls() &&
             !e->mimeData()->hasFormat("application/x-kyfences-sysicon")) {
@@ -1105,6 +1137,13 @@ void DesktopIcon::dragEnterEvent(QDragEnterEvent *e)
 
 void DesktopIcon::dragMoveEvent(QDragMoveEvent *e)
 {
+    if(auto *fence=reorderFence(this,e->mimeData(),e->source())) {
+        fence->previewIconReorder(e->mimeData(),fence->mapFromGlobal(mapToGlobal(e->pos())));
+        e->setDropAction(Qt::MoveAction);e->accept();return;
+    }
+    if(dropsOntoSelf(this,e->mimeData())) {
+        e->setDropAction(Qt::MoveAction);e->accept();return;
+    }
     if (m_item.isSystemIcon && m_item.filePath == QLatin1String("trash:///")) {
         if (e->mimeData()->hasUrls() &&
             !e->mimeData()->hasFormat("application/x-kyfences-sysicon")) {
@@ -1125,8 +1164,31 @@ void DesktopIcon::dragMoveEvent(QDragMoveEvent *e)
     e->ignore();
 }
 
+void DesktopIcon::dragLeaveEvent(QDragLeaveEvent *e)
+{
+    m_hovered=false;update();
+    for(QWidget *parent=parentWidget();parent;parent=parent->parentWidget()) {
+        if(auto *fence=qobject_cast<FenceWidget *>(parent)) {
+            fence->leaveIconReorder();
+            break;
+        }
+    }
+    e->accept();
+}
+
 void DesktopIcon::dropEvent(QDropEvent *e)
 {
+    if(auto *fence=reorderFence(this,e->mimeData(),e->source())) {
+        m_hovered=false;update();
+        // Qt can retain a child drop target while it slides away under the
+        // pointer. The last child-local drag position is then stale.
+        const QPoint global=e->source()?QCursor::pos():mapToGlobal(e->pos());
+        fence->commitIconReorder(e->mimeData(),fence->mapFromGlobal(global));
+        e->setDropAction(Qt::MoveAction);e->accept();return;
+    }
+    if(dropsOntoSelf(this,e->mimeData())) {
+        m_hovered=false;update();e->setDropAction(Qt::MoveAction);e->accept();return;
+    }
     m_hovered = false;
     QStringList paths;
     for (const auto &url : e->mimeData()->urls())

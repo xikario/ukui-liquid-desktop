@@ -54,6 +54,7 @@ signals:
     void activated(const DesktopItem &item);
     void undoRequested();
     void dragStarted(DesktopIcon *self, QList<QUrl> *urls = nullptr);
+    void dragFinished();
     void fileRemoved(const QString &filePath);
     void fileRenamed(const QString &oldPath, const QString &newPath);
     void clicked(DesktopIcon *self, Qt::KeyboardModifiers modifiers);
@@ -74,6 +75,7 @@ protected:
     void leaveEvent(QEvent *)  override;
     void dragEnterEvent(QDragEnterEvent *) override;
     void dragMoveEvent(QDragMoveEvent *)   override;
+    void dragLeaveEvent(QDragLeaveEvent *) override;
     void dropEvent(QDropEvent *)           override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 

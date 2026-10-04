@@ -2282,7 +2282,7 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
     auto *kindCombo = new QComboBox(&dlg);
     kindCombo->setObjectName("wallpaperKind");
     kindCombo->addItem("静态图片", false);
-    kindCombo->addItem("视频壁纸", true);
+    kindCombo->addItem("视频壁纸（实验性）", true);
     kindCombo->setCurrentIndex(savedVideo.isEmpty() ? 0 : 1);
     form->insertRow(0, "壁纸类型：", kindCombo);
     auto *videoPath = new QLineEdit(&dlg);
@@ -2301,6 +2301,9 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
     videoStatus->setObjectName("videoWallpaperStatus");
     videoStatus->setWordWrap(true);form->addRow("",videoStatus);
     videoStatus->setText("选择仅修改草稿；点击应用后保存并生效。视频按屏幕等比填满，保持原片帧率。");
+    auto *videoExperimental = new QLabel("实验性功能：视频壁纸会增加 CPU / GPU 占用、发热和风扇噪声，启动或切换时可能短暂显示静态画面。需要安静省电时，建议使用静态图片。", &dlg);
+    videoExperimental->setObjectName("videoWallpaperExperimentalNotice");
+    videoExperimental->setWordWrap(true);form->addRow("",videoExperimental);
     connect(videoChoose,&QPushButton::clicked,&dlg,[=,&dlg]{
         const auto path=LiquidDialog::getOpenFileName(dlg.window(),"选择视频壁纸",
             videoPath->text().isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
@@ -2397,6 +2400,7 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
     auto updatePreview = [=, &dlg] {
         updateDirty();
         const bool video = kindCombo->currentData().toBool();
+        videoExperimental->setVisible(video);
         videoButtons->setEnabled(video && !*applying);
         pathButtons->setEnabled(!video && !*applying);
         modeCombo->setEnabled(!video && !*applying);

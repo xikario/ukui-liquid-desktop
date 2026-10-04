@@ -65,6 +65,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "trash_undo_test.h"
 #include "trash_benchmark_test.h"
 #include "folder_drop_undo_test.h"
+#include "fence_reorder_test.h"
 #include "icon_damage_test.h"
 #include "smart_interaction_test.h"
 #include "review_async_test.h"
@@ -167,6 +168,8 @@ int main(int argc, char **argv)
         return runSmartInteractionTest(isolated.path());
     if (app.arguments().contains("--icon-damage-only"))
         return runIconDamageTest(isolated.path());
+    if (app.arguments().contains("--fence-reorder-only"))
+        return runFenceReorderTest(isolated.path());
     if (app.arguments().contains("--folder-drop-undo-only"))
         return runFolderDropUndoTest(isolated.path());
     if (app.arguments().contains("--trash-benchmark-only"))
