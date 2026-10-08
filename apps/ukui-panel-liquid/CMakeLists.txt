@@ -9,7 +9,7 @@ add_subdirectory(../../shared/liquid-popup liquid-popup)
 add_subdirectory(../../shared/liquid-glass liquid-glass)
 find_path(X11_INCLUDE_DIR X11/Xlib.h HINTS "${Qt5Core_DIR}/../../../../include" REQUIRED)
 find_library(X11_LIBRARY NAMES X11 libX11.so.6 REQUIRED)
-add_library(ukuiliquidpanel MODULE src/PanelStyle.cpp src/PanelController.cpp src/WallpaperBackdrop.cpp src/PanelNative.cpp)
+add_library(ukuiliquidpanel MODULE src/PanelStyle.cpp src/PanelController.cpp src/PanelBehavior.cpp src/WallpaperBackdrop.cpp src/PanelNative.cpp)
 target_include_directories(ukuiliquidpanel PRIVATE ${X11_INCLUDE_DIR})
 target_link_libraries(ukuiliquidpanel PRIVATE ukui-liquid-popup ukui-liquid-optics ${X11_LIBRARY})
 set_target_properties(ukuiliquidpanel PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/styles")
@@ -17,6 +17,12 @@ add_executable(liquid-panel-test tests/panel_test.cpp)
 target_include_directories(liquid-panel-test PRIVATE ${X11_INCLUDE_DIR})
 target_link_libraries(liquid-panel-test PRIVATE Qt5::Widgets ${X11_LIBRARY})
 add_dependencies(liquid-panel-test ukuiliquidpanel)
+add_executable(liquid-panel-behavior-test tests/behavior_test.cpp)
+# Export the fixture's native-class getters so the style exercises the same
+# symbol lookup it uses for the OEM status-notifier module.
+set_target_properties(liquid-panel-behavior-test PROPERTIES ENABLE_EXPORTS ON)
+target_link_libraries(liquid-panel-behavior-test PRIVATE Qt5::Widgets)
+add_dependencies(liquid-panel-behavior-test ukuiliquidpanel)
 add_executable(liquid-menu-style-test tests/menu_style_test.cpp)
 target_link_libraries(liquid-menu-style-test PRIVATE Qt5::Widgets)
 add_dependencies(liquid-menu-style-test ukuiliquidpanel)
@@ -31,12 +37,33 @@ target_include_directories(liquid-optics-test PRIVATE src)
 target_link_libraries(liquid-optics-test PRIVATE ukui-liquid-optics)
 add_test(NAME optics-fallback COMMAND liquid-optics-test)
 set_tests_properties(optics-fallback PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;UKUI_LIQUID_GLASS_NO_GL=1")
+add_executable(liquid-wallpaper-source-test tests/wallpaper_source_test.cpp src/WallpaperBackdrop.cpp)
+target_include_directories(liquid-wallpaper-source-test PRIVATE src)
+target_link_libraries(liquid-wallpaper-source-test PRIVATE Qt5::Widgets)
+add_test(NAME wallpaper-source COMMAND liquid-wallpaper-source-test)
+set_tests_properties(wallpaper-source PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Inspect actual X11 backing pixels: QWidget::grab() bypasses on-screen masks.
 find_program(XVFB_RUN_EXECUTABLE xvfb-run)
 find_program(DBUS_RUN_SESSION_EXECUTABLE dbus-run-session)
+find_program(GLIB_COMPILE_SCHEMAS_EXECUTABLE glib-compile-schemas)
+if(BUILD_TESTING AND GLIB_COMPILE_SCHEMAS_EXECUTABLE)
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-schemas")
+    configure_file(tests/schemas/org.ukui.panel.settings.gschema.xml
+        test-schemas/org.ukui.panel.settings.gschema.xml COPYONLY)
+    add_custom_target(panel-test-schemas
+        COMMAND ${GLIB_COMPILE_SCHEMAS_EXECUTABLE} "${CMAKE_BINARY_DIR}/test-schemas")
+    add_dependencies(liquid-panel-behavior-test panel-test-schemas)
+endif()
 if(BUILD_TESTING AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
     foreach(SCALE 1 1.25 1.5 2)
+        if(GLIB_COMPILE_SCHEMAS_EXECUTABLE)
+        add_test(NAME panel-behavior-${SCALE}
+            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2560x1440x24"
+                ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:liquid-panel-behavior-test> -style ukuiliquidpanel)
+        set_tests_properties(panel-behavior-${SCALE} PROPERTIES TIMEOUT 20
+            ENVIRONMENT "QT_PLUGIN_PATH=${CMAKE_BINARY_DIR}/plugins;QT_SCALE_FACTOR=${SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1;GSETTINGS_SCHEMA_DIR=${CMAKE_BINARY_DIR}/test-schemas")
+        endif()
         add_test(NAME panel-corners-${SCALE}
             COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2560x1440x24"
                 ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:liquid-panel-test> -style ukuiliquidpanel)

@@ -26,6 +26,11 @@
 #include <QPainterPath>
 #include <cstdlib>
 #include <QLibrary>
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 class UKUIPanel : public QWidget {
@@ -46,6 +51,7 @@ public:
 static void check(bool ok,const char *s){if(!ok){qCritical()<<s;std::exit(1);}qInfo()<<"PASS:"<<s;}
 int main(int argc,char **argv) {
     QTemporaryDir dir;qputenv("XDG_CONFIG_HOME",dir.path().toUtf8());
+    qputenv("XDG_DATA_HOME",(dir.path()+"/data").toUtf8());
     const QString wallpaper=dir.path()+"/wallpaper.png";
     auto replaceWallpaper=[&](QColor color){
         QImage image(100,100,QImage::Format_RGB32);image.fill(color);
@@ -276,7 +282,43 @@ int main(int argc,char **argv) {
         panel.resize(860,60);settle();
         check(!panel.mask().contains(QPoint(859,0)) && panel.mask().contains(QPoint(858,30)),"resize retains rounded ends");
         validatePhysicalShape();
-        panel.grab().save("panel-test.png");app.quit();
+        panel.grab().save("panel-test.png");
+        // Exercise real filesystem notifications, not only provider reload().
+        qunsetenv("UKUI_LIQUID_WALLPAPER");
+        QDir().mkpath(dir.path()+"/kyfences");QDir().mkpath(dir.path()+"/kylin");
+        {
+            QSaveFile layout(dir.path()+"/kyfences/layout.json");layout.open(QIODevice::WriteOnly);
+            layout.write(QJsonDocument(QJsonObject{{"wallpaperPath",wallpaper},{"wallpaperMode",0}}).toJson());
+            check(layout.commit(),"Fences static layout committed");
+        }
+        auto makeVideo=[&](const QString &name){
+            const QString path=dir.path()+name;QFile file(path);file.open(QIODevice::WriteOnly);file.write("video fixture");return path;
+        };
+        auto savePoster=[&](const QString &path,QColor color){
+            const QFileInfo video(path);
+            const QByteArray identity=video.canonicalFilePath().toUtf8()+'\n'+QByteArray::number(video.size())+'\n'
+                +QByteArray::number(video.lastModified().toMSecsSinceEpoch());
+            const auto folder=dir.path()+"/data/kylin/ukui-fences/video-previews/v2-"
+                +QString::fromLatin1(QCryptographicHash::hash(identity,QCryptographicHash::Sha256).toHex());
+            QDir().mkpath(folder);QImage image(160,90,QImage::Format_RGB32);image.fill(color);
+            QSaveFile file(folder+"/poster.png");check(file.open(QIODevice::WriteOnly),"poster file opened");
+            check(image.save(&file,"PNG") && file.commit(),"video poster atomically committed");
+        };
+        QSettings fences(dir.path()+"/kylin/ukui-fences.ini",QSettings::IniFormat);
+        const auto firstVideo=makeVideo("/first.mp4");
+        fences.setValue("wallpaper/videoPath",firstVideo);fences.sync();settle();
+        const QImage staticPixels=panel.grab().toImage();
+        savePoster(firstVideo,QColor("#e37430"));settle();
+        const QImage firstVideoPixels=panel.grab().toImage();
+        check(panel.property("liquidMaterialReady").toBool() && firstVideoPixels!=staticPixels,
+              "later creation of missing video cache automatically updates real panel pixels");
+        const auto secondVideo=makeVideo("/second.mp4");savePoster(secondVideo,QColor("#32c482"));
+        fences.setValue("wallpaper/videoPath",secondVideo);fences.sync();settle();
+        check(panel.property("liquidMaterialReady").toBool() && panel.grab().toImage()!=firstVideoPixels,
+              "video INI switch updates panel without any static layout change");
+        fences.remove("wallpaper/videoPath");fences.sync();settle();
+        check(panel.grab().toImage()==staticPixels,"disabling video automatically restores static panel material");
+        app.quit();
     });
     return app.exec();
 }

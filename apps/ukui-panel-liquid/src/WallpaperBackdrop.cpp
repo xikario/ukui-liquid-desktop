@@ -11,6 +11,21 @@
 #include <QDir>
 #include <QImageReader>
 #include <QDebug>
+#include <QSettings>
+#include <QCryptographicHash>
+
+static QString fencesVideoPoster(const QString &path) {
+    const QFileInfo video(path);
+    if(!video.isFile())return {};
+    // Match Fences' VideoWallpaperCache v2 identity. Use its explicit data
+    // directory: AppLocalDataLocation here belongs to the OEM panel process.
+    const QByteArray identity=video.canonicalFilePath().toUtf8()+'\n'
+        +QByteArray::number(video.size())+'\n'
+        +QByteArray::number(video.lastModified().toMSecsSinceEpoch());
+    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+        +"/kylin/ukui-fences/video-previews/v2-"
+        +QString::fromLatin1(QCryptographicHash::hash(identity,QCryptographicHash::Sha256).toHex())+"/poster.png";
+}
 
 static QString setting(const QString &schema,const QString &key) {
     QProcess process;process.start("gsettings",{ "get",schema,key });
@@ -23,6 +38,7 @@ static QString setting(const QString &schema,const QString &key) {
 bool WallpaperBackdrop::reload() {
     const QString config=QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
     QString path=qEnvironmentVariable("UKUI_LIQUID_WALLPAPER");
+    m_videoPath.clear();m_videoPoster.clear();
     int mode=0;
     if(path.isEmpty()) {
         // Fences owns the visible desktop on this installation, including its
@@ -34,6 +50,12 @@ bool WallpaperBackdrop::reload() {
             mode=root.value("wallpaperMode").toInt(5);
             if(mode!=5)path=root.value("wallpaperPath").toString();
             if(mode==5)mode=0; // Fences renders system wallpaper as Fill.
+        }
+        QSettings videoSettings(config+"/kylin/ukui-fences.ini",QSettings::IniFormat);
+        m_videoPath=videoSettings.value("wallpaper/videoPath").toString();
+        m_videoPoster=fencesVideoPoster(m_videoPath);
+        if(!m_videoPoster.isEmpty() && QFileInfo(m_videoPoster).isFile()) {
+            path=m_videoPoster;mode=0; // Video and its glass use the first frame, filled.
         }
         if(path.isEmpty()) {
             path=setting("org.mate.background","picture-filename");
@@ -47,8 +69,9 @@ bool WallpaperBackdrop::reload() {
     if(path.startsWith("file:"))path=QUrl(path).toLocalFile();
     QFileInfo info(path);
     const qint64 modified=info.exists()?info.lastModified().toMSecsSinceEpoch():0;
-    if(path==m_path && modified==m_modified && mode==m_mode && !m_source.isNull())return false;
-    m_path=path;m_modified=modified;m_mode=mode;
+    const qint64 size=info.isFile()?info.size():0;
+    if(path==m_path && modified==m_modified && size==m_size && mode==m_mode && !m_source.isNull())return false;
+    m_path=path;m_modified=modified;m_size=size;m_mode=mode;
     // Downloaded wallpaper may have a .png name but contain JPEG data. Match
     // Fences' content-based decoding so the visible desktop and optics agree.
     QImageReader reader(path);

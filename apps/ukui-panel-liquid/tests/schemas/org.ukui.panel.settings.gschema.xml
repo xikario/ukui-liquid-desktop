@@ -1,0 +1,6 @@
+<schemalist>
+  <schema id="org.ukui.panel.settings" path="/org/ukui/panel/settings/">
+    <key name="showtaskview" type="b"><default>true</default></key>
+    <key name="statusnotifierbutton" type="b"><default>false</default></key>
+  </schema>
+</schemalist>

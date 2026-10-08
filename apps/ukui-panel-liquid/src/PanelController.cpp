@@ -1,6 +1,7 @@
 #include "LiquidDialog.h"
 #include "../../../shared/async-work/BackgroundTask.h"
 #include "PanelController.h"
+#include "PanelBehavior.h"
 #include "LiquidMaterialPreparation.h"
 #include "LiquidPopup.h"
 #include <QApplication>
@@ -24,6 +25,12 @@
 #include <QPushButton>
 #include <QFileInfo>
 #include <QStyle>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMetaProperty>
+#include <QMetaMethod>
+#include <QLayout>
 #include "PanelNative.h"
 
 QString PanelController::configFile() const {
@@ -66,6 +73,31 @@ PanelController::PanelController(QObject *parent):QObject(parent) {
             if(i.key()->isVisible()) i.key()->update(i.value());
     });
     qApp->installEventFilter(this);
+    new PanelBehavior(this);
+    if(!qEnvironmentVariable("UKUI_LIQUID_PANEL_INSPECT").isEmpty()) {
+        QTimer::singleShot(6000,this,[]{
+            std::function<QJsonObject(QWidget *)> item=[&](QWidget *w){
+                QJsonObject data{{"class",w->metaObject()->className()},{"name",w->objectName()},
+                    {"visible",w->isVisible()},{"x",w->x()},{"y",w->y()},{"w",w->width()},{"h",w->height()},
+                    {"gx",w->mapToGlobal(QPoint()).x()},{"gy",w->mapToGlobal(QPoint()).y()},
+                    {"dpr",w->devicePixelRatioF()}};
+                QJsonArray methods,properties,children,layout;
+                for(int i=w->metaObject()->methodOffset();i<w->metaObject()->methodCount();++i)
+                    methods.append(QString::fromLatin1(w->metaObject()->method(i).methodSignature()));
+                for(const QMetaObject *m=w->metaObject();m && QByteArray(m->className())!="QWidget";m=m->superClass())
+                    for(int i=m->propertyOffset();i<m->propertyCount();++i) {
+                        auto p=m->property(i);properties.append(QJsonObject{{"name",p.name()},{"value",QJsonValue::fromVariant(p.read(w))}});
+                    }
+                for(auto *child:w->findChildren<QWidget *>(QString(),Qt::FindDirectChildrenOnly))children.append(item(child));
+                if(w->layout())for(int i=0;i<w->layout()->count();++i)
+                    if(auto *child=w->layout()->itemAt(i)->widget())layout.append(QJsonObject{{"class",child->metaObject()->className()},{"name",child->objectName()},{"visible",child->isVisible()}});
+                data.insert("methods",methods);data.insert("properties",properties);data.insert("children",children);data.insert("layout",layout);return data;
+            };
+            QJsonArray all;for(auto *w:QApplication::topLevelWidgets())if(w->inherits("UKUIPanel"))all.append(item(w));
+            QFile out(qEnvironmentVariable("UKUI_LIQUID_PANEL_INSPECT"));if(out.open(QIODevice::WriteOnly))out.write(QJsonDocument(all).toJson());
+            if(qEnvironmentVariableIsSet("UKUI_LIQUID_PANEL_INSPECT_QUIT"))qApp->quit();
+        });
+    }
     for(QWidget *w:QApplication::topLevelWidgets()) attach(w);
     if (qEnvironmentVariableIsSet("UKUI_LIQUID_PANEL_PROFILE")) {
         auto *stats=new QTimer(this);stats->setInterval(5000);
@@ -318,10 +350,19 @@ void PanelController::updateWallpaperWatchers() {
     if(!m_wallpaperWatcher.directories().isEmpty())m_wallpaperWatcher.removePaths(m_wallpaperWatcher.directories());
     if(!m_followWallpaper){m_wallpaperRefresh.stop();return;}
     const QString cfg=QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    for(const QString &path:QStringList{m_wallpaper.path(),cfg+"/kyfences/layout.json",cfg+"/dconf/user"}) {
+    const auto paths=m_wallpaper.sourceWatchPaths()+QStringList{
+        cfg+"/kyfences/layout.json",cfg+"/kylin/ukui-fences.ini",cfg+"/dconf/user"};
+    for(const QString &path:paths) {
         if(path.isEmpty())continue;
         if(QFile::exists(path))m_wallpaperWatcher.addPath(path);
-        const QString parent=QFileInfo(path).absolutePath();
+        QString parent=QFileInfo(path).absolutePath();
+        // A missing poster's cache directory may itself be created later.
+        // Watch the nearest existing ancestor, then rebind after its creation.
+        while(!QDir(parent).exists()) {
+            const QString next=QFileInfo(parent).absolutePath();
+            if(next==parent)break;
+            parent=next;
+        }
         // Atomic rename replaces the watched inode. Its directory survives.
         if(QDir(parent).exists() && !m_wallpaperWatcher.directories().contains(parent))m_wallpaperWatcher.addPath(parent);
     }
