@@ -55,6 +55,8 @@ public:
     };
 
     explicit SystemMonitor(QWidget *parent = nullptr);
+    static constexpr int COVERED_STAT_INTERVAL_SEC = 30;
+    int statIntervalMs() const;
     ~SystemMonitor() override;
 
     QWidget *createSettingsPage(QWidget *parent);
@@ -87,6 +89,7 @@ protected:
     void resizeEvent(QResizeEvent *) override;
 
 private:
+    void publishVideoCutout();
     friend struct SystemMonitorTestAccess;
     struct CpuTotals {
         quint64 total = 0;

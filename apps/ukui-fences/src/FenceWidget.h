@@ -1,4 +1,5 @@
 #pragma once
+#include <QElapsedTimer>
 class PointerEffect;
 #include "FileClipboard.h"
 
@@ -102,6 +103,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent *)            override;
+    void paintCollapseDrawer(QPainter &p);
     void mousePressEvent(QMouseEvent *)       override;
     void mouseMoveEvent(QMouseEvent *)        override;
     void mouseReleaseEvent(QMouseEvent *)     override;
@@ -188,7 +190,10 @@ private:
     bool     m_locked    = false;
     int      m_expandedH = 240;
     QPropertyAnimation *m_collapseAnimation = nullptr;
-    QPixmap m_collapseSnapshot;
+    QPixmap m_collapseSnapshot;   // panel and title, without icons or arrow
+    QPixmap m_collapseContent;    // icons/embedded widget, slid as the drawer moves
+    QPoint   m_collapseContentPos;
+    bool     m_hideCollapseArrow = false;
     qreal    m_iconScale = 1.0;
     int      m_scrollOffset = 0;
     int      m_contentHeight = 0;
@@ -202,6 +207,7 @@ private:
     PointerEffect *m_glassPointerEffect = nullptr;
     QPointF  m_glassPointer {-1000, -1000};
     qreal    m_glassHover = 0.0;
+    QElapsedTimer m_glassHoverClock;
     QWidget *m_iconViewport = nullptr;
     QWidget *m_embeddedWidget = nullptr;
 

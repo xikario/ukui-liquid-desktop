@@ -1,6 +1,7 @@
 #pragma once
 #include <QApplication>
 #include <QImage>
+#include <QElapsedTimer>
 #include <QMenu>
 #include <QPainterPath>
 #include <QPointer>
@@ -17,11 +18,20 @@ struct Theme {
     qreal tint = .42;
     qreal refraction = 3.5;
     qreal highlight = .35;
-    int openMs = 210;
+    int openMs = 150;
     int closeMs = 140;
     bool reducedMotion = false;
 };
 Theme &theme();
+// Shared motion tokens. Durations scale with the distance still to travel so
+// interrupted transitions never restart at full length.
+namespace Motion {
+constexpr int Fast = 135;    // small state changes: reorder, press feedback
+constexpr int Normal = 200;  // panels, overlays, refresh feedback
+constexpr int Slow = 360;    // large geometry such as expanding a fence
+// 0 when reduced motion is on; otherwise full*remaining, at least floorMs.
+int duration(int fullMs, qreal remaining = 1, int floorMs = 1);
+}
 using BackdropProvider = std::function<QImage(const QRect &, qreal)>;
 void setBackdropProvider(BackdropProvider provider);
 QImage captureBackdrop(const QRect &globalArea, qreal dpr);
@@ -68,6 +78,12 @@ public:
     explicit Shell(QWidget *parent = nullptr, bool tooltip = false);
     void setContent(QWidget *content);
     void openAt(const QRect &globalAnchor, Placement placement = Placement::Auto);
+    // Follow a moved anchor or new bubble size while open, keeping the
+    // requested side attached; no capture or motion restart.
+    void reanchor(const QRect &globalAnchor, QSize bubbleSize = QSize());
+    // Sample the screen for a later openAt while nothing transient (fading
+    // tooltips) covers it. openAt reuses a fresh sample for the same area.
+    void prime(const QRect &globalAnchor, Placement placement = Placement::Auto);
     void dismiss();
     qreal progress() const { return m_progress; }
     bool isClosing() const { return m_closing; }
@@ -76,6 +92,10 @@ protected:
     void hideEvent(QHideEvent *) override;
     void keyPressEvent(QKeyEvent *) override;
 private:
+    QRect placeFor(QSize size, const QRect &anchor, Placement placement, Placement *chosen) const;
+    void applyPlacement(const QRect &area, const QRect &anchor, Placement chosen);
+    void renderBubble(const QRect &area);
+    void updateContent();
     QWidget *m_content = nullptr;
     QVariantAnimation m_motion;
     QImage m_material;
@@ -84,6 +104,13 @@ private:
     qreal m_connectorY = -1;
     bool m_top = false;
     Placement m_placement = Placement::Auto;
+    Placement m_requested = Placement::Auto;
+    QRect m_anchor;
+    QImage m_backdrop;
+    QRect m_backdropArea;
+    QImage m_primed;
+    QRect m_primedArea;
+    QElapsedTimer m_primedAge;
     bool m_tooltip = false;
     bool m_closing = false;
 };

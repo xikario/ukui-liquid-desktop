@@ -15,6 +15,9 @@
 #include <cstdlib>
 using namespace LiquidPopup;
 void check(bool ok,const char *message){if(!ok){qCritical()<<message;std::exit(1);}}
+void waitForMotion(int milliseconds) {
+ QEventLoop loop;QTimer::singleShot(milliseconds,Qt::PreciseTimer,&loop,&QEventLoop::quit);loop.exec();
+}
 class GeometryChanges final : public QObject {
 public:
  int count=0;
@@ -103,6 +106,8 @@ int main(int argc,char **argv){
  check(leftShape.contains(QPointF(274,60)) && !leftShape.contains(QPointF(2,60)),
        "left-placed bubble connector faces the anchor on its right");
  Shell shell;shell.setContent(new QLabel("test"));shell.openAt(QRect(300,100,20,20));
+ Shell above;above.setContent(new QLabel("tray"));above.openAt(QRect(300,350,30,30),Placement::Above);
+ check(above.geometry().bottom()<350,"explicit upward popup placement is honored even with room below");above.hide();
  check(shell.isVisible()&&shell.progress()==1,"reduced motion opens immediately");shell.dismiss();check(!shell.isVisible(),"dismiss closes");
  Shell sideTip(nullptr,true);sideTip.setContent(new QLabel("rail tooltip"));
  sideTip.openAt(QRect(80,300,40,40),Placement::Right);
@@ -121,15 +126,73 @@ int main(int argc,char **argv){
        "left-edge tooltip switches direction and stays on screen clear of anchor");
  sideTip.dismiss();check(!sideTip.isVisible(),"side tooltip dismisses");
  QRect lastCapture;int captures=0;setBackdropProvider([&](const QRect &r,qreal d){lastCapture=r;++captures;QImage b(r.size(),QImage::Format_RGB32);b.fill(QColor(40,70,110));b.setDevicePixelRatio(d);return b;});
- // Reversing the same bubble must preserve progress and backdrop.
+ // Exercise completed cycles as well as reversal: a stopped QVariantAnimation
+ // retains its old time, and changing its range used to make the next duration
+ // collapse to 1 ms through synchronous valueChanged callbacks.
  theme().reducedMotion=false;
+ check(Motion::duration(Motion::Slow,.5)==180 && Motion::duration(Motion::Fast,0,1)==1 &&
+       Motion::duration(Motion::Slow,.1,120)==120,"motion durations scale with remaining distance");
+ check(Motion::Fast<Motion::Normal && Motion::Normal<Motion::Slow && theme().openMs<=Motion::Normal,
+       "motion tokens are ordered and popups open within the normal token");
+ theme().reducedMotion=true;
+ check(Motion::duration(Motion::Slow)==0,"reduced motion zeroes every token");
+ theme().reducedMotion=false;
+ const int savedOpenMs=theme().openMs,savedCloseMs=theme().closeMs;
+ theme().openMs=800;theme().closeMs=600;
+ Shell cycles;cycles.setContent(new QLabel("completed cycles"));const QRect cyclesAnchor(300,200,40,30);
+ for(int cycle=0;cycle<2;++cycle) {
+   cycles.openAt(cyclesAnchor);
+   check(cycles.isVisible() && cycles.progress()==0,"each completed cycle starts its opening at zero");
+   waitForMotion(40);
+   check(cycles.isVisible() && cycles.progress()>0 && cycles.progress()<1,
+         "first and later openings retain a visible intermediate frame");
+   waitForMotion(theme().openMs+60);
+   check(qFuzzyCompare(cycles.progress(),1.) && cycles.isVisible(),"opening completes at full size");
+   const int cycleCaptures=captures;
+   cycles.dismiss();
+   check(cycles.isClosing() && cycles.progress()==1,"completed opening starts closing at full size");
+   waitForMotion(40);
+   check(cycles.isVisible() && cycles.progress()>0 && cycles.progress()<1,
+         "first and later closings retain a visible intermediate frame");
+   waitForMotion(theme().closeMs+60);
+   check(!cycles.isVisible() && cycles.progress()==0,"closing completes and releases the popup");
+   check(captures==cycleCaptures,"closing never samples its own mapped popup");
+ }
+ // Reversing the same bubble must preserve progress and backdrop.
  Shell reversal;reversal.setContent(new QLabel("reversal"));const QRect reverseAnchor(200,200,40,30);
  reversal.openAt(reverseAnchor);
- QEventLoop animationWait;QTimer::singleShot(90,&animationWait,&QEventLoop::quit);animationWait.exec();
- reversal.dismiss();const qreal beforeReverse=reversal.progress();const int beforeCaptures=captures;
+ waitForMotion(90);reversal.dismiss();waitForMotion(20);
+ const qreal beforeReverse=reversal.progress();const int beforeCaptures=captures;
  reversal.openAt(reverseAnchor);
  check(beforeReverse>0 && reversal.progress()>=beforeReverse && captures==beforeCaptures,"same bubble reverses without progress reset or self-capture");
- reversal.hide();theme().reducedMotion=true;captures=0;
+ waitForMotion(40);
+ check(reversal.isVisible() && reversal.progress()>beforeReverse && reversal.progress()<1,
+       "quick reversal keeps a visible intermediate opening instead of jumping to the end");
+ reversal.dismiss();waitForMotion(20);
+ check(reversal.isVisible() && reversal.isClosing() && reversal.progress()>0,
+       "a second quick reversal keeps the closing animation alive");
+ reversal.openAt(reverseAnchor);waitForMotion(theme().openMs+60);
+ check(reversal.isVisible() && qFuzzyCompare(reversal.progress(),1.) && captures==beforeCaptures,
+       "repeated quick reversals settle with the original clean backdrop");
+ theme().openMs=savedOpenMs;theme().closeMs=savedCloseMs;
+ reversal.hide();theme().reducedMotion=true;
+ // An open upward bubble that loses a row must shrink toward its anchor.
+ Shell tray;tray.setContent(new QLabel("tray"));tray.resize(240,180);const QRect trayAnchor(400,500,34,34);
+ tray.openAt(trayAnchor,Placement::Above);const QRect tall=tray.geometry();const int trayCaptures=captures;
+ tray.reanchor(trayAnchor,QSize(240,120));
+ check(tray.geometry().height()==120 && tray.geometry().bottom()==tall.bottom() && captures==trayCaptures,
+       "shrinking an upward bubble keeps it on the anchor without recapturing");
+ tray.reanchor(trayAnchor,QSize(300,180));
+ check(tray.geometry().bottom()==tall.bottom() && tray.geometry().width()==300,"growing reattaches above the same anchor");
+ // Growing past the opening sample captured only the uncovered strip.
+ tray.hide();const int beforePrime=captures;tray.prime(trayAnchor,Placement::Above);const int primedCaptures=captures;
+ tray.openAt(trayAnchor,Placement::Above);
+ check(captures==primedCaptures && primedCaptures==beforePrime+1,"primed backdrop is reused instead of sampling covered screen");
+ tray.hide();tray.openAt(trayAnchor,Placement::Above);
+ check(captures==primedCaptures+1,"a primed sample is used only once");
+ tray.hide();tray.reanchor(trayAnchor,QSize(200,100));
+ check(!tray.isVisible() && tray.size()==QSize(200,100),"closed bubble only records its next size");
+ captures=0;
  QMenu menu;menu.setStyleSheet("QMenu { background:#202020;color:white;padding:8px; } QMenu::item {padding:7px 20px;} QMenu::item:selected{background:#406080;}");
  auto *action=menu.addAction("toggle");action->setCheckable(true);
  QPixmap actionPixmap(16,16);actionPixmap.fill(Qt::red);
@@ -169,6 +232,29 @@ int main(int argc,char **argv){
  check(external.isIconVisibleInMenu(),"destroying open menu restores external action");
  check(app.style()==originalAppStyle,"menu lifetime leaves application style unchanged");
  sub->popup(QPoint(300,50));app.processEvents();check(sub->property("liquidPopupSkin").toBool(),"native submenu adapted");sub->hide();
+ {
+   // A replayed outside press right after opening must not close the menu;
+   // a later one still dismisses it as usual.
+   QMenu guarded;guarded.addAction("first");guarded.addAction("second");
+   guarded.popup(QPoint(120,120));app.processEvents();
+   const QPoint outside=guarded.mapFromGlobal(guarded.geometry().bottomRight()+QPoint(40,40));
+   QMouseEvent early(QEvent::MouseButtonPress,outside,guarded.mapToGlobal(outside),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+   QApplication::sendEvent(&guarded,&early);app.processEvents();
+   check(guarded.isVisible(),"outside press within 250 ms of opening is ignored");
+   QMouseEvent earlyRelease(QEvent::MouseButtonRelease,outside,guarded.mapToGlobal(outside),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+   QApplication::sendEvent(&guarded,&earlyRelease);app.processEvents();
+   check(guarded.isVisible(),"the swallowed press's release is ignored as well");
+   waitForMotion(280);
+   QMouseEvent late(QEvent::MouseButtonPress,outside,guarded.mapToGlobal(outside),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+   QApplication::sendEvent(&guarded,&late);app.processEvents();
+   check(!guarded.isVisible(),"later outside presses still dismiss the menu");
+   QMenu tall;for(int i=0;i<200;++i)tall.addAction(QString("item %1").arg(i));
+   tall.popup(QPoint(40,40));app.processEvents();
+   const QRect screen=QGuiApplication::screenAt(tall.geometry().center())->availableGeometry();
+   check(tall.height()<=qRound(screen.height()*.8)+1,"long menus are capped at 80% of the screen");
+   check(tall.actionGeometry(tall.actions().constFirst()).width()>=tall.width()/2,"capped menus scroll in one column");
+   tall.hide();app.processEvents();
+ }
  // Launcher installation-source lookup changes this label after native Show.
  // Exercise both shrinking and growing without mapping a second popup.
  QMenu changing;

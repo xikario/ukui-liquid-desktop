@@ -31,7 +31,7 @@ case "${1:-}" in
     --autostart) method=activateOnSessionStartup ;;
 esac
 
-if call_running "$method"; then
+if [ "${1:-}" != --autostart ] && call_running "$method"; then
     exit 0
 fi
 

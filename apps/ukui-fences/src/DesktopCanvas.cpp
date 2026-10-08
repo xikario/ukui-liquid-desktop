@@ -12,6 +12,9 @@
 #include "CalendarDesklet.h"
 #include "ActivityRecorder.h"
 #include "DesktopCanvas.h"
+#include "GlassFinish.h"
+#include "Palette.h"
+#include "LiquidPopup.h"
 #include <QDebug>
 #include "FenceWidget.h"
 #include "FenceIconPicker.h"
@@ -578,52 +581,20 @@ QColor accentColorFromWallpaper(const QPixmap &wallpaper)
     if (wallpaper.isNull())
         return {};
 
-    const QImage image = wallpaper.toImage()
-        .scaled(56, 56, Qt::KeepAspectRatio, Qt::SmoothTransformation)
-        .convertToFormat(QImage::Format_RGB32);
-
-    double r = 0;
-    double g = 0;
-    double b = 0;
-    double weightSum = 0;
-
-    for (int y = 0; y < image.height(); ++y) {
-        for (int x = 0; x < image.width(); ++x) {
-            const QColor color = QColor::fromRgb(image.pixel(x, y));
-            int h = 0;
-            int s = 0;
-            int l = 0;
-            color.getHsl(&h, &s, &l);
-
-            if (s < 35 || l < 35 || l > 230)
-                continue;
-
-            const double lightnessWeight =
-                1.0 - qMin(1.0, qAbs(l - 145) / 145.0);
-            const double weight = (s / 255.0) * (0.35 + lightnessWeight);
-            r += color.red() * weight;
-            g += color.green() * weight;
-            b += color.blue() * weight;
-            weightSum += weight;
-        }
-    }
-
-    if (weightSum <= 0)
+    // Most populous usable swatch: near-black, near-white and grey cells are
+    // excluded by Palette::usableSwatch instead of averaging into mud.
+    const QColor primary = Palette::extract(wallpaper.toImage()).primary;
+    if (!primary.isValid())
         return {};
-
-    QColor accent(qRound(r / weightSum),
-                  qRound(g / weightSum),
-                  qRound(b / weightSum));
     int h = 0;
     int s = 0;
     int l = 0;
-    accent.getHsl(&h, &s, &l);
+    primary.getHsl(&h, &s, &l);
     if (h < 0)
         return {};
 
-    accent = QColor::fromHsl(h, qBound(95, s + 35, 225),
-                             qBound(80, l, 170), 90);
-    return accent;
+    return QColor::fromHsl(h, qBound(95, s + 35, 225),
+                           qBound(80, l, 170), 90);
 }
 
 
@@ -640,6 +611,9 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
     const QSettings appearanceSettings;
     m_fenceLiquidGlassEnabled = appearanceSettings.value("appearance/fenceLiquidGlass", false).toBool();
     m_wallpaperMagnetEnabled = appearanceSettings.value("appearance/wallpaperMagnetEnabled", true).toBool();
+    GlassFinish::setScrim(GlassFinish::scrimFromIndex(
+        appearanceSettings.value("appearance/glassScrim", int(GlassFinish::Scrim::Balanced)).toInt()));
+    LiquidPopup::theme().reducedMotion = appearanceSettings.value("appearance/reduceMotion", false).toBool();
     setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
     // UKUI's style treats the top 48 logical pixels of a window as a drag
     // handle and sends an X11 ButtonRelease when moving it. This is a desktop
@@ -914,28 +888,8 @@ void DesktopCanvas::refreshAll()
 
 void DesktopCanvas::activateOnSessionStartup()
 {
-    m_userHidden = false;
-
-    // UKUI 登录时 Peony、KWin 与桌面插件并非同时完成初始化。它们可能在
-    // Fences 首次映射之后重新建立桌面窗口层级，因此在会话稳定阶段分段
-    // 重申 DESKTOP 类型与同层顺序。用户主动切换系统桌面后 m_userHidden
-    // 会立即阻止剩余重试，不会抢回桌面。
-    const int delays[] = { 0, 900, 2200, 4500, 8000, 13000 };
-    for (const int delay : delays) {
-        QTimer::singleShot(delay, this, [this] {
-            if (m_userHidden || !m_initialWallpaperReady)
-                return;
-            if (m_smartSpace && m_smartSpace->edgeTransitionActive()) {
-                QTimer::singleShot(220, this, &DesktopCanvas::applyX11DesktopHints);
-                return;
-            }
-            show();
-            setWindowState(windowState() & ~Qt::WindowMinimized);
-            lockToDesktopGeometry();
-            setupAsDesktop();
-            applyX11DesktopHints();
-        });
-    }
+    // Wallpaper readiness maps once; DesktopLayerWatch handles later WM races.
+    showAndActivate();
 }
 
 void DesktopCanvas::quitApp()
@@ -1370,16 +1324,16 @@ void DesktopCanvas::videoWallpaperStateChanged()
     if (!m_pendingVideoWallpaper.isEmpty() && state.value("active").toBool()
         && state.value("hardwareReady").toBool()) {
         QSettings settings;
+        const auto previous=settings.value("wallpaper/videoPath",
+            settings.value("wallpaper/lastVideoPath")).toString();
+        if(!previous.isEmpty() && previous!=m_pendingVideoWallpaper)
+            settings.setValue("wallpaper/previousVideoPath",previous);
         settings.setValue("wallpaper/videoPath", m_pendingVideoWallpaper);
         settings.setValue("wallpaper/lastVideoPath", m_pendingVideoWallpaper);
         settings.sync();
+        VideoWallpaperCache::prune(m_pendingVideoWallpaper,
+            settings.value("wallpaper/previousVideoPath").toString());
         m_pendingVideoWallpaper.clear();
-    }
-    if (state.value("active").toBool() && state.value("hardwareReady").toBool()
-        && state.value("source").toString()==QSettings().value("wallpaper/videoPath").toString()) {
-        if(!m_videoPreviewStore)m_videoPreviewStore=new VideoWallpaperPreview(this);
-        m_videoPreviewStore->hide();
-        m_videoPreviewStore->confirmFile(state.value("source").toString());
     }
     if (state.value("state") == "error") m_pendingVideoWallpaper.clear();
     emit videoWallpaperTrialChanged();
@@ -1554,6 +1508,35 @@ QImage DesktopCanvas::wallpaperBackdrop(const QRect &globalArea, qreal dpr) cons
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
     painter.drawPixmap(-mapFromGlobal(globalArea.topLeft()), m_wallpaperCache);
     return image;
+}
+
+int DesktopCanvas::glassScrim() const
+{
+    return int(GlassFinish::scrim());
+}
+
+bool DesktopCanvas::reduceMotion() const
+{
+    return LiquidPopup::theme().reducedMotion;
+}
+
+void DesktopCanvas::setReduceMotion(bool reduce)
+{
+    if (LiquidPopup::theme().reducedMotion == reduce) return;
+    LiquidPopup::theme().reducedMotion = reduce;
+    QSettings settings;
+    settings.setValue("appearance/reduceMotion", reduce);
+}
+
+void DesktopCanvas::setGlassScrim(int preset)
+{
+    const auto scrim = GlassFinish::scrimFromIndex(preset);
+    if (scrim == GlassFinish::scrim()) return;
+    GlassFinish::setScrim(scrim);
+    QSettings settings;
+    settings.setValue("appearance/glassScrim", int(scrim));
+    for (auto *fence : m_fences) fence->invalidateGlassCache();
+    emit glassFinishChanged();
 }
 
 void DesktopCanvas::setFenceLiquidGlassEnabled(bool enabled)
@@ -2405,7 +2388,10 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
         pathButtons->setEnabled(!video && !*applying);
         modeCombo->setEnabled(!video && !*applying);
         preview->setVisible(!video);videoFrames->setVisible(video);
-        videoFrames->setFile(video ? videoPath->text() : QString());
+        if(video && QFileInfo(videoPath->text()).canonicalFilePath()
+                ==QSettings().value("wallpaper/videoPath").toString()
+                && !videoPath->text().isEmpty())videoFrames->confirmFile(videoPath->text());
+        else videoFrames->setFile(video ? videoPath->text() : QString());
         if (video) {
             pathLabel->setText("切换为静态图片后可编辑；视频不可用时使用已保存的图片。");
             return;
@@ -2819,6 +2805,12 @@ void DesktopCanvas::setMusicWidgetVisible(bool visible)
     }
     if (!m_musicWidget) return;
     if (visible) m_musicWidget->reveal(); else m_musicWidget->hide();
+}
+void DesktopCanvas::setDesktopCovered(bool covered)
+{
+    if (m_desktopCovered == covered) return;
+    m_desktopCovered = covered;
+    emit desktopCoveredChanged(covered);
 }
 bool DesktopCanvas::musicWidgetVisible() const { return m_musicWidget && m_musicWidget->isVisible(); }
 void DesktopCanvas::setCalendarWidgetVisible(bool visible)

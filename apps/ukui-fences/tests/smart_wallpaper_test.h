@@ -1,4 +1,5 @@
 #include "SmartSpaceWidget.h"
+#include "MusicDesklet.h"
 #include <QProcess>
 #include <QToolButton>
 
@@ -43,6 +44,7 @@ static int runSmartWallpaperTest(const QString &root)
     layoutWallpaper({}, 5);
     {
         DesktopCanvas canvas;
+        canvas.setMusicWidgetVisible(true);
         canvas.showSmartSpaceWidget();
         canvas.moveSmartSpace(100, 100);
         canvas.resizeSmartSpace(800, 500);
@@ -50,10 +52,18 @@ static int runSmartWallpaperTest(const QString &root)
         auto *smart = canvas.findChild<SmartSpaceWidget *>();
         check(smart != nullptr, "Smart Space created");
         if (!smart) return 1;
+        auto *music = canvas.findChild<MusicDesklet *>();
+        check(music != nullptr, "music card shares the wallpaper change fixture");
+        auto musicSample = [&] {
+            const QImage image = music ? music->material() : QImage();
+            return image.isNull() ? QColor() : image.pixelColor(image.width()/2,image.height()/2);
+        };
         check(isRed(sample(smart)), "initial material uses wallpaper A");
+        check(isRed(musicSample()), "initial music material uses wallpaper A");
         check(systemWallpaper(bluePath), "switch system wallpaper to B");
         settle(700);
         check(isBlue(sample(smart)), "system wallpaper event refreshes visible material without skin toggle");
+        check(isBlue(musicSample()), "system wallpaper event refreshes music without playback or manual refresh");
 
         auto *toggle = smart->findChild<QToolButton *>("smartThemeToggle");
         check(toggle != nullptr, "skin toggle available");
@@ -83,6 +93,7 @@ static int runSmartWallpaperTest(const QString &root)
         check(systemWallpaper(redPath), "system wallpaper differs from custom wallpaper");
         settle(500);
         check(isBlue(sample(smart)), "custom wallpaper remains authoritative");
+        check(isBlue(musicSample()), "music keeps the authoritative custom wallpaper");
         smart->grab().save(root + "/smart-wallpaper-final.png");
     }
     return failures ? 1 : 0;

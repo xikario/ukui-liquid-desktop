@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QDBusContext>
 #include <QMap>
+#include "Lyrics.h"
 class QNetworkAccessManager;
 class QNetworkReply;
 
@@ -46,6 +47,10 @@ public:
     qint64 length() const;
     qint64 position() const;
     double volume() const { return m_values.value("Volume",1.0).toDouble(); }
+    // Bumped once per distinct track/metadata; derived data keys off it.
+    int metadataRevision() const { return m_metadataRevision; }
+    const QVector<Lyrics::Line> &lyrics() const { return m_lyrics; }
+    QString currentLyric() const;
     bool progressActive() const { return m_progress.isActive(); }
     void setVisible(bool visible);
     void playPause();
@@ -57,6 +62,8 @@ public:
 signals:
     void changed();
     void clientsChanged();
+    // Debounced 120 ms after the metadata revision changes.
+    void metadataChanged();
 private slots:
     void propertiesChanged(const QString &, const QVariantMap &, const QStringList &);
     void seeked(qlonglong position);
@@ -75,8 +82,11 @@ private:
     void requestPosition();
     void updateCover();
     void decodeCover(const QByteArray &bytes);
+    void probeStatus(const QString &name, const QString &owner);
+    void noteMetadata();
+    int statusRank(const QString &name, const QString &status) const;
     QVariantMap metadata() const;
-    struct Instance { QString owner; quint64 started=0, order=0; bool ready=false; uint pid=0; MusicClientProfile launch; };
+    struct Instance { QString owner; quint64 started=0, order=0; bool ready=false; uint pid=0; MusicClientProfile launch; QString status; };
     QMap<QString,Instance> m_instances;
     QMap<QString,quint64> m_nameVersions;
     QList<MusicClientProfile> m_profiles;
@@ -84,7 +94,10 @@ private:
     QVariantMap m_values, m_rootValues;
     QImage m_cover;
     QElapsedTimer m_elapsed;
-    QTimer m_progress;
+    QTimer m_progress, m_metadataTimer;
+    QString m_metadataKey;
+    QVector<Lyrics::Line> m_lyrics;
+    int m_metadataRevision=0;
     QNetworkAccessManager *m_network;
     QPointer<QNetworkReply> m_coverReply;
     qint64 m_position=0;

@@ -1,8 +1,11 @@
 #include "VideoWallpaperTrial.h"
 #include "VideoWallpaperCache.h"
+#include "VideoWallpaperRegion.h"
 #include "../../../shared/async-work/BackgroundTask.h"
 #include <QApplication>
 #include <QChildEvent>
+#include <QDebug>
+#include <QDynamicPropertyChangeEvent>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -17,11 +20,18 @@ VideoWallpaperTrial::VideoWallpaperTrial(QWidget *canvas,std::function<void(cons
     :QObject(canvas),canvas(canvas),poster(poster),restore(restore),overlay(overlay) {
     geometryTimer.setSingleShot(true);geometryTimer.setInterval(16);
     connect(&geometryTimer,&QTimer::timeout,this,[this]{sendGeometry();});
-    canvas->installEventFilter(this);
-    for(auto *child:canvas->findChildren<QWidget *>(QString(),Qt::FindDirectChildrenOnly))child->installEventFilter(this);
+    watchWidget(canvas);
+    for(auto *child:canvas->findChildren<QWidget *>(QString(),Qt::FindDirectChildrenOnly))watchWidget(child);
     connect(&process,&QProcess::started,this,[this]{sendGeometry();});
     connect(&process,&QProcess::readyReadStandardOutput,this,[this]{receive();});
-    connect(&process,&QProcess::readyReadStandardError,this,[this]{process.readAllStandardError();});
+    connect(&process,&QProcess::readyReadStandardError,this,[this]{
+        errorOutput+=process.readAllStandardError();int newline;
+        while((newline=errorOutput.indexOf('\n'))>=0){
+            const auto line=errorOutput.left(newline);errorOutput.remove(0,newline+1);
+            if(line.startsWith("video X11 error "))qWarning().noquote()<<QString::fromUtf8(line);
+        }
+        if(errorOutput.size()>4096)errorOutput.clear();
+    });
     connect(&process,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this](int code,QProcess::ExitStatus){
         if(enabled){reason=QString("player exited (%1)").arg(code);stop();state="error";if(changed)changed();}
     });
@@ -68,7 +78,7 @@ void VideoWallpaperTrial::stop() {
         process.write("{\"command\":\"quit\"}\n");process.closeWriteChannel();
         if(!process.waitForFinished(1200)){process.terminate();if(!process.waitForFinished(1200)){process.kill();process.waitForFinished(500);}}
     }
-    output.clear();lastGeometry.clear();state="stopped";
+    output.clear();lastGeometry.clear();errorOutput.clear();state="stopped";
     if(wasEnabled && restore)restore();
     if(wasEnabled && changed)changed();
 }
@@ -91,25 +101,32 @@ void VideoWallpaperTrial::receive() {
         if(message.contains("state"))state=message.value("state").toString();
         if(message.contains("loops"))loops=message.value("loops").toInt();
         for(const char *key:{"decoder","sourceFps","decodedFps","displayFps","frameDrops",
-            "decoderDrops","delayedFrames","position","width","height","originalSource","visibleFraction","covered"})
+            "decoderDrops","delayedFrames","position","width","height","originalSource","visibleFraction","covered","battery"})
             if(message.contains(key))playback.insert(key,message.value(key));
         if(changed)changed();
     }
 }
 void VideoWallpaperTrial::refreshGeometry(){lastGeometry.clear();scheduleGeometry();}
+void VideoWallpaperTrial::watchWidget(QWidget *widget) {
+    if(watchedWidgets.contains(widget))return;
+    watchedWidgets.insert(widget);widget->installEventFilter(this);
+    connect(widget,&QObject::destroyed,this,[this](QObject *object){
+        watchedWidgets.remove(object);lastMasks.remove(object);scheduleGeometry();
+    });
+}
 void VideoWallpaperTrial::scheduleGeometry(){if(enabled&&!geometryTimer.isActive())geometryTimer.start();}
 void VideoWallpaperTrial::sendGeometry() {
     if(!enabled || process.state()!=QProcess::Running)return;
-    const qreal dpr=canvas->devicePixelRatioF();QRegion free(canvas->rect());
+    // Children publish device-pixel regions so fractional scaling keeps their
+    // antialiased outline instead of rounding it out to poster-coloured stairs.
+    const qreal dpr=canvas->devicePixelRatioF();
+    QRegion free(QRect(0,0,qRound(canvas->width()*dpr),qRound(canvas->height()*dpr)));
     for(auto *child:canvas->findChildren<QWidget *>(QString(),Qt::FindDirectChildrenOnly)){
         if(!child->isVisible() || child->isWindow())continue;
-        const auto mask=child->mask().isEmpty()?QRegion(child->rect()):child->mask();free-=mask.translated(child->pos());
+        free-=VideoWallpaperRegion::painted(child).translated(qRound(child->x()*dpr),qRound(child->y()*dpr));
     }
-    if(overlay)free-=overlay();QJsonArray rectangles;
-    for(const auto &rect:free){
-        const int left=qFloor(rect.left()*dpr),top=qFloor(rect.top()*dpr);
-        rectangles.append(QJsonArray{left,top,qCeil((rect.right()+1)*dpr)-left,qCeil((rect.bottom()+1)*dpr)-top});
-    }
+    if(overlay)free-=VideoWallpaperRegion::toDevice(overlay(),dpr);QJsonArray rectangles;
+    for(const auto &rect:free)rectangles.append(QJsonArray{rect.x(),rect.y(),rect.width(),rect.height()});
     const auto geometry=QJsonDocument(QJsonObject{{"command","geometry"},{"width",qRound(canvas->width()*dpr)},
         {"height",qRound(canvas->height()*dpr)},{"visible",canvas->isVisible()&&!canvas->isMinimized()},
         {"rects",rectangles}}).toJson(QJsonDocument::Compact)+'\n';
@@ -117,15 +134,19 @@ void VideoWallpaperTrial::sendGeometry() {
 }
 bool VideoWallpaperTrial::eventFilter(QObject *object,QEvent *event) {
     if(object==canvas && event->type()==QEvent::ChildPolished)
-        if(auto *child=qobject_cast<QWidget *>(static_cast<QChildEvent *>(event)->child()))child->installEventFilter(this);
+        if(auto *child=qobject_cast<QWidget *>(static_cast<QChildEvent *>(event)->child()))watchWidget(child);
     switch(event->type()){
+    case QEvent::DynamicPropertyChange:
+        if(static_cast<QDynamicPropertyChangeEvent *>(event)->propertyName()==VideoWallpaperRegion::propertyName)
+            scheduleGeometry();
+        break;
     case QEvent::Move:case QEvent::Resize:case QEvent::Show:case QEvent::Hide:
     case QEvent::WindowStateChange:scheduleGeometry();break;
     case QEvent::Paint: {
         // Painting digits/clocks does not change the video cutout. Masks may
         // change without a resize, so retain that check instead of dropping it.
         if(auto *widget=qobject_cast<QWidget *>(object)) {
-            const QRegion mask=widget->mask();
+            const QRegion mask=VideoWallpaperRegion::painted(widget);
             const QRegion extra=object==canvas && overlay ? overlay() : QRegion();
             if(!lastMasks.contains(object) || lastMasks.value(object)!=mask
                 || (object==canvas && lastOverlay!=extra)) {
@@ -136,7 +157,6 @@ bool VideoWallpaperTrial::eventFilter(QObject *object,QEvent *event) {
         }
         break;
     }
-    case QEvent::Destroy:lastMasks.remove(object);scheduleGeometry();break;
     default:break;
     }return false;
 }

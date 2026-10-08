@@ -10,6 +10,7 @@
 #include <QPainter>
 #include <QProxyStyle>
 #include <QScreen>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QStyleOption>
 #include <QToolTip>
@@ -185,6 +186,8 @@ public:
             }
             menu->setAttribute(Qt::WA_TranslucentBackground);
             menu->setAutoFillBackground(false);
+            originalMaximumHeight=menu->maximumHeight();
+            capHeight();
             updateItemMetrics();
             menu->ensurePolished();
     }
@@ -219,7 +222,7 @@ public:
             // QMenu adds the shortcut width separately. Reserve only the label,
             // shared icon column and gap here; padding keeps checks/arrows clear.
             const QString override=QStringLiteral(
-                "\nQMenu { background: transparent; border: 1px solid transparent; }\n"
+                "\nQMenu { background: transparent; border: 1px solid transparent; menu-scrollable: 1; }\n"
                 "QMenu::indicator { width: 14px; height: 14px; }\n"
                 "QMenu::item { padding: 6px 28px; margin: 2px 6px; min-width: %1px; }\n"
                 "QMenu::item:selected:enabled { background-color: palette(highlight); color: palette(highlighted-text); border-radius: 6px; }\n"
@@ -247,6 +250,16 @@ protected:
                 else if(!hover.isActive())hover.start(qMax(1,interval-int(hoverClock.elapsed())));
                 return true;
             }
+        } else if(e->type()==QEvent::MouseButtonPress && styled && openedClock.isValid()
+                  && openedClock.elapsed()<pressGuardMs
+                  && !menu->rect().contains(static_cast<QMouseEvent *>(e)->pos())) {
+            // The press that opened a context menu can be replayed as an
+            // outside click; drop it and its release instead of closing.
+            swallowRelease=true;
+            return true;
+        } else if(e->type()==QEvent::MouseButtonRelease && swallowRelease) {
+            swallowRelease=false;
+            return true;
         } else if(e->type()==QEvent::MouseButtonPress || e->type()==QEvent::MouseButtonRelease ||
                   e->type()==QEvent::KeyPress || e->type()==QEvent::Leave) {
             // Input results remain immediate, including a click between frames.
@@ -260,6 +273,7 @@ protected:
         }
         if(e->type()==QEvent::Show) {
             prepare();
+            openedClock.start();swallowRelease=false;
             // Show follows final placement and precedes native mapping.
             // Capture only the popup footprint, not an entire monitor.
             if(tip) tip->hide();
@@ -272,18 +286,27 @@ protected:
                 fade.stop();fade.setStartValue(.15);fade.setEndValue(1.0);
                 fade.setDuration(theme().openMs);fade.setEasingCurve(QEasingCurve::OutCubic);fade.start();
             }
-        } else if(e->type()==QEvent::Resize && styled && !material.isNull()) {
+        } else if(e->type()==QEvent::Resize && styled && menu->isVisible()) {
             // QAction text can change after Show (e.g. async package lookup).
             // Keep the alpha material and native silhouette at the same size.
             // Reuse the opening snapshot: capturing a mapped menu would feed
             // its own text/rim back into the glass and produce ghost images.
             // Qt constrains initial popup placement, but not a later resize.
+            // dbusmenu submenus are filled after Show: an empty menu maps at
+            // zero width, so its material was null and its mask a few pixels.
+            // That mask hid every lazily filled third-level menu.
             const QPoint bounded(
                 qBound(availableArea.left(),menu->x(),
                        qMax(availableArea.left(),availableArea.right()-menu->width()+1)),
                 qBound(availableArea.top(),menu->y(),
                        qMax(availableArea.top(),availableArea.bottom()-menu->height()+1)));
             if(menu->pos()!=bounded) menu->move(bounded);
+            if(backdropArea.width()<minimumBackdrop || backdropArea.height()<minimumBackdrop) {
+                // Nothing meaningful was captured while empty and masked away,
+                // so this snapshot cannot contain the menu's own text.
+                backdropArea=QRect(menu->mapToGlobal(QPoint()),menu->size());
+                backdrop=capture(backdropArea,menu->devicePixelRatioF());
+            }
             rebuildMaterial();
             menu->update();
         } else if(e->type()==QEvent::Paint) {
@@ -340,7 +363,16 @@ protected:
         menu->setMask(originalMask);
         menu->setAutoFillBackground(originalAutoFill);
         menu->setAttribute(Qt::WA_TranslucentBackground, originalTranslucent);
+        menu->setMaximumHeight(originalMaximumHeight);
+        openedClock.invalidate();swallowRelease=false;
         restoreIcons();
+    }
+    // Long menus scroll inside 80% of the screen instead of splitting into
+    // columns or touching the screen edges.
+    void capHeight() {
+        const QRect screen=screenRect(menu->isVisible()?menu->geometry().center():QCursor::pos());
+        if(screen.isEmpty())return;
+        menu->setMaximumHeight(qMin(originalMaximumHeight,qRound(screen.height()*.8)));
     }
     void restoreIcons() {
         // During QObject child destruction QMenu is no longer a QWidget.
@@ -371,9 +403,14 @@ private:
     QVariantAnimation fade;
     QTimer hover;
     QElapsedTimer hoverClock;
+    QElapsedTimer openedClock;
+    bool swallowRelease=false;
+    int originalMaximumHeight=QWIDGETSIZE_MAX;
+    static constexpr int pressGuardMs=250;
     std::unique_ptr<QMouseEvent> pendingHover;
     QByteArray metricsKey;
     bool deliveringHover=false;
+    static constexpr int minimumBackdrop=24;
 };
 class Filter final : public QObject {
 public:
@@ -451,6 +488,10 @@ QAction *execAt(QMenu &menu,QWidget *anchor) {
     return execAt(menu,QRect(anchor->mapToGlobal(QPoint()),anchor->size()));
 }
 Theme &theme(){return settings;}
+int Motion::duration(int fullMs, qreal remaining, int floorMs) {
+    if(settings.reducedMotion) return 0;
+    return qMax(qMax(1,floorMs),qRound(fullMs*qBound<qreal>(0,remaining,1)));
+}
 bool isEnabled(){return enabled;}
 bool drawMenuGlyph(QStyle::PrimitiveElement element,const QStyleOption *option,QPainter *p) {
     const bool check=element==QStyle::PE_IndicatorMenuCheckMark;
@@ -635,13 +676,7 @@ Shell::Shell(QWidget *parent,bool tooltip):QWidget(parent,tooltip?Qt::ToolTip:Qt
     setAttribute(Qt::WA_TransparentForMouseEvents,tooltip);
     setObjectName("liquidPopupShell");
     connect(&m_motion,&QVariantAnimation::valueChanged,this,[this](const QVariant &v){
-        m_progress=v.toReal();
-        if(m_content) {
-            m_content->setVisible(m_progress>.55 && !m_closing);
-            if(auto *effect=qobject_cast<QGraphicsOpacityEffect *>(m_content->graphicsEffect()))
-                effect->setOpacity(qBound(0.0,(m_progress-.55)/.4,1.0));
-        }
-        update();
+        m_progress=v.toReal();updateContent();update();
     });
     connect(&m_motion,&QVariantAnimation::finished,this,[this]{if(m_closing) hide();});
 }
@@ -650,63 +685,155 @@ void Shell::setContent(QWidget *content) {
     m_material={};
     m_content=content;if(content) {content->setGraphicsEffect(new QGraphicsOpacityEffect(content));content->setParent(this);content->adjustSize();resize(content->size()+QSize(40,48));}
 }
-void Shell::openAt(const QRect &anchor, Placement placement) {
-    const bool reversing=m_closing && m_motion.state()==QAbstractAnimation::Running;
-    m_motion.stop();m_closing=false;
-    Placement chosen=placement;
-    const QRect area=m_tooltip
-        ? placeTooltip(size(),anchor,screenRect(anchor.center()),placement,&chosen)
-        : place(size(),anchor,screenRect(anchor.center()));
-    const bool reverse = reversing && isVisible() && geometry() == area && !m_material.isNull()
-        && m_material.devicePixelRatio() == devicePixelRatioF()
-        && m_connectorX == anchor.center().x()-area.left()
-        && m_connectorY == anchor.center().y()-area.top();
+QRect Shell::placeFor(QSize size, const QRect &anchor, Placement placement, Placement *chosen) const {
+    *chosen=placement;
+    return (m_tooltip || placement!=Placement::Auto)
+        ? placeTooltip(size,anchor,screenRect(anchor.center()),placement,chosen)
+        : place(size,anchor,screenRect(anchor.center()));
+}
+void Shell::applyPlacement(const QRect &area, const QRect &anchor, Placement chosen) {
     setGeometry(area);
     if (!m_tooltip && chosen==Placement::Auto)
         chosen=area.top()>=anchor.bottom()?Placement::Below:Placement::Above;
     m_placement=chosen;
     m_top=chosen==Placement::Below;
+    m_anchor=anchor;
     m_connectorX=anchor.center().x()-area.left();
     m_connectorY=anchor.center().y()-area.top();
-    if (!reverse) m_material=renderMaterial(capture(area,devicePixelRatioF()),size(),devicePixelRatioF(),false,
-        QRectF(rect()).adjusted(8,12,-8,-12));
-    if(m_content) {m_content->setGeometry(20,24,width()-40,height()-48);m_content->hide();}
+    updateContent();
+}
+void Shell::renderBubble(const QRect &area) {
+    const qreal dpr=devicePixelRatioF();
+    QImage input=m_backdrop;
+    if(!input.isNull() && area!=m_backdropArea) {
+        const QRect source(QPoint(qRound((area.x()-m_backdropArea.x())*dpr),qRound((area.y()-m_backdropArea.y())*dpr)),
+                           QSize(qRound(area.width()*dpr),qRound(area.height()*dpr)));
+        input=m_backdrop.copy(source);input.setDevicePixelRatio(dpr);
+    }
+    m_material=renderMaterial(input,area.size(),dpr,false,QRectF(QPointF(),QSizeF(area.size())).adjusted(8,12,-8,-12));
+}
+void Shell::updateContent() {
+    if(!m_content) return;
+    // Content trails the bubble: it fades in once the glass has mostly
+    // formed and settles toward its final position from the anchor side.
+    const qreal start=m_closing?.6:.45;
+    const qreal shown=theme().reducedMotion?1.:qBound(0.0,(m_progress-start)/(1-start),1.0);
+    const qreal lift=6*(1-shown);
+    QPoint offset;
+    switch(m_placement) {
+    case Placement::Above: offset=QPoint(0,qRound(lift));break;
+    case Placement::Below: offset=QPoint(0,-qRound(lift));break;
+    case Placement::Right: offset=QPoint(-qRound(lift),0);break;
+    case Placement::Left: offset=QPoint(qRound(lift),0);break;
+    case Placement::Auto: break;
+    }
+    m_content->setGeometry(QRect(QPoint(20,24)+offset,QSize(width()-40,height()-48)));
+    if(auto *effect=qobject_cast<QGraphicsOpacityEffect *>(m_content->graphicsEffect())) effect->setOpacity(shown);
+    m_content->setVisible(shown>0);
+}
+void Shell::openAt(const QRect &anchor, Placement placement) {
+    const bool reversing=m_closing && m_motion.state()==QAbstractAnimation::Running;
+    m_motion.stop();m_closing=false;m_requested=placement;
+    Placement chosen;
+    const QRect area=placeFor(size(),anchor,placement,&chosen);
+    const bool reverse = reversing && isVisible() && geometry() == area && !m_material.isNull()
+        && m_material.devicePixelRatio() == devicePixelRatioF()
+        && m_connectorX == anchor.center().x()-area.left()
+        && m_connectorY == anchor.center().y()-area.top();
+    if (!reverse) {
+        constexpr qint64 primeLifeMs=8000;
+        const bool primed=!m_primed.isNull() && m_primedArea==area && m_primedAge.isValid()
+            && m_primedAge.elapsed()<primeLifeMs && qFuzzyCompare(m_primed.devicePixelRatio(),devicePixelRatioF());
+        m_backdropArea=area;m_backdrop=primed?m_primed:capture(area,devicePixelRatioF());
+    }
+    m_primed={};
     m_progress=theme().reducedMotion?1:(reverse?m_progress:0);
+    applyPlacement(area,anchor,chosen);
+    if (!reverse) renderBubble(area);
     show();
     // Some X11 window managers apply their own tooltip placement during map.
     // Re-assert our adaptive rectangle after mapping so side bubbles remain
     // attached to the requested rail edge instead of jumping below it.
     if (m_tooltip) setGeometry(area);
-    if(m_content && theme().reducedMotion) {static_cast<QGraphicsOpacityEffect *>(m_content->graphicsEffect())->setOpacity(1);m_content->show();}
     if(!theme().reducedMotion) {
-        m_motion.setStartValue(m_progress);m_motion.setEndValue(1.0);m_motion.setDuration(qMax(1,qRound(theme().openMs*(1-m_progress))));
-        m_motion.setEasingCurve(QEasingCurve::OutCubic);m_motion.start();
+        const qreal start=qBound<qreal>(0,m_progress,1);
+        const int duration=Motion::duration(theme().openMs,1-start);
+        // Decelerate only: a short, overshoot-free settle reads as responsive.
+        const QEasingCurve curve(QEasingCurve::OutCubic);
+        {
+            // A stopped animation retains its previous currentTime. Changing
+            // its range synchronously emits valueChanged at that old time;
+            // do not let those intermediate values rewrite the start/duration.
+            const QSignalBlocker block(&m_motion);
+            m_motion.setDuration(duration);m_motion.setEasingCurve(curve);
+            m_motion.setStartValue(start);m_motion.setEndValue(1.0);m_motion.setCurrentTime(0);
+        }
+        m_progress=start;updateContent();m_motion.start();
     }
+}
+void Shell::prime(const QRect &anchor, Placement placement) {
+    if(isVisible())return;
+    Placement chosen;
+    m_primedArea=placeFor(size(),anchor,placement,&chosen);
+    m_primed=capture(m_primedArea,devicePixelRatioF());
+    m_primedAge.start();
+}
+void Shell::reanchor(const QRect &anchor, QSize bubble) {
+    if(bubble.isEmpty()) bubble=size();
+    if(!isVisible()) {resize(bubble);return;}
+    Placement chosen;
+    const QRect area=placeFor(bubble,anchor,m_requested,&chosen);
+    if(area==geometry() && anchor==m_anchor) return;
+    const qreal dpr=devicePixelRatioF();
+    if(!m_backdropArea.contains(area)) {
+        // Only newly uncovered screen is captured. The mapped popup may be
+        // in that snapshot, so restore the old clean pixels where they overlap.
+        QImage merged=capture(area,dpr);
+        if(!merged.isNull() && !m_backdrop.isNull()) {
+            merged=merged.convertToFormat(QImage::Format_RGB32);merged.setDevicePixelRatio(dpr);
+            QPainter p(&merged);
+            p.drawImage(QPointF(m_backdropArea.topLeft()-area.topLeft()),m_backdrop);
+        }
+        m_backdrop=merged;m_backdropArea=area;
+    }
+    applyPlacement(area,anchor,chosen);
+    renderBubble(area);
+    update();
 }
 void Shell::dismiss() {
     if(!isVisible() || m_closing)return;
-    m_closing=true;if(m_content)m_content->hide();m_motion.stop();
+    m_closing=true;m_motion.stop();
     if(theme().reducedMotion){hide();return;}
-    m_motion.setStartValue(m_progress);m_motion.setEndValue(0.0);
-    m_motion.setDuration(qMax(1,qRound(theme().closeMs*m_progress)));
-    m_motion.setEasingCurve(QEasingCurve::InCubic);m_motion.start();
+    const qreal start=qBound<qreal>(0,m_progress,1);
+    const int duration=Motion::duration(theme().closeMs,start);
+    {
+        const QSignalBlocker block(&m_motion);
+        m_motion.setDuration(duration);m_motion.setEasingCurve(QEasingCurve::InCubic);
+        m_motion.setStartValue(start);m_motion.setEndValue(0.0);m_motion.setCurrentTime(0);
+    }
+    m_progress=start;updateContent();m_motion.start();
 }
-void Shell::hideEvent(QHideEvent *e){m_motion.stop();m_progress=0;m_material={};QWidget::hideEvent(e);}
+void Shell::hideEvent(QHideEvent *e){m_motion.stop();m_progress=0;m_closing=false;m_material={};m_backdrop={};QWidget::hideEvent(e);}
 void Shell::keyPressEvent(QKeyEvent *e){if(e->key()==Qt::Key_Escape)dismiss();else QWidget::keyPressEvent(e);}
 void Shell::paintEvent(QPaintEvent *) {
     QPainter p(this);p.setRenderHint(QPainter::Antialiasing);
     const QRectF body=QRectF(rect()).adjusted(8,12,-8,-12);
     QPointF origin;
     qreal connector = m_connectorX;
-    if (m_placement==Placement::Right || m_placement==Placement::Left) {
+    const bool side=m_placement==Placement::Right || m_placement==Placement::Left;
+    if (side) {
         connector=m_connectorY;
         origin=QPointF(m_placement==Placement::Right?body.left():body.right(),connector);
     } else {
         origin=QPointF(m_connectorX,m_top?body.top():body.bottom());
     }
-    p.translate(origin);p.scale(.93+.07*m_progress,.82+.18*m_progress);p.translate(-origin);
+    // Grow out of the connector from 94%, slightly more along the opening axis.
+    const qreal along=.94+.06*m_progress,across=.97+.03*m_progress;
+    p.translate(origin);
+    if(side) p.scale(along,across);else p.scale(across,along);
+    p.translate(-origin);
     const auto path=bubblePath(body,theme().radius,connector,m_placement);
-    p.setOpacity(m_progress);
+    p.setOpacity(qBound<qreal>(0,m_progress,1));
     p.setPen(Qt::NoPen);p.setBrush(QColor(0,0,0,25));
     for(int i=5;i>0;--i){p.save();p.translate(0,i);p.drawPath(path);p.restore();}
     p.save();p.setClipPath(path);p.drawImage(rect(),m_material);p.restore();

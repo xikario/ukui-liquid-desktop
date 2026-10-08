@@ -341,10 +341,10 @@ int main(int argc, char **argv)
         check(!first->grab().isNull(), "move invalidates position-dependent panel cache");
         first->setGeometry(geo);
         first->setCollapsed(true);
-        settle(240);
+        settle(420);
         check(!first->grab().isNull(), "collapsed widget renders");
         first->setCollapsed(false);
-        settle(240);
+        settle(420);
         first->setGeometry(geo);
         canvas.setFenceLiquidGlassEnabled(false);
         settle();

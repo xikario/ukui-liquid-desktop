@@ -6,8 +6,10 @@
 #include <QStandardPaths>
 #include <QImage>
 #include <QSaveFile>
+#include <QRegularExpression>
 
 namespace VideoWallpaperCache {
+inline void prune(const QString &current, const QString &previous);
 inline QString directory(const QString &path) {
     const QFileInfo file(path);
     if (!file.isFile()) return {};
@@ -27,5 +29,16 @@ inline bool saveImage(const QString &dir, const QString &name, const QImage &ima
     QSaveFile file(dir + '/' + name);
     if (!file.open(QIODevice::WriteOnly) || !image.save(&file, "PNG")) return false;
     return file.commit();
+}
+inline void prune(const QString &current, const QString &previous) {
+    const QString keep=directory(current), older=directory(previous);
+    if(keep.isEmpty())return;
+    QDir root(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/video-previews");
+    const QRegularExpression owned("^v2-[0-9a-f]{64}$");
+    for(const auto &entry:root.entryInfoList(QDir::Dirs|QDir::NoDotAndDotDot)) {
+        if(entry.isSymLink() || !owned.match(entry.fileName()).hasMatch()
+            || entry.absoluteFilePath()==keep || entry.absoluteFilePath()==older)continue;
+        QDir(entry.absoluteFilePath()).removeRecursively();
+    }
 }
 }

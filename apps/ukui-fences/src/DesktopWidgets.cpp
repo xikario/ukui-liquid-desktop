@@ -3,6 +3,11 @@
 #include "ActivityRecorder.h"
 #include "LiquidOpticsRenderer.h"
 #include "LiquidMaterialPreparation.h"
+#include "VideoWallpaperRegion.h"
+#include "GlassFinish.h"
+#include "Palette.h"
+#include <QDebug>
+#include <QElapsedTimer>
 #include "LiquidPopup.h"
 #include <QApplication>
 #include <QPainter>
@@ -24,7 +29,7 @@
 #include <climits>
 
 namespace {
-const QColor ink("#f4f7ff"), muted("#b8c6d9"), accent("#9ae8db");
+const QColor accent("#9ae8db");
 QString duration(qint64 ms) {
     const qint64 minutes = ms/60000;
     if(minutes < 1) return QStringLiteral("不足 1 分钟");
@@ -72,11 +77,13 @@ LiquidDesklet::LiquidDesklet(DesktopCanvas *canvas, const QString &key, const QS
         move(selected);
     }
     constrainToCanvas();
+    VideoWallpaperRegion::publish(this,VideoWallpaperRegion::rounded(QRectF(rect()),16,devicePixelRatioF()));
     m_materialTimer.setSingleShot(true); m_materialTimer.setInterval(100);
     connect(&m_materialTimer,&QTimer::timeout,this,[this]{if(isVisible())rebuildMaterial();});
     m_saveTimer.setSingleShot(true);m_saveTimer.setInterval(350);
     connect(&m_saveTimer,&QTimer::timeout,this,&LiquidDesklet::savePlacement);
     connect(canvas,&DesktopCanvas::wallpaperChanged,this,&LiquidDesklet::invalidateMaterial);
+    connect(canvas,&DesktopCanvas::glassFinishChanged,this,&LiquidDesklet::invalidateMaterial);
     connect(qApp,&QCoreApplication::aboutToQuit,this,&LiquidDesklet::savePlacement);
     m_ready=true;canvas->installEventFilter(this);
 }
@@ -172,10 +179,36 @@ void LiquidDesklet::rebuildMaterial() {
         const auto &theme=LiquidPopup::theme();
         m_optics->setOptics(theme.refraction,theme.tint,theme.highlight,1.0);
         m_optics->setPreparedWallpaper(material);
-        m_material=m_optics->renderPanel(QRect(QPoint(),size()),qMax(16.,theme.radius));
+        QElapsedTimer timer;timer.start();
+        const qreal radius=qMax(16.,theme.radius);
+        m_material=GlassFinish::withEdge(GlassFinish::withGrain(GlassFinish::withScrim(m_optics->renderPanel(QRect(QPoint(),size()),radius),GlassFinish::scrim())),
+            GlassFinish::squirclePath(QRectF(rect()),radius));
+        qInfo().noquote()<<QStringLiteral("[glass] %1 %2x%3 rebuilt in %4 ms").arg(m_key).arg(width()).arg(height()).arg(timer.elapsed());
+        if(!m_material.isNull())VideoWallpaperRegion::publish(this,VideoWallpaperRegion::coverage(m_material,devicePixelRatioF()));
+        QVector<QColor> cells=materialCells();
+        // Mid-grey glass (a scrimmed white wallpaper) cannot give 7:1 to any
+        // text colour; nudge the baked material toward the readable side once.
+        if(const qreal lift=Palette::toneLift(cells,Palette::PrimaryTextContrast+.05,nullptr);lift>0){
+            QColor text;Palette::toneLift(cells,Palette::PrimaryTextContrast+.05,&text);
+            QPainter tone(&m_material);tone.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+            QColor veil=text==QColor(Qt::white)?QColor(Qt::black):QColor(Qt::white);veil.setAlphaF(qMin<qreal>(1,lift+.004));
+            tone.fillRect(QRectF(rect()),veil);tone.end();
+            cells=materialCells();
+            qInfo().noquote()<<QStringLiteral("[glass] %1 tone lift %2 for 7:1 text").arg(m_key).arg(lift,0,'f',3);
+        }
+        m_ink=Palette::ensureContrast(QColor("#f4f7ff"),cells,Palette::PrimaryTextContrast);
+        m_muted=Palette::ensureContrast(QColor("#b8c6d9"),cells,Palette::SecondaryTextContrast);
         ++m_materialBuilds;setProperty("liquidMaterialBuilds",m_materialBuilds);setProperty("liquidOpticalGpu",m_optics->usedGpu());
         update();
     });
+}
+QVector<QColor> LiquidDesklet::materialCells() const {
+    // Once per material build: 12x8 averaged cells. The outer ring holds the
+    // baked rim highlight and uncovered corners, never text, so skip it.
+    QVector<QColor> cells;if(m_material.isNull())return cells;
+    const QImage small=m_material.scaled(12,8,Qt::IgnoreAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_ARGB32);
+    for(int y=1;y<small.height()-1;++y)for(int x=1;x<small.width()-1;++x){const QRgb px=small.pixel(x,y);if(qAlpha(px)>=200)cells.append(QColor(qRed(px),qGreen(px),qBlue(px)));}
+    return cells;
 }
 void LiquidDesklet::paintEvent(QPaintEvent *event) {
     if(!m_materialPending && (m_material.isNull() || m_material.devicePixelRatio()!=devicePixelRatioF()))rebuildMaterial();
@@ -190,7 +223,9 @@ void LiquidDesklet::paintEvent(QPaintEvent *event) {
         for(int i=0;i<3;++i)p.drawLine(QPointF(width()-12-i*4,height()-12),QPointF(width()-12,height()-12-i*4));
     }
 }
-void LiquidDesklet::resizeEvent(QResizeEvent *e){QWidget::resizeEvent(e);if(m_ready){arrangeControls();invalidateMaterial();m_saveTimer.start();}}
+void LiquidDesklet::resizeEvent(QResizeEvent *e){QWidget::resizeEvent(e);if(m_ready){
+    VideoWallpaperRegion::publish(this,VideoWallpaperRegion::rounded(QRectF(rect()),qMax(16.,LiquidPopup::theme().radius),devicePixelRatioF()));
+    arrangeControls();invalidateMaterial();m_saveTimer.start();}}
 void LiquidDesklet::moveEvent(QMoveEvent *e){QWidget::moveEvent(e);if(m_ready){invalidateMaterial();m_saveTimer.start();}}
 void LiquidDesklet::showEvent(QShowEvent *e){QWidget::showEvent(e);arrangeControls();if(m_materialDirty)rebuildMaterial();}
 void LiquidDesklet::mousePressEvent(QMouseEvent *e) {
@@ -244,7 +279,8 @@ ClockDesklet::ClockDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"clock","
         persist();updateControls();
     });
     connect(m_cancel,&QPushButton::clicked,this,[this]{m_countdown.cancel();persist();updateControls();});
-    m_tick.setInterval(1000);m_tick.setTimerType(Qt::CoarseTimer);connect(&m_tick,&QTimer::timeout,this,&ClockDesklet::tick);m_tick.start();
+    m_tick.setTimerType(Qt::CoarseTimer);connect(&m_tick,&QTimer::timeout,this,&ClockDesklet::tick);
+    connect(canvas,&DesktopCanvas::desktopCoveredChanged,this,[this]{syncTick();if(isVisible())update();});
     arrangeControls();updateControls();QTimer::singleShot(0,this,&ClockDesklet::tick);
 }
 ClockDesklet::~ClockDesklet(){persist();}
@@ -257,7 +293,20 @@ void ClockDesklet::tick(){
         QDBusConnection::sessionBus().asyncCall(message);QApplication::beep();
     }
     if(isVisible())update();
+    syncTick();
 }
+void ClockDesklet::syncTick(){
+    // The second hand only needs a timer while someone can see it. A hidden
+    // running countdown keeps one coarse wake-up at its deadline for the alert.
+    int interval=0;
+    if(isVisible() && !m_canvas->desktopCovered())interval=1000;
+    else if(m_countdown.state==CountdownState::Running)
+        interval=int(qBound<qint64>(1000,m_countdown.remaining(QDateTime::currentMSecsSinceEpoch()),3600000));
+    if(!interval){m_tick.stop();return;}
+    if(!m_tick.isActive() || m_tick.interval()!=interval)m_tick.start(interval);
+}
+void ClockDesklet::showEvent(QShowEvent *e){LiquidDesklet::showEvent(e);syncTick();}
+void ClockDesklet::hideEvent(QHideEvent *e){LiquidDesklet::hideEvent(e);syncTick();}
 void ClockDesklet::updateControls(){
     m_clockTab->setChecked(!m_timerPage);m_timerTab->setChecked(m_timerPage);
     const bool active=m_countdown.state==CountdownState::Running || m_countdown.state==CountdownState::Paused;
@@ -265,6 +314,7 @@ void ClockDesklet::updateControls(){
     for(auto *b:m_presets){b->setVisible(m_timerPage);b->setEnabled(!active);}
     m_start->setVisible(m_timerPage);m_cancel->setVisible(m_timerPage);m_cancel->setEnabled(active || m_countdown.state==CountdownState::Finished);
     m_start->setText(m_countdown.state==CountdownState::Running?"暂停":m_countdown.state==CountdownState::Paused?"继续":m_countdown.state==CountdownState::Finished?"再次开始":"开始");update();
+    syncTick();
 }
 void ClockDesklet::arrangeControls(){
     if(!m_clockTab)return;
@@ -329,7 +379,7 @@ void ClockDesklet::paintContent(QPainter &p){
     if(!m_timerPage){
         const qreal r=qMin(width()-54,height()-96)/2.;const QPointF c(width()/2.,50+r);
         paintGlassFace(p,c,r);
-        const QColor faceInk=m_faceLight?QColor("#182b3b"):ink;
+        const QColor faceInk=m_faceLight?QColor("#182b3b"):inkColor();
         const QColor faceAccent=m_faceLight?QColor("#146759"):accent;
         const QColor outline=m_faceLight?QColor(249,254,255,165):QColor(12,24,37,185);
         for(int i=0;i<60;++i){const qreal a=qDegreesToRadians(i*6.-90);const bool major=i%5==0;
@@ -352,14 +402,14 @@ void ClockDesklet::paintContent(QPainter &p){
         };
         const auto t=now.time();hand((t.hour()%12+t.minute()/60.)*30,r*.46,4.6,faceInk);hand((t.minute()+t.second()/60.)*6,r*.67,3.0,faceInk);hand(t.second()*6,r*.76,1.35,faceAccent);
         p.setPen(QPen(outline,1.));p.setBrush(faceAccent);p.drawEllipse(c,3.5,3.5);
-        text(p,QRectF(20,height()-43,width()-40,22),now.toString("HH:mm:ss"),18,ink,true);
-        text(p,QRectF(20,height()-23,width()-40,18),QLocale(QLocale::Chinese).toString(now.date(),"M月d日 dddd"),11,muted);
+        text(p,QRectF(20,height()-43,width()-40,22),now.toString("HH:mm:ss"),18,inkColor(),true);
+        text(p,QRectF(20,height()-23,width()-40,18),QLocale(QLocale::Chinese).toString(now.date(),"M月d日 dddd"),11,mutedColor());
     }else{
         const qreal r=qMin(width()-90,height()-130)/2.;const QPointF c(width()/2.,50+r);
         paintGlassFace(p,c,r);
-        const QColor faceInk=m_faceLight?QColor("#182b3b"):ink;
+        const QColor faceInk=m_faceLight?QColor("#182b3b"):inkColor();
         const QColor faceAccent=m_faceLight?QColor("#146759"):accent;
-        const QColor faceMuted=m_faceLight?QColor("#344c5e"):muted;
+        const QColor faceMuted=m_faceLight?QColor("#344c5e"):mutedColor();
         const QRectF ring(c-QPointF(r-3,r-3),QSizeF((r-3)*2,(r-3)*2));p.setBrush(Qt::NoBrush);p.setPen(QPen(m_faceLight?QColor(20,40,55,48):QColor(224,244,255,60),5));p.drawEllipse(ring);
         const qint64 left=m_countdown.remaining(now.toMSecsSinceEpoch());
         const qreal progress=qBound(0.,double(left)/m_countdown.durationMs,1.);
@@ -387,8 +437,8 @@ void ActivityDesklet::paintContent(QPainter &p){
     // NextKde's medium activity card pairs uptime and apps horizontally.
     const qreal margin=16,gap=16,leftWidth=(width()-2*margin-gap)*.46;
     const qreal rightX=margin+leftWidth+gap,rightWidth=width()-margin-rightX;
-    text(p,QRectF(margin,19,leftWidth,21),"开机 "+shortDuration(current.uptimeMs),13,ink,true,Qt::AlignLeft|Qt::AlignVCenter);
-    text(p,QRectF(margin,43,leftWidth,16),"最近 60 天",10,muted,false,Qt::AlignLeft|Qt::AlignVCenter);
+    text(p,QRectF(margin,19,leftWidth,21),"开机 "+shortDuration(current.uptimeMs),13,inkColor(),true,Qt::AlignLeft|Qt::AlignVCenter);
+    text(p,QRectF(margin,43,leftWidth,16),"最近 60 天",10,mutedColor(),false,Qt::AlignLeft|Qt::AlignVCenter);
     const qreal cellGap=3, cw=(leftWidth-9*cellGap)/10.;
     const qreal ch=qMin(cw,(height()-107-5*cellGap)/6.);
     m_cells.clear();
@@ -399,10 +449,10 @@ void ActivityDesklet::paintContent(QPainter &p){
         const QColor color=ms?QColor::fromRgbF(.31+.22*level,.60+.31*level,.63+.23*level,.42+.53*level):QColor(220,235,255,20);
         p.setPen(date==today?QPen(QColor(232,255,252,195),1):QPen(Qt::NoPen));p.setBrush(color);p.drawRoundedRect(cell,2,2);
     }
-    text(p,QRectF(rightX,19,rightWidth,21),"今日应用 · 前台停留",11,ink,true,Qt::AlignLeft|Qt::AlignVCenter);
+    text(p,QRectF(rightX,19,rightWidth,21),"今日应用 · 前台停留",11,inkColor(),true,Qt::AlignLeft|Qt::AlignVCenter);
     QList<AppDuration> apps=current.apps.values();std::sort(apps.begin(),apps.end(),[](const AppDuration &a,const AppDuration &b){return a.ms>b.ms;});
     const int count=qMin(qMin(8,(height()-88)/27),apps.size());
-    if(count==0)text(p,QRectF(rightX,59,rightWidth,56),m_recorder->isRecording()?"使用应用后\n显示统计":"应用记录已暂停",11,muted);
+    if(count==0)text(p,QRectF(rightX,59,rightWidth,56),m_recorder->isRecording()?"使用应用后\n显示统计":"应用记录已暂停",11,mutedColor());
     else for(int i=0;i<count;++i){
         const qreal y=49+i*27;const QString time=shortDuration(apps[i].ms);
         QFont small=font();small.setPixelSize(10);const qreal timeWidth=QFontMetrics(small).horizontalAdvance(time)+8;
@@ -410,12 +460,12 @@ void ActivityDesklet::paintContent(QPainter &p){
         const qreal nameWidth=qMax(16.,rightWidth-timeWidth-16);
         p.setPen(Qt::NoPen);p.setBrush(QColor(151,222,215,25));p.drawRoundedRect(QRectF(rightX,y,rightWidth,23),5,5);
         p.setBrush(QColor(126,229,211,39));p.drawRoundedRect(QRectF(rightX,y,rightWidth*double(apps[i].ms)/qMax<qint64>(1,apps.first().ms),23),5,5);
-        text(p,QRectF(rightX+6,y,nameWidth,23),fm.elidedText(apps[i].name,Qt::ElideRight,int(nameWidth)),11,ink,false,Qt::AlignLeft|Qt::AlignVCenter);
-        text(p,QRectF(width()-margin-timeWidth-5,y,timeWidth,23),time,10,muted,false,Qt::AlignRight|Qt::AlignVCenter);
+        text(p,QRectF(rightX+6,y,nameWidth,23),fm.elidedText(apps[i].name,Qt::ElideRight,int(nameWidth)),11,inkColor(),false,Qt::AlignLeft|Qt::AlignVCenter);
+        text(p,QRectF(width()-margin-timeWidth-5,y,timeWidth,23),time,10,mutedColor(),false,Qt::AlignRight|Qt::AlignVCenter);
     }
     const bool failed=!m_recorder->saveOk() || m_recorder->property("saveError").toBool();
     const QString footer=failed?"保存失败，请检查磁盘":m_recorder->isRecording()?"仅本机记录":"应用记录已暂停";
-    text(p,QRectF(margin,height()-35,width()-128,24),footer,10,failed?QColor("#ffbba7"):muted,false,Qt::AlignLeft|Qt::AlignVCenter);
+    text(p,QRectF(margin,height()-35,width()-128,24),footer,10,failed?QColor("#ffbba7"):mutedColor(),false,Qt::AlignLeft|Qt::AlignVCenter);
 }
 void ActivityDesklet::mouseMoveEvent(QMouseEvent *e){
     LiquidDesklet::mouseMoveEvent(e);QString tip;

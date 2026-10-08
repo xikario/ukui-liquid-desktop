@@ -7,7 +7,18 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include "music_multi_test.h"
+#include "Lyrics.h"
 static int runMusicTest(const QString &root){
+    {
+        const auto lines=Lyrics::parse("[ti:测试]\n[00:01.00][00:03.50]副歌\r\n[00:02]主歌\n[00:04.123]末行\n无时间戳");
+        check(lines.size()==4 && lines[0].us==1000000 && lines[0].text=="副歌" && lines[1].text=="主歌" && lines[2].us==3500000 && lines[2].text=="副歌"
+              && lines[3].us==4123000,"LRC lines with several timestamps expand into sorted entries");
+        check(Lyrics::lineAt(lines,500000)==-1 && Lyrics::lineAt(lines,2000000)==1 && Lyrics::lineAt(lines,3600000)==2 && Lyrics::lineAt(lines,99000000)==3,
+              "lyric lookup finds the line showing at a position");
+        const auto shifted=Lyrics::parse("[offset:+500]\n[00:02.00]早半秒");
+        check(shifted.size()==1 && shifted[0].us==1500000,"LRC offset tag shifts every line");
+        check(Lyrics::parse("纯文本歌词\n第二行").isEmpty(),"untimed text yields no timed lyrics");
+    }
     QSettings settings;settings.setValue("smartSpace/autoStart",false);settings.setValue("systemMonitor/autoStart",false);
     settings.setValue("desklets/clock/autoStart",false);settings.setValue("desklets/activity/autoStart",false);settings.sync();
     const QString name="org.mpris.MediaPlayer2.strawberry",object="/org/mpris/MediaPlayer2";
@@ -64,8 +75,17 @@ static int runMusicTest(const QString &root){
         });
         fixture.art=QString("http://127.0.0.1:%1/cover.png").arg(server.serverPort());fixture.notify({{"Metadata",fixture.metadata()}});settle(200);
         check(downloads==1 && !player->cover().isNull(),"remote artwork loads asynchronously");
+        const int revision=player->metadataRevision();
         fixture.notify({{"Metadata",fixture.metadata()}});settle(100);
         check(downloads==1,"unchanged artwork is reused across metadata updates");
+        check(player->metadataRevision()==revision,"identical metadata resends keep the metadata revision");
+        int rebuilds=0;auto counter=QObject::connect(player,&MprisPlayer::metadataChanged,[&]{++rebuilds;});
+        for(const char *track:{"/track/burst1","/track/burst2","/track/burst3"}){fixture.track=track;fixture.notify({{"Metadata",fixture.metadata()}});settle(15);}
+        fixture.lyrics="[00:01.00][00:03.50]副歌\n[00:02]主歌";fixture.notify({{"Metadata",fixture.metadata()}});
+        check(waitMusic([&]{return rebuilds>0;}) && player->metadataRevision()>=revision+4,"each distinct metadata bumps the revision");
+        settle(200);
+        check(rebuilds==1 && player->lyrics().size()==3 && player->lyrics().at(1).text=="主歌","metadata bursts collapse into one debounced lyrics rebuild");
+        QObject::disconnect(counter);fixture.lyrics.clear();
         fixture.art=QUrl::fromLocalFile(root+"/cover.png").toString();fixture.notify({{"Metadata",fixture.metadata()}});settle(80);
         fixture.enabled=false;fixture.notify({{"CanControl",false}});settle(80);
         check(!play->isEnabled() && !seek->isEnabled() && !volume->isEnabled(),"player capability changes disable unsupported controls");

@@ -180,7 +180,7 @@ void CalendarDesklet::updateList(){
     m_list->verticalScrollBar()->setValue(scroll);
 }
 void CalendarDesklet::paintContent(QPainter &p){
-    if(!m_list)return;const QColor ink("#f4f7ff"),muted("#bacbd8"),accent("#9ae8db");
+    if(!m_list)return;const QColor ink=inkColor(),muted=mutedColor(),accent("#9ae8db");
     text(p,QRectF(12,66,width()*.29,55),QString::number(m_selected.day()),42,ink,true);
     text(p,QRectF(12,120,width()*.29,22),QLocale(QLocale::Chinese).dayName(m_selected.dayOfWeek(),QLocale::LongFormat),12,muted);
     const auto selected=m_dates.value(m_selected.toString(Qt::ISODate)).toObject();

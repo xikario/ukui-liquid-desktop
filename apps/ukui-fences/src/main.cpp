@@ -10,6 +10,9 @@
 #include <QStandardPaths>
 #include <QSystemTrayIcon>
 #include <QStringList>
+#include <QPointer>
+#include "VideoWallpaperCache.h"
+#include <QSettings>
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QDBusMessage>
@@ -17,6 +20,7 @@
 #include "StartupWallpaperCover.h"
 #include "MenuStyle.h"
 #include "DesktopLayerWatch.h"
+#include "DesktopCoverWatch.h"
 
 namespace {
 
@@ -159,25 +163,29 @@ int main(int argc, char *argv[])
     if (args.contains("--quit"))
         return 0;
 
-    StartupWallpaperCover cover;
+    QPointer<StartupWallpaperCover> cover;
     if(!args.contains("--hide")) {
-        cover.show();
-        app.processEvents(QEventLoop::ExcludeUserInputEvents);
+        const QImage poster=VideoWallpaperCache::poster(QSettings().value("wallpaper/videoPath").toString());
+        if(!poster.isNull()) {
+            cover=new StartupWallpaperCover(poster);
+            if(!cover->showPrepared()){delete cover.data();cover=nullptr;}
+        }
     }
     DesktopCanvas canvas;
-    QObject::connect(&canvas,&DesktopCanvas::desktopVisibilityChanged,&cover,[&]{
-        // The mapped canvas already carries the cached video poster.
-        QTimer::singleShot(0,&cover,&QWidget::hide);
-    });
-    if(args.contains("--hide"))cover.hide();
+    if(cover) {
+        cover->watchCanvas(&canvas);
+        QObject::connect(&canvas,&DesktopCanvas::desktopVisibilityChanged,&canvas,[&]{
+            if(cover && !canvas.isVisible())cover->deleteLater();
+        });
+    }
     if (!bus.registerObject(kDbusPath, &canvas, QDBusConnection::ExportScriptableSlots)) {
         qCritical() << "Cannot register desktop D-Bus object:" << bus.lastError().message();
         bus.unregisterService(kDbusService);
         return 1;
     }
     setupTrayIcon(canvas, icon);
-    DesktopLayerWatch layer(canvas.winId(),[&]{return canvas.fencesDesktopVisible();},
-        [&]{canvas.showAndActivate();});
+    DesktopLayerWatch layer(canvas.winId(),[&]{return canvas.fencesDesktopVisible();});
+    DesktopCoverWatch coverWatch(canvas.winId(),[&](bool covered){canvas.setDesktopCovered(covered);});
 
     if (args.contains("--settings")) {
         canvas.showAndActivate();
@@ -200,5 +208,6 @@ int main(int argc, char *argv[])
     else
         canvas.showAndActivate();
 
-    return app.exec();
+    const int result=app.exec();
+    delete cover.data();return result;
 }

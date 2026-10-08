@@ -1,5 +1,7 @@
 #include "MusicDesklet.h"
 #include "MprisPlayer.h"
+#include "DesktopCanvas.h"
+#include "Palette.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
@@ -48,7 +50,7 @@ MusicDesklet::MusicDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"music","
     for(auto *b:{m_previous,m_play,m_next})b->setIconSize(QSize(20,20));
     m_seek=new QSlider(Qt::Horizontal,this);m_seek->setObjectName("musicSeek");m_seek->setRange(0,1000);m_seek->setAccessibleName("播放进度");
     m_volume=new QSlider(Qt::Horizontal,this);m_volume->setObjectName("musicVolume");m_volume->setRange(0,100);m_volume->setAccessibleName("音量");
-    for(auto *slider:{m_seek,m_volume})slider->setStyleSheet("QSlider::groove:horizontal{height:4px;background:rgba(240,250,255,35);border-radius:2px;}QSlider::sub-page:horizontal{background:#9ae8db;border-radius:2px;}QSlider::handle:horizontal{background:#e6fff7;width:10px;margin:-3px 0;border-radius:5px;}QSlider:disabled{color:#718086;}");
+    applyArtPalette();
     connect(m_previous,&QPushButton::clicked,m_player,&MprisPlayer::previous);
     connect(m_play,&QPushButton::clicked,m_player,&MprisPlayer::playPause);
     connect(m_next,&QPushButton::clicked,m_player,&MprisPlayer::next);
@@ -67,11 +69,15 @@ MusicDesklet::MusicDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"music","
         m_notesFrameSeconds=m_notesClock.elapsed()/1000.;
         update(previous | notesDamage(m_notesFrameSeconds));
     });
+    connect(canvas,&DesktopCanvas::desktopCoveredChanged,this,[this](bool covered){
+        if(isVisible())m_player->setVisible(!covered);
+        syncNotesAnimation();
+    });
     arrangeControls();updateControls();
 }
 QRect MusicDesklet::notesArea() const {return QRect(6,4,width()-12,qMax(1,height()-54));}
 void MusicDesklet::syncNotesAnimation() {
-    const bool animate=isVisible() && m_player->connected() && m_player->playing();
+    const bool animate=isVisible() && !m_canvas->desktopCovered() && m_player->connected() && m_player->playing();
     if (animate && !m_notesTimer.isActive()) {
         m_notesFrameSeconds=0;
         m_notesClock.start();
@@ -132,8 +138,29 @@ void MusicDesklet::arrangeControls(){
     m_open->setGeometry(236,68,width()-252,30);
     m_seek->setGeometry(16,height()-46,width()-150,18);m_volume->setGeometry(52,height()-24,width()-114,16);
 }
+void MusicDesklet::applyArtPalette(){
+    // Recomputed only when the decoded cover changes (keyed by cacheKey).
+    const QImage cover=m_player?m_player->cover():QImage();
+    const qint64 key=cover.isNull()?0:cover.cacheKey();
+    if(key==m_artKey)return;
+    m_artKey=key;
+    QColor accent("#9ae8db");
+    const Palette::Colors colors=Palette::extract(cover);
+    if(colors.isValid()){
+        // Prefer the secondary swatch when the primary is the cover's backdrop
+        // tone; either way keep 3:1 against the glass (WCAG non-text contrast).
+        accent=colors.secondary.isValid() && Palette::luminance(colors.secondary)>Palette::luminance(colors.primary)?colors.secondary:colors.primary;
+        accent=Palette::ensureContrast(accent,materialCells().isEmpty()?QVector<QColor>{QColor("#344257")}:materialCells(),3.0);
+    }
+    m_artAccent=accent;
+    const QColor handle=Palette::mix(accent,Qt::white,.7);
+    const QString sheet=QString("QSlider::groove:horizontal{height:4px;background:rgba(240,250,255,35);border-radius:2px;}QSlider::sub-page:horizontal{background:%1;border-radius:2px;}QSlider::handle:horizontal{background:%2;width:10px;margin:-3px 0;border-radius:5px;}QSlider:disabled{color:#718086;}")
+        .arg(accent.name(),handle.name());
+    for(auto *slider:{m_seek,m_volume})slider->setStyleSheet(sheet);
+}
 void MusicDesklet::updateControls(){
     m_updating=true;
+    applyArtPalette();
     m_play->setIcon(transportIcon(m_player->playing()?1:0));
     m_play->setToolTip(m_player->playing()?"暂停":"播放");m_play->setAccessibleName(m_play->toolTip());
     m_previous->setEnabled(m_player->capability("CanGoPrevious"));m_next->setEnabled(m_player->capability("CanGoNext"));
@@ -173,13 +200,13 @@ void MusicDesklet::paintContent(QPainter &p){
     if(!m_player->error().isEmpty())subtitle=m_player->error();
     if(!m_player->clientName().isEmpty())subtitle=m_player->clientName()+" · "+subtitle;
     QFont f=font();f.setPixelSize(14);f.setBold(true);
-    text(p,QRectF(112,21,width()-128,24),QFontMetrics(f).elidedText(title,Qt::ElideRight,width()-128),14,QColor("#f4f7ff"),true,Qt::AlignLeft|Qt::AlignVCenter);
+    text(p,QRectF(112,21,width()-128,24),QFontMetrics(f).elidedText(title,Qt::ElideRight,width()-128),14,inkColor(),true,Qt::AlignLeft|Qt::AlignVCenter);
     f.setPixelSize(11);f.setBold(false);
-    text(p,QRectF(112,47,width()-128,18),QFontMetrics(f).elidedText(subtitle,Qt::ElideRight,width()-128),11,QColor("#b8c6d9"),false,Qt::AlignLeft|Qt::AlignVCenter);
-    text(p,QRectF(width()-128,height()-47,112,20),timeLabel(m_player->position())+" / "+timeLabel(m_player->length()),11,QColor("#c7d8e0"));
-    text(p,QRectF(16,height()-25,32,18),"音量",10,QColor("#b8c6d9"));
-    text(p,QRectF(width()-57,height()-25,38,18),QString::number(m_volume->value())+"%",10,QColor("#b8c6d9"));
+    text(p,QRectF(112,47,width()-128,18),QFontMetrics(f).elidedText(subtitle,Qt::ElideRight,width()-128),11,mutedColor(),false,Qt::AlignLeft|Qt::AlignVCenter);
+    text(p,QRectF(width()-128,height()-47,112,20),timeLabel(m_player->position())+" / "+timeLabel(m_player->length()),11,mutedColor());
+    text(p,QRectF(16,height()-25,32,18),"音量",10,mutedColor());
+    text(p,QRectF(width()-57,height()-25,38,18),QString::number(m_volume->value())+"%",10,mutedColor());
 }
-void MusicDesklet::showEvent(QShowEvent *event){LiquidDesklet::showEvent(event);m_player->setVisible(true);syncNotesAnimation();}
+void MusicDesklet::showEvent(QShowEvent *event){LiquidDesklet::showEvent(event);m_player->setVisible(!m_canvas->desktopCovered());syncNotesAnimation();}
 void MusicDesklet::hideEvent(QHideEvent *event){m_player->setVisible(false);syncNotesAnimation();LiquidDesklet::hideEvent(event);}
 void MusicDesklet::extendMenu(QMenu &menu){connect(menu.addAction(m_player->connected()?"打开 "+m_player->clientName():QString("启动已配置的播放器")),&QAction::triggered,m_player,&MprisPlayer::openPlayer);}

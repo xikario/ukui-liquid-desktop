@@ -1,4 +1,5 @@
 #pragma once
+#include "StartupWallpaperCover.h"
 
 static int runStartupWallpaperTest(const QString &root)
 {
@@ -13,6 +14,16 @@ static int runStartupWallpaperTest(const QString &root)
     QImage image(1600, 1000, QImage::Format_RGB32);
     image.fill(QColor(210, 30, 30));
     image.save(path);
+    {
+        StartupWallpaperCover empty{QImage()};
+        check(!empty.showPrepared() && !empty.isVisible(),"no poster never displays a dark startup cover");
+        QPointer<StartupWallpaperCover> cover=new StartupWallpaperCover(image);
+        check(cover->showPrepared(),"cached poster is exposed and painted before heavy startup work");
+        check(cover->grab().toImage().pixelColor(5,5).red()>180,"startup cover has real poster pixels at screen edges");
+        QWidget nextDesktop;cover->watchCanvas(&nextDesktop);nextDesktop.resize(800,500);nextDesktop.show();
+        settle(120);
+        check(!cover,"startup poster and its full-screen pixmap are released after the canvas paint");
+    }
     QDir().mkpath(root + "/config/kyfences");
     QFile layout(root + "/config/kyfences/layout.json");
     layout.open(QIODevice::WriteOnly);

@@ -15,6 +15,8 @@
 #include <QPixmap>
 #include <QVBoxLayout>
 #include <QVariant>
+#include <QLockFile>
+#include <QSettings>
 #include <cmath>
 
 VideoWallpaperPreview::VideoWallpaperPreview(QWidget *parent) : QWidget(parent)
@@ -24,7 +26,6 @@ VideoWallpaperPreview::VideoWallpaperPreview(QWidget *parent) : QWidget(parent)
     m_animatedImage=new QLabel(this);m_animatedImage->setFixedSize(320,180);
     m_animatedImage->setObjectName("videoAnimatedPreview");
     m_animatedImage->setAlignment(Qt::AlignCenter);layout->addWidget(m_animatedImage);
-    m_animatedTime=new QLabel(this);layout->addWidget(m_animatedTime);
     m_animation.setInterval(900);
     connect(&m_animation,&QTimer::timeout,this,[this]{
         if(!isVisible() || m_frames.size()!=3){m_animation.stop();return;}
@@ -36,12 +37,12 @@ VideoWallpaperPreview::VideoWallpaperPreview(QWidget *parent) : QWidget(parent)
         image->setObjectName(QString("videoPreviewFrame%1").arg(i));
         image->setFixedSize(140,90);image->setAlignment(Qt::AlignCenter);
         image->setStyleSheet("background:#101827;border:1px solid #39445a;border-radius:6px;color:#cbd5e1;");
-        auto *time = new QLabel(this);time->setAlignment(Qt::AlignCenter);
-        image->hide();time->hide();
-        m_images.append(image);m_times.append(time);
+        image->hide();
+        m_images.append(image);
     }
 
-    m_hint = new QLabel("选择视频后显示三帧画面。",this);m_hint->setWordWrap(true);layout->addWidget(m_hint);
+    m_hint = new QLabel(this);m_hint->setObjectName("videoPreviewStatus");
+    m_hint->setWordWrap(true);layout->addWidget(m_hint);m_hint->hide();
     m_debounce.setSingleShot(true);m_debounce.setInterval(250);
     m_deadline.setSingleShot(true);m_deadline.setInterval(5000);
     connect(&m_debounce,&QTimer::timeout,this,&VideoWallpaperPreview::begin);
@@ -64,19 +65,20 @@ void VideoWallpaperPreview::setFile(const QString &path)
     if(identity==m_identity)return;
     m_identity=identity;m_path=path.trimmed();m_debounce.stop();m_deadline.stop();m_frame=0;
     m_animation.stop();m_frames.clear();m_positions.clear();m_displayFrame=0;m_confirmed=false;
-    m_animatedImage->setText(m_path.isEmpty()?"未选择视频":"正在生成预览…");m_animatedTime->clear();
+    m_animatedImage->setText(m_path.isEmpty()?"未选择视频":"正在生成预览…");
     m_cacheDirectory=VideoWallpaperCache::directory(m_path);setProperty("cacheHit",false);
     m_cancelled=true;
     if(m_process.state()!=QProcess::NotRunning)m_process.kill();
     setProperty("frameCount",0);setProperty("previewState",m_path.isEmpty()?"empty":"loading");
-    for(int i=0;i<3;++i){m_images[i]->setText(m_path.isEmpty()?"未选择视频":"正在提取…");m_times[i]->clear();}
-    m_hint->setText(m_path.isEmpty()?"选择视频后显示三帧画面。":"正在生成画面预览，壁纸不会立即生效。");
+    for(int i=0;i<3;++i)m_images[i]->setText(m_path.isEmpty()?"未选择视频":"正在提取…");
+    m_hint->clear();m_hint->hide();
     if(!m_path.isEmpty() && !loadCache())m_debounce.start();
 }
 void VideoWallpaperPreview::begin()
 {
     if(m_process.state()!=QProcess::NotRunning){m_debounce.start();return;}
     if(m_path.isEmpty())return;
+    if(loadCache())return; // Another page may have confirmed during the debounce.
     if(!QFileInfo(m_path).isFile()){fail("视频文件不存在，无法预览。");return;}
     m_cancelled=false;m_timedOut=false;m_probing=true;m_frame=0;m_duration=0;
     m_process.readAllStandardOutput();
@@ -87,12 +89,11 @@ void VideoWallpaperPreview::extract()
 {
     m_probing=false;m_timedOut=false;
     const double position=m_positions[m_frame];
-    m_times[m_frame]->setText(QString::number(position,'f',1)+" 秒附近");
     m_process.start("ffmpeg",{"-hide_banner","-loglevel","error","-nostdin","-threads","1",
         // Seek to the preceding keyframe; passthrough timestamps avoid decoding
         // and discarding a whole 4K GOP just to create a small still preview.
         "-noaccurate_seek","-ss",QString::number(position,'f',3),"-i",m_path,"-an","-sn","-dn","-frames:v","1","-vsync","0",
-        "-vf","scale=320:180:force_original_aspect_ratio=decrease","-filter_threads","1",
+        "-vf","scale=640:360:force_original_aspect_ratio=decrease","-filter_threads","1",
         "-threads","1","-f","image2pipe","-vcodec","png","pipe:1"});
     m_deadline.start();
 }
@@ -116,12 +117,12 @@ void VideoWallpaperPreview::completed(int code,QProcess::ExitStatus status)
     ++m_frame;setProperty("frameCount",m_frame);
     if(m_frame<3){extract();return;}
     setProperty("previewState","ready");
-    m_hint->setText("三帧循环预览；应用后自动保存，下次直接复用。");
+    m_hint->clear();m_hint->hide();
     saveCache();showFrame();if(isVisible())m_animation.start();
 }
 void VideoWallpaperPreview::fail(const QString &message)
 {
-    setProperty("previewState","error");m_hint->setText(message);
+    setProperty("previewState","error");m_hint->setText(message);m_hint->show();
     for(int i=m_frame;i<3;++i)m_images[i]->setText("无预览");
 }
 
@@ -132,10 +133,10 @@ void VideoWallpaperPreview::confirmFile(const QString &path)
 void VideoWallpaperPreview::showFrame()
 {
     if(m_frames.size()!=3)return;
-    m_animatedImage->setPixmap(QPixmap::fromImage(m_frames[m_displayFrame]).scaled(
-        m_animatedImage->size(),Qt::KeepAspectRatio,Qt::SmoothTransformation));
-    m_animatedTime->setText(QString("%1 / 3 · %2 秒附近").arg(m_displayFrame+1)
-        .arg(m_positions[m_displayFrame],0,'f',1));
+    const qreal dpr=m_animatedImage->devicePixelRatioF();
+    auto pixmap=QPixmap::fromImage(m_frames[m_displayFrame]).scaled(
+        m_animatedImage->size()*dpr,Qt::KeepAspectRatio,Qt::SmoothTransformation);
+    pixmap.setDevicePixelRatio(dpr);m_animatedImage->setPixmap(pixmap);
     setProperty("animationFrame",m_displayFrame);
 }
 void VideoWallpaperPreview::showEvent(QShowEvent *event)
@@ -154,27 +155,36 @@ bool VideoWallpaperPreview::loadCache()
     if(!file.open(QIODevice::ReadOnly) || file.size()>4096)return false;
     const auto object=QJsonDocument::fromJson(file.readAll()).object();
     const auto times=object.value("positions").toArray();
-    if(object.value("version").toInt()!=1 || times.size()!=3)return false;
+    const int version=object.value("version").toInt();
+    if((version!=1 && version!=2) || times.size()!=3)return false;
     QVector<QImage> frames;QVector<double> positions;
     for(int i=0;i<3;++i){
-        const QImage frame(m_cacheDirectory+QString("/frame%1.png").arg(i));
-        if(frame.isNull() || frame.width()>320 || frame.height()>180 || !times[i].isDouble())return false;
+        const QImage frame(m_cacheDirectory+QString(version==1?"/frame%1.png":"/frame640-%1.png").arg(i));
+        if(frame.isNull() || frame.width()>640 || frame.height()>360 || !times[i].isDouble()
+            || !std::isfinite(times[i].toDouble()) || times[i].toDouble()<0 || times[i].toDouble()>60)return false;
         frames.append(frame);positions.append(times[i].toDouble());
     }
     m_frames=frames;m_positions=positions;m_frame=3;
     for(int i=0;i<3;++i)m_images[i]->setPixmap(QPixmap::fromImage(frames[i]));
     setProperty("frameCount",3);setProperty("previewState","ready");setProperty("cacheHit",true);
-    m_hint->setText("已保存的三帧循环预览。");showFrame();if(isVisible())m_animation.start();
+    m_hint->clear();m_hint->hide();showFrame();if(isVisible())m_animation.start();
     return true;
 }
 void VideoWallpaperPreview::saveCache()
 {
     if(!m_confirmed || m_frames.size()!=3 || m_cacheDirectory.isEmpty() || property("cacheHit").toBool())return;
+    if(!QDir().mkpath(m_cacheDirectory))return;
+    QLockFile lock(m_cacheDirectory+"/preview.lock");
+    if(!lock.tryLock(0))return;
+    if(loadCache())return; // A valid committed preview is immutable.
     for(int i=0;i<3;++i)
-        if(!VideoWallpaperCache::saveImage(m_cacheDirectory,QString("frame%1.png").arg(i),m_frames[i]))return;
+        if(!VideoWallpaperCache::saveImage(m_cacheDirectory,QString("frame640-%1.png").arg(i),m_frames[i]))return;
     QJsonArray positions;for(double value:m_positions)positions.append(value);
     QSaveFile file(m_cacheDirectory+"/preview.json");
     if(!file.open(QIODevice::WriteOnly))return;
-    file.write(QJsonDocument(QJsonObject{{"version",1},{"positions",positions}}).toJson());
-    if(file.commit()){setProperty("cacheHit",true);m_hint->setText("已保存的三帧循环预览。");}
+    file.write(QJsonDocument(QJsonObject{{"version",2},{"positions",positions}}).toJson());
+    if(file.commit()){
+        setProperty("cacheHit",true);m_hint->clear();m_hint->hide();
+        VideoWallpaperCache::prune(m_path,QSettings().value("wallpaper/previousVideoPath").toString());
+    }
 }

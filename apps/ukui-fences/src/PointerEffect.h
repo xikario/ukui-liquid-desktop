@@ -3,12 +3,14 @@
 #include <QApplication>
 #include <QMouseEvent>
 #include <QCursor>
+#include <QElapsedTimer>
 #include <QPainterPathStroker>
 #include <QPointer>
 #include <QRegion>
 #include <QTimer>
 #include <QWidget>
 #include <functional>
+#include <cmath>
 
 // Track native mouse events, including events delivered to child controls.
 // A frame consumes the latest position; returning true keeps a finite fade
@@ -107,6 +109,19 @@ private:
     bool m_enabled = true;
     bool m_present = false;
 };
+
+// Frame-rate independent exponential approach: the same wall-clock fade at
+// 30, 60 or 120 Hz and after a dropped frame. Snaps once visually settled.
+inline qreal smoothToward(qreal current, qreal target, qreal seconds, qreal tau = 0.042) {
+    const qreal next = target - (target - current) * std::exp(-qMax<qreal>(0, seconds) / tau);
+    return qAbs(target - next) <= 1e-4 ? target : next;
+}
+// Wall-clock step for a pointer frame; a fade starting from rest counts as one
+// nominal frame so the first step is never a jump.
+inline qreal frameSeconds(QElapsedTimer &clock, int nominalMs = 33) {
+    const qint64 elapsed = clock.isValid() ? clock.restart() : (clock.start(), nominalMs);
+    return (elapsed > 4 * nominalMs ? nominalMs : elapsed) / 1000.0;
+}
 
 // Conservative coverage of a gradient stroked along a curved rim. The wider
 // support includes antialiasing at fractional DPI and magnetic fence contours.

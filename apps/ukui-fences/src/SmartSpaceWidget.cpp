@@ -6,6 +6,8 @@
 #include "LiquidPopup.h"
 #include "SettingsComboPopup.h"
 #include "SmartSpaceWidget.h"
+#include "GlassFinish.h"
+#include "VideoWallpaperRegion.h"
 #include "DesktopCanvas.h"
 
 #include "DesktopItem.h"
@@ -853,6 +855,10 @@ SmartSpaceWidget::SmartSpaceWidget(bool fenceEmbedded, QWidget *parent)
                 m_glassBackdrop = {};
                 m_glassMaterial = {};
                 refreshGlassBackdrop();
+                update();
+            });
+            connect(canvas, &DesktopCanvas::glassFinishChanged, this, [this] {
+                m_glassMaterial = {};
                 update();
             });
             break;
@@ -2738,7 +2744,7 @@ void SmartSpaceWidget::animateEdgeFrame(const QPixmap &snapshot, const QRect &ar
         // Setters recalculate currentValue even while stopped. Do not let
         // those intermediate values overwrite the frame being reversed.
         const QSignalBlocker blocker(overlay->motion);
-        overlay->motion->setDuration(qMax(1, qRound(180 * remaining)));
+        overlay->motion->setDuration(LiquidPopup::Motion::duration(LiquidPopup::Motion::Normal, remaining));
         overlay->motion->setStartValue(startProgress);
         overlay->motion->setEndValue(target);
         overlay->motion->setCurrentTime(0);
@@ -2758,6 +2764,34 @@ void SmartSpaceWidget::animateEdgeFrame(const QPixmap &snapshot, const QRect &ar
 
 void SmartSpaceWidget::updateRoundedMask()
 {
+    if (m_edgeHidden && m_edgeRevealButton) {
+        // Rasterize the centred icon at device resolution, as the button does;
+        // QWidget::render() here would re-enter resize handling.
+        const qreal dpr = devicePixelRatioF();
+        QImage painted(QSize(qCeil(width()*dpr), qCeil(height()*dpr)), QImage::Format_ARGB32_Premultiplied);
+        painted.setDevicePixelRatio(dpr);
+        painted.fill(Qt::transparent);
+        {
+            QPainter iconPainter(&painted);
+            const QRect target(QPoint(), m_edgeRevealButton->iconSize());
+            m_edgeRevealButton->icon().paint(&iconPainter, target.translated(
+                m_edgeRevealButton->geometry().center() - target.center()));
+        }
+        VideoWallpaperRegion::publish(this, VideoWallpaperRegion::coverage(painted, dpr));
+    } else if (m_fenceEmbedded) {
+        VideoWallpaperRegion::publish(this,VideoWallpaperRegion::toDevice(QRegion(rect()),devicePixelRatioF()));
+    } else if (m_themeMode == 3) {
+        // Match the painted glass inset; a wider provisional cutout leaves a
+        // poster-coloured ring around the material.
+        if (!m_glassMaterial.isNull() && m_glassMaterialSize == size())
+            VideoWallpaperRegion::publish(this, VideoWallpaperRegion::coverage(m_glassMaterial, devicePixelRatioF()));
+        else
+            VideoWallpaperRegion::publish(this, VideoWallpaperRegion::rounded(
+                QRectF(rect()).adjusted(5,5,-5,-5),19,devicePixelRatioF()));
+    } else {
+        VideoWallpaperRegion::publish(this, VideoWallpaperRegion::rounded(
+            QRectF(rect()).adjusted(1,1,-1,-1),16,devicePixelRatioF()));
+    }
     if (m_edgeHidden || m_fenceEmbedded || isWindow() || m_themeMode == 3) {
         // Top-level pinned mode uses an ARGB backing surface.  Keeping the
         // integer QRegion here would discard antialiased edge alpha. Glass
@@ -5950,6 +5984,11 @@ const QImage &SmartSpaceWidget::glassMaterial()
     topHighlight.cubicTo(width() * 0.30, 3.7, width() * 0.68, 3.7, width() - 30, 5.5);
     painter.setPen(QPen(QColor(255, 255, 255, 48), 0.9, Qt::SolidLine, Qt::RoundCap));
     painter.drawPath(topHighlight);
+    painter.end();
+    m_glassMaterial = GlassFinish::withGrain(GlassFinish::withScrim(m_glassMaterial, GlassFinish::scrim()));
+    // Use the pixels actually painted, including the highlight, rather than
+    // the wider provisional rounded rectangle that exposes a poster halo.
+    VideoWallpaperRegion::publish(this, VideoWallpaperRegion::coverage(m_glassMaterial, devicePixelRatioF()));
     return m_glassMaterial;
 }
 

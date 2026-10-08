@@ -44,6 +44,12 @@ add_executable(ukui-fences
     src/DesktopCanvas.cpp
     src/VideoWallpaperTrial.cpp
     src/VideoWallpaperPreview.cpp
+    src/DesktopLayerWatch.cpp
+    src/DesktopCoverWatch.cpp
+    src/GlassFinish.cpp
+    src/Palette.cpp
+    src/Lyrics.cpp
+    src/StartupWallpaperCover.cpp
     src/FencesSettingsWindow.cpp
     src/LiquidWheelPicker.cpp
     src/SettingsComboPopup.cpp

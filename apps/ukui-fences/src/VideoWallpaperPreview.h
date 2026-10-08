@@ -29,11 +29,11 @@ private:
     QTimer m_debounce, m_deadline, m_animation;
     QVector<QImage> m_frames;
     QVector<double> m_positions;
-    QLabel *m_animatedImage, *m_animatedTime;
+    QLabel *m_animatedImage;
     QString m_cacheDirectory;
     bool m_confirmed = false;
     int m_displayFrame = 0;
-    QVector<QLabel *> m_images, m_times;
+    QVector<QLabel *> m_images;
     QLabel *m_hint;
     double m_duration = 0;
     int m_frame = 0;

@@ -10,6 +10,7 @@ public:
     explicit MusicDesklet(DesktopCanvas *canvas);
     MprisPlayer *player() const { return m_player; }
     bool notesAnimating() const { return m_notesTimer.isActive(); }
+    QColor artAccent() const { return m_artAccent; }
 protected:
     void paintContent(QPainter &) override;
     void arrangeControls() override;
@@ -18,6 +19,7 @@ protected:
     void extendMenu(QMenu &) override;
 private:
     void updateControls();
+    void applyArtPalette();
     void syncNotesAnimation();
     QRect notesArea() const;
     void paintFloatingNotes(QPainter &p);
@@ -30,4 +32,6 @@ private:
     QSlider *m_seek, *m_volume;
     QString m_seekTrack, m_seekConnection, m_volumeConnection;
     bool m_updating=false;
+    qint64 m_artKey=-1;
+    QColor m_artAccent{"#9ae8db"};
 };

@@ -27,6 +27,11 @@ public:
     void savePlacement();
     int materialBuilds() const { return m_materialBuilds; }
     QImage material() const { return m_material; }
+    // Text colours resolved against the baked material: >= 7:1 for primary
+    // text and >= 4.5:1 for secondary text over every covered cell.
+    QColor inkColor() const { return m_ink; }
+    QColor mutedColor() const { return m_muted; }
+    QVector<QColor> materialCells() const;
 public slots:
     void invalidateMaterial();
 protected:
@@ -61,6 +66,7 @@ private:
     QPoint m_pressGlobal, m_startPos;
     QSize m_startSize;
     int m_materialBuilds = 0;
+    QColor m_ink{"#f4f7ff"}, m_muted{"#b8c6d9"};
 };
 class ClockDesklet final : public LiquidDesklet {
     Q_OBJECT
@@ -69,15 +75,19 @@ public:
     ~ClockDesklet() override;
     const CountdownState &countdown() const { return m_countdown; }
     int faceMaterialBuilds() const { return m_faceBuilds; }
+    int tickInterval() const { return m_tick.isActive() ? m_tick.interval() : 0; }
     QImage faceMaterial() const { return m_faceMaterial; }
 public slots:
     void tick();
 protected:
     void paintContent(QPainter &p) override;
     void arrangeControls() override;
+    void showEvent(QShowEvent *) override;
+    void hideEvent(QHideEvent *) override;
 private:
     void persist();
     void updateControls();
+    void syncTick();
     void paintGlassFace(QPainter &p, const QPointF &center, qreal radius);
     std::unique_ptr<LiquidOpticsRenderer> m_faceOptics;
     QImage m_faceMaterial;

@@ -20,7 +20,7 @@ class MusicFixture : public QObject {
     Q_PROPERTY(bool CanPause READ control)
     Q_PROPERTY(bool CanSeek READ control)
 public:
-    QString state="Paused",art,track="/track/one",song="测试歌曲",connectionName;
+    QString state="Paused",art,track="/track/one",song="测试歌曲",connectionName,lyrics;
     qlonglong pos=4000000;
     double vol=.65;
     bool enabled=true;
@@ -29,7 +29,7 @@ public:
     QString status() const{return state;}
     QVariantMap metadata() const{return {{"xesam:title",song},{"xesam:artist",QStringList{"测试歌手"}},
         {"mpris:length",QVariant::fromValue<qlonglong>(180000000)},
-        {"mpris:trackid",QVariant::fromValue(QDBusObjectPath(track))},{"mpris:artUrl",art}};}
+        {"mpris:trackid",QVariant::fromValue(QDBusObjectPath(track))},{"mpris:artUrl",art},{"xesam:asText",lyrics}};}
     qlonglong position() const{return pos;}
     double volume() const{return vol;}
     double rate() const{return 1.0;}

@@ -4,6 +4,7 @@
 #include "DesktopCanvas.h"
 #include "FileClipboard.h"
 #include "MenuStyle.h"
+#include "LiquidPopup.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -368,7 +369,7 @@ DesktopIcon::DesktopIcon(const DesktopItem &item, QWidget *parent)
     connect(&m_renameTimer, &QTimer::timeout,
             this, [this] { startInlineRename(); });
 
-    m_refreshFeedback.setDuration(180);
+    m_refreshFeedback.setDuration(LiquidPopup::Motion::Normal);
     m_refreshFeedback.setStartValue(0.0);
     m_refreshFeedback.setKeyValueAt(0.22, 1.0);
     m_refreshFeedback.setEndValue(0.0);
@@ -792,6 +793,8 @@ void DesktopIcon::paintEvent(QPaintEvent *)
 void DesktopIcon::triggerRefreshFeedback()
 {
     m_refreshFeedback.stop();
+    if (LiquidPopup::theme().reducedMotion) return;
+    m_refreshFeedback.setDuration(LiquidPopup::Motion::Normal);
     m_refreshFeedback.start();
 }
 

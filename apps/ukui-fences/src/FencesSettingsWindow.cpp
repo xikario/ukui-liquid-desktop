@@ -316,6 +316,7 @@ void FencesSettingsWindow::refreshStates() {
             const bool on=startup=="smart"?SmartSpaceWidget::autoStartEnabled():startup=="monitor"?SystemMonitor::autoStartEnabled():LiquidDesklet::autoStartEnabled(startup);
             check->setChecked(on);check->setText(on?"随 Fences 启动：已开启":"随 Fences 启动：未开启");
         } else if(check->objectName()=="fenceLiquidGlass")check->setChecked(m_canvas->fenceLiquidGlassEnabled());
+        else if(check->objectName()=="reduceMotion")check->setChecked(m_canvas->reduceMotion());
         else if(check->objectName()=="wallpaperMagnet")check->setChecked(m_canvas->wallpaperMagnetEnabled());
         else if(check->objectName()=="fenceLocked") {
             if(auto *f=m_canvas->fenceById(check->property("fenceId").toString()))check->setChecked(f->locked());
@@ -392,6 +393,15 @@ QWidget *FencesSettingsWindow::buildPage(const QString &id) {
         auto *glass=new QCheckBox("启用分区液态玻璃",page);glass->setObjectName("fenceLiquidGlass");c->addWidget(glass);
         connect(glass,&QCheckBox::toggled,m_canvas,&DesktopCanvas::setFenceLiquidGlassEnabled);
         hint(c,"分区采用壁纸折射与边缘高光。此开关只控制分区，小组件保留各自皮肤。");
+        auto *scrim=new QComboBox(page);scrim->setObjectName("glassScrim");
+        scrim->addItems({"易读","均衡","通透","轻微"});scrim->setCurrentIndex(m_canvas->glassScrim());
+        scrim->setProperty("settingsImmediate",true);c->addWidget(scrim);
+        connect(scrim,QOverload<int>::of(&QComboBox::currentIndexChanged),m_canvas,&DesktopCanvas::setGlassScrim);
+        hint(c,"玻璃按背后壁纸的局部亮度自动压暗，保证文字可读。档位越靠后越通透。");
+        auto *motion=new QCheckBox("减少动态效果",page);motion->setObjectName("reduceMotion");
+        motion->setChecked(m_canvas->reduceMotion());motion->setProperty("settingsImmediate",true);c->addWidget(motion);
+        connect(motion,&QCheckBox::toggled,m_canvas,&DesktopCanvas::setReduceMotion);
+        hint(c,"关闭弹出、折叠和排序动画，状态立即切换。");
         button(c,"刷新壁纸与液态材质",[this]{m_canvas->refreshAll();},"refreshMaterialButton");
     } else if(id=="wallpaper") {
         attachForm(card(layout,"Fences 壁纸"),m_canvas->createWallpaperSettingsPage(page));

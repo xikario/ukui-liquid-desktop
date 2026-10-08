@@ -1,6 +1,10 @@
 #include "WidgetResizeSnap.h"
 #include "DesktopWidgets.h"
 #include "DeskletModels.h"
+#include "DesktopCoverWatch.h"
+#include "GlassFinish.h"
+#include "Palette.h"
+#include "PointerEffect.h"
 #include "ActivityRecorder.h"
 #include "FileClipboard.h"
 #include <QPushButton>
@@ -19,6 +23,110 @@
 static int runDeskletTest(const QString &root)
 {
     qputenv("GSETTINGS_BACKEND", "keyfile");
+    {
+        using namespace Palette;
+        check(qAbs(contrast(Qt::white,Qt::black)-21)<1e-6 && qAbs(contrast(Qt::white,Qt::white)-1)<1e-9,"WCAG contrast spans 1:1 to 21:1");
+        check(qAbs(contrast(QColor("#767676"),Qt::white)-4.54)<0.01,"WCAG contrast matches the reference grey on white");
+        check(readableText(QColor("#ffe36e"))==QColor(Qt::black) && readableText(QColor("#1d2b5a"))==QColor(Qt::white),"text colour picks the higher-contrast extreme");
+        bool reached=true;
+        for(const QColor bg:{QColor("#7f7f7f"),QColor("#3a8fd0"),QColor("#e0b040"),QColor("#204030")}){
+            reached&=contrast(ensureContrast(QColor("#b8c6d9"),bg,SecondaryTextContrast),bg)>=SecondaryTextContrast-1e-9;
+            reached&=contrast(ensureContrast(QColor("#f4f7ff"),bg,PrimaryTextContrast),bg)>=PrimaryTextContrast-1e-9
+                     || ensureContrast(QColor("#f4f7ff"),bg,PrimaryTextContrast).rgb()==readableText(bg).rgb();}
+        check(reached,"ensureContrast reaches 4.5:1 secondary and 7:1 primary where attainable");
+        const QVector<QColor> mixed{QColor("#202830"),QColor("#c8d0d8")};
+        const QColor both=ensureContrast(QColor("#f4f7ff"),mixed,SecondaryTextContrast);
+        check(minContrast(both,mixed)>=SecondaryTextContrast || both.rgb()==QColor(Qt::black).rgb() || both.rgb()==QColor(Qt::white).rgb(),"contrast holds for the worst of several cells");
+        check(!usableSwatch(QColor(30,30,30)) && !usableSwatch(QColor(240,240,245)) && !usableSwatch(QColor(128,130,135)) && usableSwatch(QColor(40,110,200)),
+              "swatch filter drops near-black, near-white and grey");
+        check(qAbs(mix(QColor(0,0,0),QColor(255,255,255),HoverMix).redF()-.10)<.01 && qAbs(mix(QColor(0,0,0),QColor(255,255,255),PressMix).redF()-.18)<.01,"hover/press mix at 10% and 18%");
+        QImage art(60,60,QImage::Format_RGB32);art.fill(QColor(30,90,200));
+        {QPainter painter(&art);painter.fillRect(0,0,60,18,QColor(220,120,40));painter.fillRect(0,18,60,6,QColor(36,96,206));painter.fillRect(0,50,60,10,Qt::white);}
+        const Colors colors=extract(art);
+        check(colors.primary.isValid() && colors.primary.blue()>colors.primary.red(),"primary swatch is the most populous usable colour");
+        check(colors.secondary.isValid() && colors.secondary.red()>colors.secondary.blue() && distance(colors.primary,colors.secondary)>MinSecondaryDistance,
+              "secondary swatch is distinct from the primary, skipping near duplicates and white");
+        QImage flat(40,40,QImage::Format_RGB32);flat.fill(QColor(30,90,200));
+        check(extract(flat).primary.isValid() && !extract(flat).secondary.isValid(),"single-colour art has no secondary swatch");
+        flat.fill(Qt::white);check(!extract(flat).isValid(),"white art yields no swatch");
+    }
+    {
+        qreal fast=0,slow=0;
+        for(int i=0;i<8;++i)fast=smoothToward(fast,1,0.008);
+        for(int i=0;i<2;++i)slow=smoothToward(slow,1,0.032);
+        check(qAbs(fast-slow)<1e-9,"hover smoothing reaches the same value at 125 Hz and 31 Hz");
+        check(qAbs(smoothToward(0,1,0.042)-(1-std::exp(-1.0)))<1e-9,"hover smoothing uses a 42 ms time constant");
+        check(smoothToward(0.99995,1,0.001)==1 && smoothToward(1,1,0.016)==1,"hover smoothing snaps when settled");
+    }
+    {
+        using namespace GlassFinish;
+        bool monotonic=true;
+        for(const auto preset:{Scrim::Readable,Scrim::Balanced,Scrim::Transparent,Scrim::Subtle}){
+            qreal last=-1;
+            for(int i=0;i<=20;++i){const qreal a=scrimAlpha(i/20.0,curve(preset));monotonic&=a>=last;last=a;}
+        }
+        check(monotonic,"scrim alpha rises monotonically with backdrop luma for every preset");
+        check(scrimAlpha(1,curve(Scrim::Readable))>scrimAlpha(1,curve(Scrim::Balanced))
+            && scrimAlpha(1,curve(Scrim::Balanced))>scrimAlpha(1,curve(Scrim::Transparent))
+            && scrimAlpha(1,curve(Scrim::Transparent))>scrimAlpha(1,curve(Scrim::Subtle)),"presets are ordered readable > balanced > transparent > subtle");
+        check(scrimAlpha(0,curve(Scrim::Balanced))>0 && scrimAlpha(0,curve(Scrim::Balanced))<scrimAlpha(1,curve(Scrim::Balanced))*0.1,
+            "dark backdrops keep a small scrim floor");
+        check(scrimAlpha(2,curve(Scrim::Readable))<=0.38+1e-9,"scrim never exceeds its cap");
+        QImage half(160,64,QImage::Format_ARGB32_Premultiplied);half.fill(QColor(20,20,20));
+        for(int y=0;y<64;++y)for(int x=80;x<160;++x)half.setPixel(x,y,qRgb(240,240,240));
+        QImage mirrored=half.mirrored(true,false);
+        const QImage a=withScrim(half,Scrim::Balanced),b=withScrim(mirrored,Scrim::Balanced);
+        check(qRed(a.pixel(150,32))<240 && qRed(a.pixel(150,32))<qRed(half.pixel(150,32))
+            && 240-qRed(a.pixel(150,32))>20-qRed(a.pixel(10,32))+20,"bright regions are darkened more than dark regions");
+        check(a.pixel(150,32)==b.pixel(9,32) && a.pixel(10,32)==b.pixel(149,32),"local scrim is symmetric under mirroring");
+        QImage hole(64,64,QImage::Format_ARGB32_Premultiplied);hole.fill(Qt::transparent);
+        for(int y=16;y<48;++y)for(int x=16;x<48;++x)hole.setPixel(x,y,qRgba(200,200,200,200));
+        const QImage h=withScrim(hole,Scrim::Readable);
+        check(qAlpha(h.pixel(2,2))==0 && qAlpha(h.pixel(30,30))==200 && qRed(h.pixel(30,30))<200,"scrim keeps coverage and only darkens covered pixels");
+    }
+    {
+        using namespace GlassFinish;
+        const QRectF r(0,0,200,120);
+        const QPainterPath sq=squirclePath(r,10);QPainterPath circle;circle.addRoundedRect(r,10,10);
+        bool inside=true;const QPointF centre=r.center();
+        // Nudge each outline point 0.01 px inward: boundary points then test strictly inside.
+        for(const QPointF &p:sq.toFillPolygon())inside&=circle.contains(p+(centre-p)*(0.01/QLineF(p,centre).length()));
+        check(inside && sq.boundingRect()==r,"squircle stays inside the circular corner it replaces");
+        check(sq.contains(QPointF(100,0.5)) && sq.contains(QPointF(0.5,60)) && !sq.contains(QPointF(1.5,1.5)),"squircle keeps straight edges and cuts the corner");
+        QImage flat(QSize(400,240),QImage::Format_ARGB32_Premultiplied);flat.fill(qRgba(40,40,40,255));flat.setDevicePixelRatio(2);
+        const QImage e=withEdge(flat,squirclePath(r,10));
+        check(e.devicePixelRatio()==2 && qAlpha(e.pixel(0,0))==0 && e.pixel(200,120)==flat.pixel(200,120),"edge cuts corners and leaves the interior untouched");
+        check(qRed(e.pixel(200,1))>qRed(e.pixel(200,238)) && qRed(e.pixel(200,238))>=40,"inner highlight is brighter at the top than the bottom");
+        check(qRed(e.pixel(1,120))>qRed(e.pixel(398,120)),"inner highlight is brighter on the left than the right");
+        const QVector<qint8> &tile=grainTile();int sum=0,lo=0,hi=0;
+        for(qint8 v:tile){sum+=v;lo=qMin(lo,int(v));hi=qMax(hi,int(v));}
+        check(tile.size()==GRAIN_TILE*GRAIN_TILE && sum==0 && lo==-GRAIN_LEVELS && hi==GRAIN_LEVELS && &tile==&grainTile(),
+              "grain tile is cached, zero-mean and bounded");
+        QImage cover(QSize(160,90),QImage::Format_ARGB32_Premultiplied);cover.fill(qRgba(60,60,60,255));cover.setDevicePixelRatio(1.5);
+        for(int x=0;x<160;++x)cover.setPixel(x,0,0);
+        const QImage g=withGrain(cover);qint64 total=0;bool alphaKept=true,bounded=true,changed=false;
+        for(int y=1;y<64;++y)for(int x=0;x<64;++x){const int r=qRed(g.pixel(x,y));total+=r-60;bounded&=qAbs(r-60)<=GRAIN_LEVELS;changed|=r!=60;alphaKept&=qAlpha(g.pixel(x,y))==255;}
+        check(g.devicePixelRatio()==1.5 && g.pixel(10,0)==0 && alphaKept && bounded && changed,"grain keeps alpha, transparent pixels and stays within its level");
+        check(qAbs(total)<=GRAIN_LEVELS*64,"grain does not shift the average tone");
+    }
+    {
+        using DesktopCover::Client;
+        const QRect desk(0,0,1920,1200);
+        Client max;max.frame=QRect(0,0,1920,1152);max.maximized=true;
+        Client panel;panel.frame=QRect(0,1152,1920,48);panel.dock=true;panel.normal=false;
+        check(DesktopCover::covered(desk,{max,panel}),"maximized window plus panel covers the desktop");
+        check(!DesktopCover::covered(desk,{max}),"a panel-sized strip left free keeps the desktop live");
+        Client floating;floating.frame=QRect(0,0,1920,1200);
+        check(!DesktopCover::covered(desk,{floating}),"ordinary floating windows never pause the desktop");
+        Client hidden=max;hidden.hidden=true;Client glass=max;glass.translucent=true;Client other=max;other.onDesktop=false;
+        check(!DesktopCover::covered(desk,{hidden,panel}) && !DesktopCover::covered(desk,{glass,panel})
+            && !DesktopCover::covered(desk,{other,panel}),"minimized, translucent and other-desktop windows do not cover");
+        Client full;full.frame=desk;full.fullscreen=true;
+        check(DesktopCover::covered(desk,{full}),"fullscreen covers on its own");
+        check(DesktopCover::visibleFrame(QRect(100,50,848,663),{},{24,24,15,48})==QRect(124,65,800,600)
+            && DesktopCover::visibleFrame(QRect(10,40,100,100),{2,2,30,2},{})==QRect(8,10,104,132),
+            "frame extents expand decorations and drop client-side shadows");
+    }
     CountdownState c;c.start(60000,1000);
     check(c.remaining(11000)==50000,"countdown uses deadline rather than tick count");
     c.toggle(11000);check(c.state==CountdownState::Paused && c.remaining(99000)==50000,"pause freezes remaining time");
@@ -57,6 +165,11 @@ static int runDeskletTest(const QString &root)
         auto *clock=canvas.findChild<ClockDesklet *>();auto *activity=canvas.findChild<ActivityDesklet *>();auto *recorder=canvas.findChild<ActivityRecorder *>();
         check(clock && activity && recorder,"both desktop widgets share a live canvas and recorder");if(!clock || !activity || !recorder)return 1;
         check(clock->isVisible() && activity->isVisible(),"both display actions reveal their widgets");
+        check(clock->tickInterval()==1000,"visible clock ticks once a second");
+        canvas.setDesktopCovered(true);
+        check(clock->tickInterval()==0,"covered desktop stops the idle clock timer");
+        canvas.setDesktopCovered(false);
+        check(clock->tickInterval()==1000,"uncovering the desktop restarts the clock");
         check(!clock->geometry().intersects(activity->geometry()),"first-use placement does not overlap the other desklet");
         check(!clock->material().isNull() && clock->material().pixelColor(0,0).alpha()==0,"shared material retains transparent antialiased corners");
         clock->grab();
@@ -286,6 +399,12 @@ static int runDeskletTest(const QString &root)
         setWallpaper(whitePath);canvas.loadLayout();canvas.refreshAll();settle(700);
         clock->findChild<QPushButton *>("clockTab")->click();clock->grab();
         check(clock->property("clockFaceDarkInk").toBool(),"white wallpaper selects contrasting dark dial marks and hands");
+        for(LiquidDesklet *desklet:std::initializer_list<LiquidDesklet *>{clock,activity}){
+            const QVector<QColor> cells=desklet->materialCells();
+            check(!cells.isEmpty() && Palette::minContrast(desklet->inkColor(),cells)>=Palette::PrimaryTextContrast
+                  && Palette::minContrast(desklet->mutedColor(),cells)>=Palette::SecondaryTextContrast,
+                  "white wallpaper desklet text meets 7:1 primary and 4.5:1 secondary contrast");
+        }
         QDir().mkpath("artifacts");clock->grab().save(QString("artifacts/clock-white-%1.png").arg(clock->devicePixelRatioF()));
         canvas.setActivityWidgetVisible(false);setWallpaper(redPath);canvas.loadLayout();canvas.refreshAll();settle(300);canvas.setActivityWidgetVisible(true);settle(200);
         const QImage material=activity->material();const QColor sample=material.pixelColor(material.width()/2,material.height()/2);

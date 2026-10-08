@@ -95,15 +95,27 @@ signals:
     void desktopVisibilityChanged();
     void initialWallpaperReady();
     void wallpaperChanged();
+    // Maximized/fullscreen windows hide the desktop: animations and polling pause.
+    void desktopCoveredChanged(bool covered);
+    // Glass readability preset changed: every cached glass surface rebuilds once.
+    void glassFinishChanged();
 
 public slots:
     Q_SCRIPTABLE void setFenceLiquidGlassEnabled(bool enabled);
     Q_SCRIPTABLE void setWallpaperMagnetEnabled(bool enabled);
     Q_SCRIPTABLE bool isWallpaperMagnetEnabled() const { return m_wallpaperMagnetEnabled; }
     Q_SCRIPTABLE bool fenceLiquidGlassEnabled() const { return m_fenceLiquidGlassEnabled; }
+    // 0 readable, 1 balanced, 2 transparent, 3 subtle.
+    Q_SCRIPTABLE void setGlassScrim(int preset);
+    Q_SCRIPTABLE int glassScrim() const;
+    // Zeroes every transition (popups, dialogs, fence collapse, reorder).
+    Q_SCRIPTABLE void setReduceMotion(bool reduce);
+    Q_SCRIPTABLE bool reduceMotion() const;
     Q_SCRIPTABLE void showAndActivate();
     Q_SCRIPTABLE void hideFences();
     Q_SCRIPTABLE bool fencesDesktopVisible() const { return !m_userHidden && isVisible(); }
+    Q_SCRIPTABLE bool desktopCovered() const { return m_desktopCovered; }
+    void setDesktopCovered(bool covered);
     Q_SCRIPTABLE void toggleEditMode();
     Q_SCRIPTABLE void toggleDesklet();
     Q_SCRIPTABLE void setSystemMonitorSkin(int skin);
@@ -173,7 +185,6 @@ private slots:
 
 private:
     VideoWallpaperTrial *m_videoTrial=nullptr;
-    VideoWallpaperPreview *m_videoPreviewStore=nullptr;
     QString m_pendingVideoWallpaper;
     void videoWallpaperStateChanged();
     QPointer<FencesSettingsWindow> m_settingsWindow;
@@ -378,6 +389,7 @@ private:
     QString             m_desktopInboxFenceId;
     bool                m_loadingLayout = false;
     bool                m_userHidden = false;
+    bool                m_desktopCovered = false;
     QColor              m_defaultFenceColor { 0, 120, 215, 90 };
 
     // 字体配置

@@ -1,7 +1,11 @@
 #pragma once
+#include "VideoWallpaperCache.h"
 #include <QCloseEvent>
 #include <QScreen>
 #include "VideoWallpaperPreview.h"
+#include "MusicDesklet.h"
+#include "SmartSpaceWidget.h"
+#include "VideoWallpaperRegion.h"
 static int runVideoTrialTest(const QString &root)
 {
     QSettings settings;settings.setValue("systemMonitor/autoStart",false);settings.setValue("smartSpace/autoStart",false);
@@ -38,14 +42,17 @@ static int runVideoTrialTest(const QString &root)
     check(config.value("wallpaperPath")==root+"/original.png"&&config.value("wallpaperMode")==2,
           "trial never persists media, first frame or changed fitting mode");
     executable("ukui-fences-video-trial", R"PY(#!/usr/bin/python3
-import json,sys,time
-json.loads(sys.stdin.readline())
+import json,sys,time,os
+log=open(os.path.join(os.path.dirname(sys.argv[0]),'geometry.jsonl'),'a',buffering=1)
+first=sys.stdin.readline();log.write(first);json.loads(first)
 print(json.dumps(dict(event='media', decoder='vaapi', sourceFps=60)), flush=True)
 time.sleep(.3)
 print(json.dumps(dict(event='stats', decoder='vaapi', sourceFps=60, width=3840, height=2160)), flush=True)
 print(json.dumps(dict(event='state', state='playing')), flush=True)
 for line in sys.stdin:
-    if json.loads(line).get('command') == 'quit': break
+    log.write(line)
+    message=json.loads(line)
+    if message.get('command') == 'quit': break
 )PY");
     bool deferredSave=false;
     QObject::connect(&canvas,&DesktopCanvas::videoWallpaperTrialChanged,&canvas,[&]{
@@ -59,6 +66,78 @@ for line in sys.stdin:
     check(deferredSave,"media metadata alone does not save an unverified video");
     check(QSettings().value("wallpaper/videoPath")==media.fileName()
           && state().value("persistent").toBool(),"verified hardware playback saves the selected video");
+    auto freeRegion=[&]{
+        QFile log(root+"/bin/geometry.jsonl");log.open(QIODevice::ReadOnly);QJsonObject geometry;
+        while(!log.atEnd()){
+            const auto message=QJsonDocument::fromJson(log.readLine()).object();
+            if(message.value("command")=="geometry")geometry=message;
+        }
+        QRegion region;
+        for(const auto &value:geometry.value("rects").toArray()){
+            const auto rect=value.toArray();
+            region|=QRect(rect[0].toInt(),rect[1].toInt(),rect[2].toInt(),rect[3].toInt());
+        }
+        return region;
+    };
+    auto freeArea=[&]{
+        qint64 area=0;for(const QRect &rect:freeRegion())area+=qint64(rect.width())*rect.height();
+        return area;
+    };
+    const auto unobstructed=freeArea();
+    auto *cutout=new QWidget(&canvas);cutout->setGeometry(600,400,100,80);
+    cutout->setMask(QRegion(0,0,100,80));cutout->show();settle(100);
+    check(freeArea()<unobstructed,"new child removes its real visible region from the video drawable");
+    delete cutout;settle(100);
+    check(freeArea()==unobstructed,"destroyed child restores the video region without stale mask pointers");
+    cutout=new QWidget(&canvas);cutout->setGeometry(600,400,100,80);
+    cutout->setMask(QRegion(0,0,40,40));cutout->show();settle(100);
+    const auto smallerMask=freeArea();cutout->setMask(QRegion(0,0,100,80));cutout->update();settle(100);
+    check(freeArea()<smallerMask,"replacement child and paint-time mask changes reach the player geometry");
+    delete cutout;settle(100);
+    // Follow the actual player geometry: transparent pixels must remain video,
+    // while glass/text keep their cached poster. Empty QWidget masks used to
+    // reserve both the entire music card and the star's rectangular hit area.
+    auto videoAt=[&](const QPoint &logical){
+        const qreal dpr=canvas.devicePixelRatioF();
+        return freeRegion().contains(QPoint(qFloor(logical.x()*dpr),qFloor(logical.y()*dpr)));
+    };
+    canvas.setMusicWidgetVisible(true);
+    auto *music=canvas.findChild<MusicDesklet *>();
+    check(music!=nullptr,"video test creates the real music card");
+    if(music){
+        music->move(500,400);timer.restart();
+        while(music->material().isNull()&&timer.elapsed()<3000)settle(20);
+        settle(150);
+        check(!music->internalWinId() && music->mask().isEmpty() && videoAt(music->pos()),
+              "music transparent corner remains live video without altering input mask");
+        check(!videoAt(music->geometry().center()),"music glass body remains protected from native video");
+        const int builds=music->materialBuilds();
+        for(int i=0;i<5;++i){music->grab();settle(30);}
+        check(music->materialBuilds()==builds,"ordinary music repaints do not rebuild optics or video coverage");
+        music->resize(music->size()+QSize(40,20));settle(300);
+        check(videoAt(music->pos()+QPoint(music->width()-1,music->height()-1))
+            && !videoAt(music->geometry().center()),"music resize updates the player's rounded cutout");
+        canvas.setMusicWidgetVisible(false);settle(100);
+    }
+    QSettings().setValue("smartSpace/themeMode",3);
+    QSettings().setValue("smartSpace/defaultHidden",false);
+    QSettings().setValue("smartSpace/alwaysOnTop",false);
+    canvas.showSmartSpaceWidget();canvas.moveSmartSpace(100,200);canvas.resizeSmartSpace(800,500);settle(300);
+    auto *smart=canvas.findChild<SmartSpaceWidget *>();
+    check(smart!=nullptr,"video test creates the real Smart Space surface");
+    if(smart){
+        check(videoAt(smart->pos()) && !videoAt(smart->geometry().center()),
+              "expanded Smart Space leaves transparent margins on live video");
+        smart->hideToNearestEdge();settle(300);
+        check(smart->edgeHidden() && videoAt(smart->pos()+QPoint(1,1)),
+              "collapsed entry no longer freezes its entire rectangular background");
+        check(!videoAt(smart->geometry().center()),"star artwork remains above the video");
+        check(!smart->internalWinId() && smart->mask().isEmpty(),"star keeps its mouse hit area without a native rectangle");
+        smart->revealFromEdge();settle(300);
+        check(videoAt(smart->pos()) && !videoAt(smart->geometry().center()),
+              "reveal retires the animation cutout and restores rounded glass coverage");
+        smart->hide();settle(100);
+    }
     check(!canvas.setVideoWallpaper(root+"/missing.mp4")
           && QSettings().value("wallpaper/videoPath")==media.fileName(),"invalid replacement preserves saved selection");
     // A backend failure also preserves the last working choice for next launch.
@@ -229,17 +308,42 @@ print('{"streams":[{"width":640,"height":360}],"format":{"duration":"10.0"}}')
         preview.setFile(realClip);preview.show();timer.restart();
         while(preview.property("previewState")!="ready" && timer.elapsed()<8000)settle(20);
         check(preview.property("frameCount").toInt()==3,"real FFmpeg extracts three timestamped video frames");
+        auto cleanPreview=[&](VideoWallpaperPreview &view){
+            auto *status=view.findChild<QLabel *>("videoPreviewStatus");
+            if(!status || status->isVisible() || !status->text().isEmpty())return false;
+            for(auto *label:view.findChildren<QLabel *>())
+                if(label->isVisible() && (label->text().contains("秒附近")
+                    || label->text().contains(" / 3") || label->text().contains("三帧")))return false;
+            return view.findChild<QLabel *>("videoAnimatedPreview")!=nullptr;
+        };
+        check(cleanPreview(preview),"successful preview displays image without numbering or frame descriptions");
         auto *first=preview.findChild<QLabel *>("videoPreviewFrame0");
         auto *last=preview.findChild<QLabel *>("videoPreviewFrame2");
         check(first && last && first->pixmap() && last->pixmap()
             && first->pixmap()->toImage()!=last->pixmap()->toImage(),"real preview frames show different points in the clip");
         QDir().mkpath("artifacts");preview.grab().save("artifacts/video-thumbnail-preview.png");
+        VideoWallpaperPreview waiting;
+        waiting.setFile(realClip); // No cache yet; its debounce races confirmation.
         preview.confirmFile(realClip);
+        QFile manifest(VideoWallpaperCache::directory(realClip)+"/preview.json");
+        manifest.open(QIODevice::ReadOnly);const QByteArray committed=manifest.readAll();manifest.close();
+        timer.restart();
+        while(!waiting.property("cacheHit").toBool() && timer.elapsed()<4000)settle(20);
+        waiting.confirmFile(realClip);settle(300);
+        manifest.open(QIODevice::ReadOnly);
+        check(waiting.property("cacheHit").toBool() && manifest.readAll()==committed,
+              "pending second preview adopts the confirmed cache without replacing its random frames");
+        manifest.close();
+        const auto metadata=QJsonDocument::fromJson(committed).object();
+        QImage highDpi(VideoWallpaperCache::directory(realClip)+"/frame640-0.png");
+        check(metadata.value("version")==2 && highDpi.size()==QSize(640,360),
+              "new previews cache enough real pixels for a 2x display");
         {
             VideoWallpaperPreview reopened;
             reopened.setFile(realClip);reopened.show();
             check(reopened.property("cacheHit").toBool() && reopened.property("frameCount").toInt()==3,
                   "confirmed preview reloads persistent frames without FFmpeg");
+            check(cleanPreview(reopened),"cached preview also keeps success and timestamp descriptions hidden");
             const int before=reopened.property("animationFrame").toInt();settle(1050);
             check(reopened.property("animationFrame").toInt()!=before,"visible preview animates cached frames");
             reopened.hide();const int hidden=reopened.property("animationFrame").toInt();settle(1050);
@@ -248,6 +352,18 @@ print('{"streams":[{"width":640,"height":360}],"format":{"duration":"10.0"}}')
         preview.setFile(root+"/missing.mp4");preview.setFile(QString());settle(400);
         check(preview.property("frameCount").toInt()==0 && preview.property("previewState")=="empty",
             "cancelling preview clears stale images and stops extraction");
+        preview.setFile(root+"/missing.mp4");settle(400);
+        auto *errorLabel=preview.findChild<QLabel *>("videoPreviewStatus");
+        check(errorLabel && errorLabel->isVisible() && !errorLabel->text().isEmpty(),
+              "preview errors remain readable after removing decorative descriptions");
+        QFile prior(root+"/prior.mp4");prior.open(QIODevice::WriteOnly);prior.write("prior");prior.close();
+        QFile stale(root+"/stale.mp4");stale.open(QIODevice::WriteOnly);stale.write("stale");stale.close();
+        const auto priorDir=VideoWallpaperCache::directory(prior.fileName());
+        const auto staleDir=VideoWallpaperCache::directory(stale.fileName());
+        QDir().mkpath(priorDir);QDir().mkpath(staleDir);
+        VideoWallpaperCache::prune(realClip,prior.fileName());
+        check(QDir(VideoWallpaperCache::directory(realClip)).exists() && QDir(priorDir).exists() && !QDir(staleDir).exists(),
+              "confirmation prunes only obsolete owned caches and retains the previous video");
     }
     return failures?1:0;
 }

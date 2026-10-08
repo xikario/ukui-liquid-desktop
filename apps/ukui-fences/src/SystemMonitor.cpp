@@ -6,6 +6,7 @@
 #include <QUrl>
 #include "DesktopCanvas.h"
 #include "MenuStyle.h"
+#include "VideoWallpaperRegion.h"
 
 #include <QAction>
 #include <QApplication>
@@ -216,9 +217,16 @@ SystemMonitor::SystemMonitor(QWidget *parent)
     refreshStats();
 
     m_timer.setTimerType(Qt::VeryCoarseTimer);
-    m_timer.setInterval(m_statIntervalSec * 1000);
+    m_timer.setInterval(statIntervalMs());
     connect(&m_timer, &QTimer::timeout,
             this, &SystemMonitor::refreshStats);
+    if (auto *canvas = qobject_cast<DesktopCanvas *>(parent)) {
+        connect(canvas, &DesktopCanvas::desktopCoveredChanged, this, [this](bool covered) {
+            m_timer.setInterval(statIntervalMs());
+            // Catch up at once when the desktop is uncovered, so stale numbers never show.
+            if (!covered && isVisible()) refreshStats();
+        });
+    }
     m_diagnosisTimer.setTimerType(Qt::CoarseTimer);
     m_diagnosisTimer.setInterval(DIAGNOSIS_SAMPLE_INTERVAL_MS);
     connect(&m_diagnosisTimer, &QTimer::timeout,
@@ -595,6 +603,16 @@ void SystemMonitor::appendHistory(QVector<double> &history, double value)
     if (history.size() >= HISTORY_POINTS)
         history.removeFirst();
     history.append(clampPercent(value));
+}
+
+int SystemMonitor::statIntervalMs() const
+{
+    // Nobody reads the gauges behind a maximized window; keep a slow sample so
+    // history stays continuous without five-second wake-ups.
+    const auto *canvas = qobject_cast<const DesktopCanvas *>(parentWidget());
+    const int seconds = canvas && canvas->desktopCovered()
+        ? qMax(COVERED_STAT_INTERVAL_SEC, m_statIntervalSec) : m_statIntervalSec;
+    return seconds * 1000;
 }
 
 void SystemMonitor::refreshStats()
@@ -1235,6 +1253,9 @@ void SystemMonitor::paintEvent(QPaintEvent *event)
                 m_liquidGlassImage = canvas->renderLiquidGlass(
                     geometry(), 14.0 * m_scale);
                 m_liquidGlassGeometry = geometry();
+                if (!m_liquidGlassImage.isNull())
+                    VideoWallpaperRegion::publish(
+                        this, VideoWallpaperRegion::coverage(m_liquidGlassImage, devicePixelRatioF()));
             }
         }
         if (!m_liquidGlassImage.isNull()) {
@@ -1424,6 +1445,7 @@ void SystemMonitor::setSkin(Skin skin)
     if (m_skin == skin)
         return;
     m_skin = skin;
+    publishVideoCutout();
     m_liquidPointerEffect->setEnabled(skin == Skin::Liquid);
     if (skin == Skin::Wallpaper)
         refreshWallpaperTheme();
@@ -2381,7 +2403,7 @@ QWidget *SystemMonitor::createSettingsPage(QWidget *parent)
         m_customApiModel = customModel->text().trimmed();
         m_aiError.clear();
         // 应用新的采样周期
-        m_timer.setInterval(m_statIntervalSec * 1000);
+        m_timer.setInterval(statIntervalMs());
         setSkin(static_cast<Skin>(skinChoice->currentIndex()));
         saveSettings();
         updateAiLayoutHeight();
@@ -3184,6 +3206,15 @@ void SystemMonitor::resizeEvent(QResizeEvent *event)
     QWidget::resizeEvent(event);
     m_liquidGlassImage = {};
     m_liquidGlassGeometry = {};
+    publishVideoCutout();
+}
+
+void SystemMonitor::publishVideoCutout()
+{
+    // Every skin paints a 14px logical rounded panel; the native video must
+    // stay visible outside it instead of exposing the poster in the corners.
+    VideoWallpaperRegion::publish(
+        this, VideoWallpaperRegion::rounded(QRectF(rect()), 14.0 * m_scale, devicePixelRatioF()));
 }
 
 void SystemMonitor::wheelEvent(QWheelEvent *event)
@@ -3216,7 +3247,7 @@ void SystemMonitor::showEvent(QShowEvent *event)
     QWidget::showEvent(event);
     refreshStats();
     if (!m_timer.isActive())
-        m_timer.start(m_statIntervalSec * 1000);
+        m_timer.start(statIntervalMs());
 }
 
 void SystemMonitor::hideEvent(QHideEvent *event)

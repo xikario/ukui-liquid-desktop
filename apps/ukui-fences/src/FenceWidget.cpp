@@ -4,10 +4,15 @@
 #include <QPaintEvent>
 #include <memory>
 #include "FenceWidget.h"
+#include "GlassFinish.h"
+#include "LiquidPopup.h"
+#include <QDebug>
+#include <QElapsedTimer>
 #include "DesktopIcon.h"
 #include "DesktopCanvas.h"
 #include "FileClipboard.h"
 #include "MenuStyle.h"
+#include "VideoWallpaperRegion.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -148,13 +153,14 @@ FenceWidget::FenceWidget(const QString &title,
     m_glassPointerEffect = new PointerEffect(this, [this](const QPoint &pos, bool inside) {
         inside = inside && m_liquidGlassEnabled;
         const qreal target = inside ? 1.0 : 0.0;
-        const qreal next = !isVisible() ? 0.0 : qAbs(target-m_glassHover) < 0.015
-            ? target : m_glassHover+(target-m_glassHover)*0.25;
+        const qreal step = frameSeconds(m_glassHoverClock);
+        const qreal next = !isVisible() ? 0.0 : smoothToward(m_glassHover, target, step);
+        if (next == target) m_glassHoverClock.invalidate();
         if (pos != m_glassPointer || next != m_glassHover) {
             QPainterPath rim;
             if (m_magneticEdge != MagneticEdge::None && m_magneticContour.size() >= 2)
                 rim = fenceShapePath();
-            else rim.addRoundedRect(QRectF(rect()).adjusted(0.8,0.8,-0.8,-0.8),9.2,9.2);
+            else rim = GlassFinish::squirclePath(QRectF(rect()).adjusted(0.8,0.8,-0.8,-0.8),9.2);
             QRegion damage;
             if (m_glassHover > 0) damage |= pointerRimDamage(rim, m_glassPointer, 110);
             if (next > 0) damage |= pointerRimDamage(rim, pos, 110);
@@ -354,9 +360,9 @@ void FenceWidget::setCollapsed(bool c)
     const QRect start = geometry();
     if (!m_collapseAnimation) {
         m_collapseAnimation = new QPropertyAnimation(this, "geometry", this);
-        m_collapseAnimation->setEasingCurve(QEasingCurve::InOutCubic);
         connect(m_collapseAnimation, &QPropertyAnimation::finished, this, [this] {
             m_collapseSnapshot = {};
+            m_collapseContent = {};
             updateShapeMask();
             layoutIcons();
             update();
@@ -365,14 +371,23 @@ void FenceWidget::setCollapsed(bool c)
     }
     m_collapseAnimation->stop();
     m_expandedH = restoredHeight;
-    // Capture the expanded surface only once, including its icons. Resizing
-    // during the transition then reveals this cache instead of rebuilding glass
-    // and relaying out live children on every frame. Reversals reuse the cache.
+    // Capture the expanded panel and its content separately, only once. The
+    // panel is revealed like a drawer while the content slides with its lower
+    // edge, so no glass rebuild or child relayout happens per frame.
     if (m_collapseSnapshot.isNull()) {
         m_collapsed = false;
         resize(width(), restoredHeight);
         layoutIcons();
+        QWidget *content = m_embeddedWidget ? m_embeddedWidget : m_iconViewport;
+        if (content && content->isVisible()) {
+            m_collapseContent = content->grab();
+            m_collapseContentPos = content->pos();
+        }
+        m_iconViewport->hide();
+        if (m_embeddedWidget) m_embeddedWidget->hide();
+        m_hideCollapseArrow = true;
         m_collapseSnapshot = grab();
+        m_hideCollapseArrow = false;
         setProperty("collapseCaptures", property("collapseCaptures").toInt() + 1);
     }
     m_collapsed = c;
@@ -381,8 +396,14 @@ void FenceWidget::setCollapsed(bool c)
     setGeometry(start);
     updateShapeMask();
     const int target = c ? TITLE_H : m_expandedH;
-    m_collapseAnimation->setDuration(qMax(60, 200 * qAbs(target - height()) /
-                                               qMax(1, m_expandedH - TITLE_H)));
+    // Expanding settles with a small spring past the stop; collapsing glides
+    // in without one, so the title never dips below its own height.
+    QEasingCurve curve(c ? QEasingCurve::InOutCubic : QEasingCurve::OutBack);
+    if (!c) curve.setOvershoot(0.9);
+    m_collapseAnimation->setEasingCurve(curve);
+    const int span = qMax(1, m_expandedH - TITLE_H);
+    m_collapseAnimation->setDuration(LiquidPopup::Motion::duration(LiquidPopup::Motion::Slow,
+        qreal(qAbs(target - height())) / span, 120));
     m_collapseAnimation->setStartValue(start);
     m_collapseAnimation->setEndValue(QRect(x(), y(), width(), target));
     m_collapseAnimation->start();
@@ -911,7 +932,7 @@ void FenceWidget::layoutIcons()
         if(animation)animation->stop();
         if(m_animateReorder && icon->isVisible() && icon->pos()!=pos) {
             if(!animation){animation=new QPropertyAnimation(icon,"pos",icon);animation->setObjectName("fenceReorderAnimation");}
-            animation->setDuration(160);animation->setEasingCurve(QEasingCurve::OutCubic);
+            animation->setDuration(LiquidPopup::Motion::duration(LiquidPopup::Motion::Fast));animation->setEasingCurve(QEasingCurve::OutCubic);
             animation->setStartValue(icon->pos());animation->setEndValue(pos);animation->start();
         } else icon->move(pos);
         bool moving=false;
@@ -924,7 +945,13 @@ void FenceWidget::layoutIcons()
 
 void FenceWidget::resizeEvent(QResizeEvent *)
 {
-    if (!m_collapseSnapshot.isNull()) { update(); return; }
+    if (!m_collapseSnapshot.isNull()) {
+        // Follow the drawer frame by frame so the growing body is never
+        // covered by the native video until the animation ends.
+        VideoWallpaperRegion::publish(this, VideoWallpaperRegion::rounded(QRectF(rect()), 10, devicePixelRatioF()));
+        update();
+        return;
+    }
     updateShapeMask();
     if (m_embeddedWidget) {
         m_embeddedWidget->setGeometry(
@@ -1408,8 +1435,7 @@ QPainterPath FenceWidget::fenceShapePath() const
     QPainterPath path;
     if (m_collapsed || m_magneticEdge == MagneticEdge::None ||
         m_magneticContour.size() < 2) {
-        path.addRoundedRect(QRectF(rect()), 10, 10);
-        return path;
+        return GlassFinish::squirclePath(QRectF(rect()), 10);
     }
 
     if (m_magneticEdge == MagneticEdge::Left) {
@@ -1442,14 +1468,20 @@ QPainterPath FenceWidget::fenceShapePath() const
 
     // 异形套索只负责替换被磁吸的一侧；其余边缘仍应遵循标准圆角。
     // 与圆角矩形求交可同时修复右侧/底部直角和窗口 mask 的锯齿外溢。
-    QPainterPath roundedBounds;
-    roundedBounds.addRoundedRect(
-        QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10);
+    const QPainterPath roundedBounds =
+        GlassFinish::squirclePath(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10);
     return path.intersected(roundedBounds).simplified();
 }
 
 void FenceWidget::updateShapeMask()
 {
+    // Reserve only the painted rounded/magnetic panel above the native video,
+    // so the corners show live video rather than the canvas poster.
+    QRegion painted(fenceShapePath().toFillPolygon().toPolygon());
+    const QRegion core=painted;
+    painted |= core.translated(1,0) | core.translated(-1,0)
+               | core.translated(0,1) | core.translated(0,-1);
+    VideoWallpaperRegion::publish(this, VideoWallpaperRegion::toDevice(painted, devicePixelRatioF()));
     if (m_collapsed || m_magneticEdge == MagneticEdge::None ||
         m_magneticContour.size() < 2) {
         clearMask();
@@ -1515,15 +1547,80 @@ void FenceWidget::prepareGlassCache()
     if (!m_liquidGlassEnabled) return;
     const QPainterPath bgPath = fenceShapePath();
     const bool shaped = m_magneticEdge != MagneticEdge::None && m_magneticContour.size() >= 2;
+    // Stretch the last panel while the pointer drags; rebuild once on release.
+    if (!m_glassImage.isNull() && (m_dragging || m_resizing)) return;
     if (m_glassImage.isNull() || m_glassGeometry != geometry() || m_glassShape != bgPath) {
         if (auto *canvas = qobject_cast<DesktopCanvas *>(parentWidget())) {
-            m_glassImage = canvas->renderLiquidGlass(
-                geometry(), 10.0, shaped ? bgPath : QPainterPath());
+            QElapsedTimer timer; timer.start();
+            m_glassImage = GlassFinish::withEdge(GlassFinish::withGrain(GlassFinish::withScrim(canvas->renderLiquidGlass(
+                geometry(), 10.0, shaped ? bgPath : QPainterPath()), GlassFinish::scrim())), bgPath);
+            qInfo().noquote() << QStringLiteral("[glass] fence %1x%2 rebuilt in %3 ms")
+                .arg(width()).arg(height()).arg(timer.elapsed());
             setProperty("glassBuilds", property("glassBuilds").toInt() + 1);
             m_glassGeometry = geometry();
             m_glassShape = bgPath;
         }
     }
+}
+
+void FenceWidget::paintCollapseDrawer(QPainter &p)
+{
+    const qreal dpr = m_collapseSnapshot.devicePixelRatio();
+    const qreal fullH = m_collapseSnapshot.height() / dpr;
+    const qreal w = width(), h = height(), sw = m_collapseSnapshot.width();
+    constexpr qreal rim = 10;
+    p.setClipPath(GlassFinish::squirclePath(QRectF(rect()), 10), Qt::IntersectClip);
+    p.setRenderHint(QPainter::SmoothPixmapTransform);
+    // Panel: keep glyphs at their size and carry the rounded lower rim with
+    // the edge. During the spring overshoot stretch a thin strip above it.
+    if (h <= fullH) {
+        p.drawPixmap(0, 0, m_collapseSnapshot);
+        if (h < fullH && h > TITLE_H + rim)
+            p.drawPixmap(QRectF(0, h - rim, w, rim), m_collapseSnapshot,
+                         QRectF(0, (fullH - rim) * dpr, sw, rim * dpr));
+    } else {
+        p.drawPixmap(QRectF(0, 0, w, fullH - rim), m_collapseSnapshot,
+                     QRectF(0, 0, sw, (fullH - rim) * dpr));
+        p.drawPixmap(QRectF(0, fullH - rim, w, h - fullH), m_collapseSnapshot,
+                     QRectF(0, (fullH - rim - 2) * dpr, sw, 2 * dpr));
+        p.drawPixmap(QRectF(0, h - rim, w, rim), m_collapseSnapshot,
+                     QRectF(0, (fullH - rim) * dpr, sw, rim * dpr));
+    }
+
+    const qreal t = qBound(0.0, (h - TITLE_H) / qMax(1.0, fullH - TITLE_H), 1.0);
+    const qreal motion = qSin(M_PI * t); // 0 at rest, strongest mid-pull
+    // Content rides on the drawer's lower edge and tucks under the title.
+    if (!m_collapseContent.isNull()) {
+        p.save();
+        p.setClipRect(QRectF(0, TITLE_H, w, qMax(0.0, h - TITLE_H)), Qt::IntersectClip);
+        p.setOpacity(qBound(0.0, t * 1.5 - 0.15, 1.0));
+        p.drawPixmap(QPointF(m_collapseContentPos) + QPointF(0, h - fullH), m_collapseContent);
+        p.restore();
+    }
+    if (motion > 0.01 && h > TITLE_H + 2) {
+        // Shadow where content slides under the title, and a light lip on the
+        // edge being pulled.
+        QLinearGradient tuck(0, TITLE_H, 0, TITLE_H + 10);
+        tuck.setColorAt(0, QColor(0, 0, 0, qRound(70 * motion)));
+        tuck.setColorAt(1, Qt::transparent);
+        p.fillRect(QRectF(0, TITLE_H, w, qMin(10.0, h - TITLE_H)), tuck);
+        QLinearGradient lip(0, h - 9, 0, h);
+        lip.setColorAt(0, Qt::transparent);
+        lip.setColorAt(1, QColor(255, 255, 255, qRound(42 * motion)));
+        p.fillRect(QRectF(0, qMax<qreal>(TITLE_H, h - 9), w, 9), lip);
+        p.setPen(QPen(QColor(255, 255, 255, qRound(90 * motion)), 1));
+        p.drawLine(QLineF(rim, h - 0.5, w - rim, h - 0.5));
+    }
+    // The chevron turns with the drawer: down when shut, up when open.
+    p.setClipping(false);
+    p.save();
+    p.translate(w - 16, TITLE_H / 2.0);
+    p.rotate(180 * t);
+    p.setPen(QPen(m_hasTitleFont ? m_titleFontColor : QColor(Qt::white), 1.8,
+                  Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    const QPointF chevron[3] = {{-5, -3}, {0, 3}, {5, -3}};
+    p.drawPolyline(chevron, 3);
+    p.restore();
 }
 
 void FenceWidget::paintEvent(QPaintEvent *event)
@@ -1533,17 +1630,7 @@ void FenceWidget::paintEvent(QPaintEvent *event)
     p.setRenderHint(QPainter::Antialiasing);
 
     if (!m_collapseSnapshot.isNull()) {
-        // Keep glyphs at their original size; reveal/retract vertically and
-        // retain the rounded lower rim rather than squashing the entire image.
-        QPainterPath clip;
-        clip.addRoundedRect(QRectF(rect()), 10, 10);
-        p.setClipPath(clip, Qt::IntersectClip);
-        p.drawPixmap(0, 0, m_collapseSnapshot);
-        const qreal dpr = m_collapseSnapshot.devicePixelRatio();
-        const qreal fullHeight = m_collapseSnapshot.height() / dpr;
-        if (height() < fullHeight && height() > TITLE_H + 10)
-            p.drawPixmap(QRectF(0, height()-10, width(), 10), m_collapseSnapshot,
-                         QRectF(0, (fullHeight-10)*dpr, m_collapseSnapshot.width(), 10*dpr));
+        paintCollapseDrawer(p);
         return;
     }
     const QRectF r(rect());
@@ -1564,7 +1651,7 @@ void FenceWidget::paintEvent(QPaintEvent *event)
             p.setClipPath(bgPath, Qt::IntersectClip);
             QPainterPath rim;
             if (shaped) rim = bgPath;
-            else rim.addRoundedRect(QRectF(rect()).adjusted(0.8, 0.8, -0.8, -0.8), 9.2, 9.2);
+            else rim = GlassFinish::squirclePath(QRectF(rect()).adjusted(0.8, 0.8, -0.8, -0.8), 9.2);
             QRadialGradient light(m_glassPointer, 110);
             light.setColorAt(0, QColor(230, 248, 255, qRound(210*m_glassHover)));
             light.setColorAt(0.42, QColor(196, 228, 255, qRound(70*m_glassHover)));
@@ -1647,7 +1734,8 @@ void FenceWidget::paintEvent(QPaintEvent *event)
     p.setPen(QPen(m_hasTitleFont ? m_titleFontColor : QColor(Qt::white), 1.8));
     const int ax = width() - 16;
     const int ay = TITLE_H / 2;
-    if (m_collapsed) {
+    if (m_hideCollapseArrow) {
+    } else if (m_collapsed) {
         // ▼
         p.drawLine(ax - 5, ay - 3, ax,     ay + 3);
         p.drawLine(ax,     ay + 3, ax + 5, ay - 3);
@@ -1752,6 +1840,7 @@ void FenceWidget::mousePressEvent(QMouseEvent *e)
         m_collapseAnimation->state() == QAbstractAnimation::Running) {
         m_collapseAnimation->stop();
         m_collapseSnapshot = {};
+        m_collapseContent = {};
         resize(width(), m_collapsed ? TITLE_H : m_expandedH);
         layoutIcons();
     }

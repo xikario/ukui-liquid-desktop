@@ -30,7 +30,9 @@ static int runCalendarTest(const QString &root){
         check(sql(QString("INSERT INTO Schedule VALUES('two','%1','%1','18','0','新增待办','不重复',0,0,'','');").arg(today)),"external system calendar update written");settle(600);
         check(calendar->scheduleCount()==2 && calendar->materialBuilds()==builds,"database watcher updates tasks without rebuilding glass");
         QFile::copy(database,database+".replacement");
-        check(sql("DELETE FROM Schedule WHERE id='two';"),"native deletion fixture applied");settle(450);
+        check(sql("DELETE FROM Schedule WHERE id='two';"),"native deletion fixture applied");
+        // Reload is debounced and read by an async helper process; poll instead of a fixed sleep.
+        for(int waited=0;waited<3000 && calendar->scheduleCount()!=1;waited+=50)settle(50);
         check(calendar->scheduleCount()==1,"native calendar deletion is reflected");
         QFile::remove(database);QFile::rename(database+".replacement",database);settle(600);
         check(calendar->scheduleCount()==2,"atomic database replacement reattaches the file watch");

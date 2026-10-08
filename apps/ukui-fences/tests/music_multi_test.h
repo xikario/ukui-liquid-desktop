@@ -63,6 +63,7 @@ static int runMusicMultiTest(const QString &root) {
         check(player->title()==b.song && card->windowTitle().contains("客户端 B"),"song metadata and visible client identity follow the selected player");
         a.state="Playing"; a.notify({{"PlaybackStatus",a.state},{"Metadata",a.metadata()}}); settle(80);
         check(player->activeService()==bName && player->title()==b.song && !player->playing(),"old playback notifications never steal selection or overwrite the new player");
+        a.state="Paused";
         card->findChild<QPushButton *>("musicNext")->click(); player->openPlayer();
         check(waitMusic([&]{return b.nextCount==1 && b.raiseCount==1;}) && a.nextCount==0 && a.raiseCount==0,"playback and Raise are routed exclusively to the active owner");
         const QString instance=bName+".instance77"; busB.registerService(instance);
@@ -76,6 +77,20 @@ static int runMusicMultiTest(const QString &root) {
         check(a.seekCount==oldSeek && a.vol==oldVolume,"client changes during dragging cannot seek or alter the fallback player, even with the same track ID");
         busB.registerService(bName);
         check(waitMusic([&]{return player->connected() && player->activeService()==bName;}),"restarted MPRIS registration reconnects automatically");
+        busB.unregisterService(bName); busA.unregisterService(aName);
+        check(waitMusic([&]{return player->activeService().isEmpty();}),"priority fixture starts without clients");
+        a.state="Playing"; busA.registerService(aName);
+        check(waitMusic([&]{return player->connected() && player->activeService()==aName && player->playing();}),"playing client connects");
+        busB.registerService(bName);
+        check(waitMusic([&]{return player->availableServices().contains(bName);}) && (settle(300),true)
+              && player->activeService()==aName,"a playing client keeps priority over a newer paused client");
+        a.state="Paused"; a.notify({{"PlaybackStatus",a.state}});
+        check(waitMusic([&]{return !player->playing();}),"paused state of the active client is tracked live");
+        busB.unregisterService(bName); busB.registerService(bName);
+        check(waitMusic([&]{return player->connected() && player->activeService()==bName;}),"between paused clients the newest one wins again");
+        // Keep the unconfigured client newest, as the settings checks below expect.
+        busB.unregisterService(ignored); busB.registerService(ignored);
+        check(waitMusic([&]{return player->availableServices().contains(ignored);}),"unconfigured client is rediscovered after re-registration");
 
         canvas.showSettingsPage("music"); settle(80);
         auto *window=canvas.findChild<FencesSettingsWindow *>();
@@ -95,7 +110,8 @@ static int runMusicMultiTest(const QString &root) {
             available->setCurrentIndex(available->findData(ignored));
             check(!form->property("settingsDirty").toBool(),"selecting a discovery result alone is not a configuration change");
             form->findChild<QPushButton *>("musicAddDetected")->click();
-            check(!form->findChild<QLineEdit *>("musicClientProgram")->text().isEmpty(),"adding a running client identifies its executable without a file chooser");
+            // Process inspection is asynchronous; the editor fills the draft once it lands.
+            check(waitMusic([&]{return !form->findChild<QLineEdit *>("musicClientProgram")->text().isEmpty();}),"adding a running client identifies its executable without a file chooser");
             auto *identify=form->findChild<QPushButton *>("musicIdentifyProgram");identify->click();settle(20);
             bool chooser=false;for(auto *top:QApplication::topLevelWidgets())chooser|=QString(top->metaObject()->className()).contains("FileDialog");
             check(!chooser && !form->findChild<QLabel *>("musicClientsStatus")->text().isEmpty(),"process identification returns without a modal file dialog");

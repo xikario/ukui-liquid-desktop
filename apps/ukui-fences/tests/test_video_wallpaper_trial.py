@@ -18,6 +18,13 @@ class FillGeometryTest(unittest.TestCase):
 
 
 class VisibilityTest(unittest.TestCase):
+    def test_only_explicit_hide_rewinds_on_resume(self):
+        self.assertTrue(trial.should_rewind(True,True,False,True))
+        self.assertFalse(trial.should_rewind(False,True,False,True))
+        self.assertFalse(trial.should_rewind(True,True,True,True))
+        self.assertFalse(trial.should_rewind(True,False,False,True))
+        self.assertFalse(trial.should_rewind(True,True,False,False))
+
     def test_two_windows_cover_desktop_together(self):
         self.assertEqual(trial.exposed_fraction([(0,0,100,100)],[(0,0,55,100),(45,0,55,100)]),0)
 
@@ -35,6 +42,44 @@ class VisibilityTest(unittest.TestCase):
 
     def test_empty_region(self):
         self.assertEqual(trial.exposed_fraction([],[]),0)
+
+
+class PlaybackPolicyTest(unittest.TestCase):
+    def test_first_start_is_immediate(self):
+        self.assertEqual(trial.playback_action(True, False, False, started=False), 'play')
+
+    def test_resume_waits_then_plays_when_due(self):
+        self.assertEqual(trial.playback_action(True, False, False, started=True), 'wait')
+        self.assertEqual(trial.playback_action(True, False, True, started=True), 'none')
+        self.assertEqual(trial.playback_action(True, False, True, started=True, due=True), 'play')
+
+    def test_cover_pauses_at_once_and_cancels_pending_resume(self):
+        self.assertEqual(trial.playback_action(False, True, False, started=True), 'pause')
+        self.assertEqual(trial.playback_action(False, False, True, started=True), 'pause')
+        self.assertEqual(trial.playback_action(False, False, False, started=True), 'none')
+
+    def test_playing_stays_playing(self):
+        self.assertEqual(trial.playback_action(True, True, False, started=True), 'none')
+
+    def test_state_reports_are_throttled(self):
+        self.assertFalse(trial.should_report(False, 0.34, 0.32))
+        self.assertTrue(trial.should_report(False, 0.40, 0.34))
+        self.assertTrue(trial.should_report(True, 0.34, 0.34))
+
+
+class ShadowFrameTest(unittest.TestCase):
+    def test_client_side_shadow_is_not_an_occluder(self):
+        self.assertEqual(trial.visible_frame(100, 50, 848, 663, [24, 24, 15, 48]), (124, 65, 800, 600))
+
+    def test_plain_window_unchanged(self):
+        self.assertEqual(trial.visible_frame(0, 0, 640, 480, []), (0, 0, 640, 480))
+
+    def test_degenerate_extents_drop_window(self):
+        self.assertIsNone(trial.visible_frame(0, 0, 40, 40, [30, 30, 0, 0]))
+
+    def test_shadow_margin_restores_exposed_desktop(self):
+        frame = trial.visible_frame(0, 0, 148, 163, [24, 24, 15, 48])
+        self.assertAlmostEqual(trial.exposed_fraction([(0, 0, 200, 200)], [frame]), 1 - 100*100/40000)
 
 
 class NativeRateMediaTest(unittest.TestCase):

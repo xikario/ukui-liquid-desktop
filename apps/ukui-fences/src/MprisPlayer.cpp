@@ -105,6 +105,13 @@ MprisPlayer::MprisPlayer(QObject *parent,bool playback):QObject(parent),m_networ
     bus.connect("org.freedesktop.DBus","/org/freedesktop/DBus","org.freedesktop.DBus","NameOwnerChanged",this,SLOT(ownerChanged(QString,QString,QString)));
     m_progress.setInterval(1000);
     connect(&m_progress,&QTimer::timeout,this,[this]{emit changed();if(++m_ticks%10==0)requestPosition();});
+    // Bursts of PropertiesChanged during a track switch collapse into one
+    // lyrics parse and one artwork-palette pass.
+    m_metadataTimer.setSingleShot(true);m_metadataTimer.setInterval(120);
+    connect(&m_metadataTimer,&QTimer::timeout,this,[this]{
+        m_lyrics=Lyrics::parse(unwrap(metadata().value("xesam:asText")).toString());
+        emit metadataChanged();
+    });
     discover();
 }
 void MprisPlayer::discover() {
@@ -149,13 +156,31 @@ void MprisPlayer::observe(const QString &name,const QString &owner,bool live) {
         const auto done=[this,name,owner,pid](const MusicClientIntegration::ProcessInfo &info) {
             --m_probes;
             if (m_instances.contains(name) && m_instances.value(name).owner==owner) {
-                auto &instance=m_instances[name]; instance.started=info.started; instance.pid=pid;instance.launch=info.launch;instance.ready=true;
+                auto &instance=m_instances[name]; instance.started=info.started; instance.pid=pid;instance.launch=info.launch;
+                probeStatus(name,owner); return;
             }
             finishDiscovery(); selectActive(); emit clientsChanged();
         };
         if (r.isError()) { done({}); return; }
         if (!BackgroundTask::run(this,[pid,name]{return MusicClientIntegration::inspectProcess(pid,name);},done)) done({});
     });
+}
+void MprisPlayer::probeStatus(const QString &name,const QString &owner) {
+    // One-shot status read so selection can prefer a playing client. Inactive
+    // players are not tracked live: their later notifications never steal focus.
+    ++m_probes;
+    auto msg=QDBusMessage::createMethodCall(owner,path,properties,"Get"); msg<<player<<QStringLiteral("PlaybackStatus");
+    auto *w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(msg,1500),this);
+    connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,name,owner]{
+        QDBusPendingReply<QDBusVariant> r=*w; w->deleteLater(); --m_probes;
+        if (m_instances.contains(name) && m_instances.value(name).owner==owner) {
+            auto &instance=m_instances[name]; instance.status=r.isError()?QString():r.value().variant().toString(); instance.ready=true;
+        }
+        finishDiscovery(); selectActive(); emit clientsChanged();
+    });
+}
+int MprisPlayer::statusRank(const QString &,const QString &status) const {
+    return status=="Playing" ? 2 : status=="Paused" ? 1 : 0;
 }
 void MprisPlayer::finishDiscovery() {
     if (!m_listPending && m_ownerRequests==0 && m_probes==0) { m_initialDiscovery=false; selectActive(); emit clientsChanged(); }
@@ -195,18 +220,20 @@ void MprisPlayer::selectActive() {
         if (!m_service.isEmpty() && (!m_instances.contains(m_service) || m_instances.value(m_service).owner!=m_owner)) setActive({},{});
         return;
     }
-    QString selected; Instance newest;
+    QString selected; Instance newest; int bestRank=-1;
     bool unavailableStart=false;
     for (auto it=m_instances.cbegin();it!=m_instances.cend();++it)
         if (it.value().ready && profileIndex(it.key())>=0 && !it.value().started) unavailableStart=true;
     for (auto it=m_instances.cbegin();it!=m_instances.cend();++it) {
         const auto &candidate=it.value();
         if (!candidate.ready || profileIndex(it.key())<0) continue;
-        const bool later=selected.isEmpty()
-            || (!unavailableStart && candidate.started>newest.started)
+        // Playing > paused > anything else; ties keep the newest client.
+        const int rank=statusRank(it.key(),candidate.status);
+        const bool later=selected.isEmpty() || rank>bestRank || (rank==bestRank && (
+               (!unavailableStart && candidate.started>newest.started)
             || ((unavailableStart || candidate.started==newest.started) && candidate.order>newest.order)
-            || ((unavailableStart || candidate.started==newest.started) && candidate.order==newest.order && it.key()>selected);
-        if (later) { selected=it.key(); newest=candidate; }
+            || ((unavailableStart || candidate.started==newest.started) && candidate.order==newest.order && it.key()>selected)));
+        if (later) { selected=it.key(); newest=candidate; bestRank=rank; }
     }
     if (selected!=m_service || newest.owner!=m_owner) setActive(selected,newest.owner);
 }
@@ -219,7 +246,7 @@ void MprisPlayer::setActive(const QString &name,const QString &owner) {
     ++m_generation;++m_revision; m_service=name; m_owner=owner;
     m_connected=false;m_values.clear();m_rootValues.clear();m_position=0;m_elapsed.invalidate();
     m_refreshing=m_refreshAgain=m_positionPending=false;m_error.clear();
-    updateCover();updateTimer();emit changed();
+    noteMetadata();updateCover();updateTimer();emit changed();
     if (!owner.isEmpty()) {
         bus.connect(owner,path,properties,"PropertiesChanged",this,SLOT(propertiesChanged(QString,QVariantMap,QStringList)));
         bus.connect(owner,path,player,"Seeked",this,SLOT(seeked(qlonglong)));
@@ -250,7 +277,8 @@ void MprisPlayer::refresh() {
         if(!reply.isError() && revision==m_revision){
             m_values=reply.value();m_connected=true;m_error.clear();
             m_position=unwrap(m_values.value("Position")).toLongLong();m_elapsed.restart();
-            updateCover();updateTimer();emit changed();
+            if(m_instances.contains(m_service))m_instances[m_service].status=m_values.value("PlaybackStatus").toString();
+            noteMetadata();updateCover();updateTimer();emit changed();
         } else if(reply.isError()){m_error="暂时无法读取播放状态";emit changed();}
         if(m_refreshAgain){m_refreshAgain=false;refresh();}
     });
@@ -265,10 +293,24 @@ void MprisPlayer::propertiesChanged(const QString &iface,const QVariantMap &upda
     m_position=position();m_elapsed.restart();++m_revision;
     for(auto it=updates.begin();it!=updates.end();++it)m_values[it.key()]=unwrap(it.value());
     for(const auto &name:invalidated)m_values.remove(name);
-    if(updates.contains("Metadata")){m_position=0;updateCover();requestPosition();}
+    if(updates.contains("Metadata")){m_position=0;noteMetadata();updateCover();requestPosition();}
+    if(updates.contains("PlaybackStatus") && m_instances.contains(m_service))m_instances[m_service].status=m_values.value("PlaybackStatus").toString();
     if(updates.contains("Position"))m_position=unwrap(updates.value("Position")).toLongLong();
     updateTimer();emit changed();
     if(!invalidated.isEmpty() || m_refreshing || !m_connected)refresh();
+}
+void MprisPlayer::noteMetadata() {
+    // Players resend identical Metadata with every status change; only a
+    // different track/text bumps the revision and schedules derived work.
+    const QVariantMap m=metadata();
+    const QString key=trackId()+'\x1f'+title()+'\x1f'+artist()+'\x1f'+QString::number(length())+'\x1f'
+        +unwrap(m.value("mpris:artUrl")).toString()+'\x1f'+unwrap(m.value("xesam:asText")).toString();
+    if(key==m_metadataKey)return;
+    m_metadataKey=key;++m_metadataRevision;m_metadataTimer.start();
+}
+QString MprisPlayer::currentLyric() const {
+    const int i=Lyrics::lineAt(m_lyrics,position());
+    return i>=0?m_lyrics.at(i).text:QString();
 }
 QVariantMap MprisPlayer::metadata() const {return mapValue(m_values.value("Metadata"));}
 QString MprisPlayer::trackId() const {

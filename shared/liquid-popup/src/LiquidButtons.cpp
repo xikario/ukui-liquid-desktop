@@ -10,6 +10,7 @@
 
 namespace LiquidButtons {
 namespace {
+constexpr qreal hoverLayer=.10, pressLayer=.18;
 class ButtonPaint final : public QObject {
 public:
     explicit ButtonPaint(QPushButton *button):QObject(button),button(button) {
@@ -58,9 +59,13 @@ private:
         const bool light=foreground.lightness()<128;
         QColor rim=light?QColor(32,58,76,65):QColor(225,245,255,48);
         QColor fill=light?QColor(255,255,255,40):QColor(218,238,255,19);
+        // Hover and press are state layers over the resting fill: the accent
+        // at 10% and 18% coverage, so every skin keeps the same relative step.
+        const QColor accent=light?QColor(31,125,126):QColor(99,207,198);
+        qreal stateLayer=0;
         if(!enabled) {rim.setAlpha(18);fill.setAlpha(7);}
-        else if(active) {fill=QColor(90,190,185,88);rim.setAlpha(105);}
-        else if(hover) {fill=QColor(119,215,209,53);rim.setAlpha(90);}
+        else if(active) {stateLayer=pressLayer;rim.setAlpha(105);}
+        else if(hover) {stateLayer=hoverLayer;rim.setAlpha(90);}
         if(enabled&&button->isDefault())rim=light?QColor(31,125,126,100):QColor(99,207,198,120);
         if(focus)rim=light?QColor(31,125,126,200):QColor(99,207,198,210);
         // Leave a logical pixel for every AA sample. No rectangular clip/mask,
@@ -75,6 +80,10 @@ private:
             painter.setBrush(gradient);
             painter.setPen(flat&&!focus?QPen(Qt::NoPen):QPen(rim,1));
             painter.drawRoundedRect(bounds,radius,radius);
+            if(stateLayer>0) {
+                QColor layer=accent;layer.setAlphaF(stateLayer);
+                painter.setPen(Qt::NoPen);painter.setBrush(layer);painter.drawRoundedRect(bounds,radius,radius);
+            }
         }
         const QString glyph=button->property("liquidButtonGlyph").toString();
         if(glyph=="close"||glyph=="minimize") {

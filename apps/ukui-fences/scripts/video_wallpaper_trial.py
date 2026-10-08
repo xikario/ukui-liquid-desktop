@@ -50,6 +50,32 @@ def should_pause(fraction, was_covered):
     return fraction < (0.15 if was_covered else 0.10)
 
 
+RESUME_DELAY_MS = 1500
+STATE_FRACTION_STEP = 0.05
+
+
+def visible_frame(x, y, width, height, shadow):
+    # ARGB clients (Chrome, Electron, GTK CSD) draw shadows inside their X window;
+    # _GTK_FRAME_EXTENTS (left,right,top,bottom) gives the transparent margin.
+    if len(shadow) == 4:
+        left, right, top, bottom = shadow
+        x, y, width, height = x + left, y + top, width - left - right, height - top - bottom
+    return (x, y, width, height) if width > 0 and height > 0 else None
+
+
+def playback_action(wanted, playing, waiting, started, due=False):
+    """Pause at once; resume only after the desktop stays exposed for a moment.
+    The very first start is immediate so the poster hands over without delay."""
+    if not wanted: return 'pause' if playing or waiting else 'none'
+    if playing: return 'none'
+    if due or not started: return 'play'
+    return 'none' if waiting else 'wait'
+
+
+def should_report(state_changed, fraction, reported):
+    return state_changed or abs(fraction - reported) >= STATE_FRACTION_STEP
+
+
 def inspect_media(path):
     source = Path(path).resolve(strict=True)
     metadata = json.loads(subprocess.check_output(
@@ -145,6 +171,16 @@ class Rect(C.Structure):
     _fields_ = [('x', C.c_short), ('y', C.c_short), ('width', C.c_ushort), ('height', C.c_ushort)]
 
 
+class WindowAttributes(C.Structure):
+    _fields_ = [(n,t) for n,t in [
+        ('background_pixmap',C.c_ulong),('background_pixel',C.c_ulong),
+        ('border_pixmap',C.c_ulong),('border_pixel',C.c_ulong),
+        ('bit_gravity',C.c_int),('win_gravity',C.c_int),('backing_store',C.c_int),
+        ('backing_planes',C.c_ulong),('backing_pixel',C.c_ulong),
+        ('save_under',C.c_int),('event_mask',C.c_long),('do_not_propagate_mask',C.c_long),
+        ('override_redirect',C.c_int),('colormap',C.c_ulong),('cursor',C.c_ulong)]]
+
+
 class Attributes(C.Structure):
     _fields_ = [(n, t) for n, t in [
         ('x', C.c_int), ('y', C.c_int), ('width', C.c_int), ('height', C.c_int),
@@ -154,6 +190,21 @@ class Attributes(C.Structure):
         ('save_under', C.c_int), ('colormap', C.c_ulong), ('map_installed', C.c_int), ('map_state', C.c_int),
         ('all_event_masks', C.c_long), ('your_event_mask', C.c_long), ('do_not_propagate_mask', C.c_long),
         ('override_redirect', C.c_int), ('screen', C.c_void_p)]]
+
+class PropertyEvent(C.Structure):
+    _fields_ = [('type', C.c_int), ('serial', C.c_ulong), ('send_event', C.c_int),
+                ('display', C.c_void_p), ('window', C.c_ulong), ('atom', C.c_ulong),
+                ('time', C.c_ulong), ('state', C.c_int)]
+
+
+class XErrorEvent(C.Structure):
+    _fields_ = [('type', C.c_int), ('display', C.c_void_p), ('resource', C.c_ulong),
+                ('serial', C.c_ulong), ('code', C.c_ubyte), ('request', C.c_ubyte),
+                ('minor', C.c_ubyte)]
+
+
+def should_rewind(hidden, visible, covered, ready):
+    return bool(hidden and visible and not covered and ready)
 
 
 class X11:
@@ -169,6 +220,7 @@ class X11:
             'XGetWindowAttributes': (C.c_int, [C.c_void_p, C.c_ulong, C.POINTER(Attributes)]),
             'XTranslateCoordinates': (C.c_int, [C.c_void_p, C.c_ulong, C.c_ulong, C.c_int, C.c_int, C.POINTER(C.c_int), C.POINTER(C.c_int), C.POINTER(C.c_ulong)]),
             'XGetWindowProperty': (C.c_int, [C.c_void_p, C.c_ulong, C.c_ulong, C.c_long, C.c_long, C.c_int, C.c_ulong, C.POINTER(C.c_ulong), C.POINTER(C.c_int), C.POINTER(C.c_ulong), C.POINTER(C.c_ulong), C.POINTER(C.c_void_p)]),
+            'XChangeWindowAttributes': (C.c_int, [C.c_void_p, C.c_ulong, C.c_ulong, C.POINTER(WindowAttributes)]),
             'XMoveResizeWindow': (C.c_int, [C.c_void_p, C.c_ulong, C.c_int, C.c_int, C.c_uint, C.c_uint]),
             'XSelectInput': (C.c_int, [C.c_void_p, C.c_ulong, C.c_long]),
             'XMapWindow': (C.c_int, [C.c_void_p, C.c_ulong]),
@@ -187,12 +239,16 @@ class X11:
         self.was_covered = False
         self.visible_fraction = 1.0
         self.watched = set()
+        self.properties = {}
         self.parent = parent; self.root = self.lib.XDefaultRootWindow(self.display)
         self.window = self.lib.XCreateSimpleWindow(self.display, parent, 0, 0, 1, 1, 0, 0, 0)
-        self.ext.XShapeCombineRectangles(self.display, self.window, 2, 0, 0, None, 0, 0, 0)  # empty input
-        self.ext.XShapeCombineRectangles(self.display, self.window, 0, 0, 0, None, 0, 0, 0)  # initially invisible
+        # Keep the player child outside any SubstructureRedirect on the canvas.
+        native = WindowAttributes(); native.override_redirect = 1
+        self.lib.XChangeWindowAttributes(self.display, self.window, 1 << 9, C.byref(native))
+        self.ext.XShapeCombineRectangles(self.display, self.window, 2, 0, 0, None, 0, 0, 0)
+        self.ext.XShapeCombineRectangles(self.display, self.window, 0, 0, 0, None, 0, 0, 0)
         self.lib.XSelectInput(self.display, self.root, (1 << 22) | (1 << 19))
-        self.lib.XSelectInput(self.display, parent, (1 << 17) | (1 << 16))
+        self.lib.XSelectInput(self.display, self.parent, (1 << 17) | (1 << 16))
 
     def atom(self, name):
         if name not in self.atoms:
@@ -200,13 +256,20 @@ class X11:
         return self.atoms[name]
 
     def values(self, window, name):
+        cached_names = ('_NET_WM_WINDOW_TYPE', '_NET_WM_STATE', '_NET_WM_DESKTOP', '_NET_WM_WINDOW_OPACITY',
+                        '_GTK_FRAME_EXTENTS')
+        cached = window != self.root and name in cached_names
+        if cached and (window, name) in self.properties:
+            return self.properties[window, name]
         actual = C.c_ulong(); fmt = C.c_int(); count = C.c_ulong(); remaining = C.c_ulong(); data = C.c_void_p()
         self.lib.XGetWindowProperty(self.display, window, self.atom(name), 0, 65536, 0, 0,
                                    C.byref(actual), C.byref(fmt), C.byref(count), C.byref(remaining), C.byref(data))
         try:
             if data and fmt.value == 32:
-                p = C.cast(data, C.POINTER(C.c_ulong)); return [p[i] for i in range(count.value)]
-            return []
+                p = C.cast(data, C.POINTER(C.c_ulong)); result = [p[i] for i in range(count.value)]
+            else: result = []
+            if cached: self.properties[window, name] = result
+            return result
         finally:
             if data: self.lib.XFree(data)
 
@@ -231,6 +294,7 @@ class X11:
         covers = []
         live = set(clients)
         self.watched.intersection_update(live)
+        self.properties = {key:value for key,value in self.properties.items() if key[0] in live}
         for window in clients[clients.index(self.parent)+1:]:
             if window not in self.watched:
                 # Root events alone miss moves of reparented client windows.
@@ -246,23 +310,31 @@ class X11:
             attributes = self.attributes(window)
             if not attributes or attributes.map_state != 2: continue
             wx, wy = self.origin(window)
-            covers.append((wx-px, wy-py, attributes.width, attributes.height))
+            frame = visible_frame(wx-px, wy-py, attributes.width, attributes.height,
+                                  self.values(window, '_GTK_FRAME_EXTENTS'))
+            if frame: covers.append(frame)
         # The input regions already exclude Fences and desklets. Subtract each
         # ordinary window once, so overlapping windows are never double-counted.
         self.visible_fraction = exposed_fraction(self.rectangles, covers)
         self.was_covered = should_pause(self.visible_fraction, self.was_covered)
         return self.was_covered
 
-    def shape(self, width, height, aspect, rectangles):
+    def shape(self, width, height, aspect, rectangles, show=True):
         self.rectangles = rectangles
         x, y, vw, vh = fill_geometry(width, height, aspect)
         self.lib.XMoveResizeWindow(self.display, self.window, x, y, vw, vh)
+        self.set_clip(show)
+
+    def set_clip(self, show):
+        rectangles = self.rectangles if show else []
+        x = y = 0  # Native drawable fills the desktop; mpv panscan handles cropping.
         values = (Rect * len(rectangles))(*(Rect(rx - x, ry - y, rw, rh) for rx, ry, rw, rh in rectangles))
         self.ext.XShapeCombineRectangles(self.display, self.window, 0, 0, 0, values, len(rectangles), 0, 0)
         self.lib.XFlush(self.display)
 
     def close(self):
-        self.lib.XDestroyWindow(self.display, self.window); self.lib.XCloseDisplay(self.display)
+        self.lib.XDestroyWindow(self.display, self.window)
+        self.lib.XCloseDisplay(self.display)
 
 
 
@@ -276,7 +348,16 @@ def main():
     # A client can disappear between reading the stacking list and its geometry.
     # Keep the callback alive for this process; such X11 races must not kill playback.
     handler_type = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p)
-    xerror_handler = handler_type(lambda display, event: 0)
+    error_count = 0
+    def xerror(display, event):
+        nonlocal error_count
+        if error_count < 5:
+            details = C.cast(event, C.POINTER(XErrorEvent)).contents
+            print('video X11 error code=%d request=%d resource=0x%x' %
+                  (details.code, details.request, details.resource), file=sys.stderr, flush=True)
+        error_count += 1
+        return 0
+    xerror_handler = handler_type(xerror)
     xlib.XSetErrorHandler.argtypes = [handler_type]
     xlib.XSetErrorHandler(xerror_handler)
     # Only opt this isolated player into the OEM driver on the matching device.
@@ -313,13 +394,17 @@ def main():
     player = None
     visible = bool(initial_geometry['visible']) and bool(initial_geometry['rects'])
     locked = False
+    on_battery = False
+    resume_timer = None
     ready = False
-    playing = None
+    playing = False
     pending = False
     loops = 0
     stats_timer = None
     reported_fraction = -1.0
     failed = False
+    started = False
+    resume_from_hidden = not visible
 
     def emit(**values):
         print(json.dumps(values), flush=True)
@@ -339,24 +424,48 @@ def main():
             emit(event='stats', loops=loops, **data)
         return True
 
-    def update():
-        nonlocal playing, pending, stats_timer, reported_fraction
-        pending = False
-        parent = x11.attributes(args.parent)
-        covered = x11.covered()
-        wanted = bool(ready and visible and not locked and parent and parent.map_state == 2 and not covered)
-        state_changed = wanted != playing
-        if state_changed:
+    def apply_playback(wanted, covered, parent):
+        nonlocal playing, stats_timer, resume_from_hidden
+        rewind = wanted and should_rewind(resume_from_hidden, visible, covered, ready)
+        if wanted != playing or rewind:
             playing = wanted
+            if rewind:
+                player.command('seek', '0', 'absolute+exact')
+                resume_from_hidden = False
             player.pause(not wanted)
             if stats_timer is not None:
                 GLib.source_remove(stats_timer); stats_timer = None
             if wanted: stats_timer = GLib.timeout_add_seconds(5, report)
-        if state_changed or abs(x11.visible_fraction-reported_fraction)>0.005:
-            reported_fraction=x11.visible_fraction
-            emit(event='state', state='starting' if not ready else 'playing' if wanted else 'paused',
+            return True
+        return False
+
+    def update(due=False):
+        nonlocal pending, reported_fraction, resume_timer, started
+        pending = False
+        parent = x11.attributes(args.parent)
+        covered = x11.covered()
+        wanted = bool(ready and visible and not locked and not on_battery
+                      and parent and parent.map_state == 2 and not covered)
+        action = playback_action(wanted, playing, resume_timer is not None, started, due)
+        if action in ('pause', 'play') and resume_timer is not None:
+            GLib.source_remove(resume_timer); resume_timer = None
+        if action == 'wait':
+            # Alt-tab and quick window flicks must not spin the 4K decoder up and down.
+            resume_timer = GLib.timeout_add(RESUME_DELAY_MS, resume)
+        state_changed = action in ('pause', 'play') and apply_playback(action == 'play', covered, parent)
+        if action == 'play': started = True
+        if should_report(state_changed, x11.visible_fraction, reported_fraction):
+            reported_fraction = x11.visible_fraction
+            emit(event='state', state='starting' if not ready else 'playing' if playing else 'paused',
                  loops=loops, visible=visible, mapped=parent.map_state if parent else None,
-                 locked=locked, covered=covered, visibleFraction=x11.visible_fraction)
+                 locked=locked, battery=on_battery, covered=covered,
+                 visibleFraction=round(x11.visible_fraction, 3))
+        return False
+
+    def resume():
+        nonlocal resume_timer
+        resume_timer = None
+        update(due=True)
         return False
 
     def schedule():
@@ -367,7 +476,7 @@ def main():
     input_buffer = bytearray(buffered)
     os.set_blocking(sys.stdin.fileno(), False)
     def commands(fd, condition):
-        nonlocal visible
+        nonlocal visible, resume_from_hidden
         try:
             chunk = os.read(fd, 65536)
             if not chunk: loop.quit(); return False
@@ -381,6 +490,7 @@ def main():
                 value = json.loads(line)
                 if value.get('command') == 'quit': loop.quit(); return False
                 if value.get('command') == 'geometry':
+                    if not value['visible']: resume_from_hidden = True
                     visible = bool(value['visible']) and bool(value['rects'])
                     x11.shape(max(1, int(value['width'])), max(1, int(value['height'])),
                               width / height, value['rects'])
@@ -393,12 +503,23 @@ def main():
         event = C.create_string_buffer(192)
         while x11.lib.XPending(x11.display):
             x11.lib.XNextEvent(x11.display, event)
+            property_event = C.cast(event, C.POINTER(PropertyEvent)).contents
+            if property_event.type == 28:  # PropertyNotify
+                key = (property_event.window, property_event.atom)
+                x11.properties = {k:v for k,v in x11.properties.items()
+                                  if not (k[0] == key[0] and x11.atom(k[1]) == key[1])}
         schedule()
         return True
 
     def screen_lock(connection, sender, path, interface, name, parameters, data):
         nonlocal locked
         locked = bool(parameters.unpack()[0]); schedule()
+
+    def power(connection, sender, path, interface, name, parameters, data):
+        nonlocal on_battery
+        changed = parameters.unpack()[1]
+        if 'OnBattery' in changed:
+            on_battery = bool(changed['OnBattery']); schedule()
 
     try:
         player = Player(x11.window)
@@ -447,6 +568,17 @@ def main():
             locked = bool(connection.call_sync('org.freedesktop.ScreenSaver', '/ScreenSaver',
                 'org.freedesktop.ScreenSaver', 'GetActive', None, None,
                 Gio.DBusCallFlags.NONE, 500, None).unpack()[0])
+        except GLib.Error: pass
+        # A 4K decode is the largest battery cost on the desktop; the poster
+        # stays on screen while unplugged. Missing UPower simply means mains.
+        try:
+            system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+            system.signal_subscribe('org.freedesktop.UPower', 'org.freedesktop.DBus.Properties',
+                'PropertiesChanged', '/org/freedesktop/UPower', 'org.freedesktop.UPower',
+                Gio.DBusSignalFlags.NONE, power, None)
+            on_battery = bool(system.call_sync('org.freedesktop.UPower', '/org/freedesktop/UPower',
+                'org.freedesktop.DBus.Properties', 'Get', GLib.Variant('(ss)', ('org.freedesktop.UPower', 'OnBattery')),
+                None, Gio.DBusCallFlags.NONE, 500, None).unpack()[0])
         except GLib.Error: pass
         def startup_deadline():
             if not ready: fail('video player did not become ready')
