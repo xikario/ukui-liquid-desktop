@@ -1,10 +1,10 @@
-# ukui-fences 0.6.0 · 桌面分区与小组件
+# ukui-fences 0.7.0 · 桌面分区与小组件
 
 Fences 在 UKUI X11 桌面上提供文件分区、图标整理及六类小组件，统一使用桌面布局和设置中心。原 Peony 桌面保留作为底层，不需要替换系统文件管理器。项目使用 Qt 5 Widgets / C++17，按 GPL-3.0-or-later 发布。
 
-[项目主页](../../README.md) · [构建](../../docs/BUILD.md) · [安装与恢复](../../docs/INSTALL_AND_RESTORE.md) · [v0.6.0](../../docs/versions/v0.6.0.md)
+[项目主页](../../README.md) · [构建](../../docs/BUILD.md) · [安装与恢复](../../docs/INSTALL_AND_RESTORE.md) · [v0.7.0](../../docs/versions/v0.7.0.md)
 
-本轮未发布收尾包括玻璃缓存、音乐事件合并与实时播放器选择、减弱动效以及任务栏联动；验证范围和性能统计口径见 [2026-10-08 收尾记录](../../docs/REFINEMENT_CLOSEOUT_20261008.md)。
+v0.7.0 包括玻璃缓存、视频壁纸、音乐事件合并与实时播放器选择、减弱动效以及任务栏联动；验证范围和性能统计口径见 [2026-10-08 收尾记录](../../docs/REFINEMENT_CLOSEOUT_20261008.md)。
 
 ## 首次使用
 
