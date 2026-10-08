@@ -110,7 +110,10 @@ MprisPlayer::MprisPlayer(QObject *parent,bool playback):QObject(parent),m_networ
     m_metadataTimer.setSingleShot(true);m_metadataTimer.setInterval(120);
     connect(&m_metadataTimer,&QTimer::timeout,this,[this]{
         m_lyrics=Lyrics::parse(unwrap(metadata().value("xesam:asText")).toString());
+        updateCover();
+        if(m_trackPositionPending){m_trackPositionPending=false;requestPosition();}
         emit metadataChanged();
+        emit changed();
     });
     discover();
 }
@@ -142,9 +145,10 @@ void MprisPlayer::ownerChanged(const QString &name,const QString &,const QString
     ++m_nameVersions[name]; observe(name,owner,true);
 }
 void MprisPlayer::observe(const QString &name,const QString &owner,bool live) {
-    if (owner.isEmpty()) { m_instances.remove(name); selectActive(); emit clientsChanged(); return; }
+    if (owner.isEmpty()) { m_instances.remove(name); syncStatusSubscriptions(); selectActive(); emit clientsChanged(); return; }
     if (m_instances.contains(name) && m_instances.value(name).owner==owner) return;
     m_instances[name]={owner,0,live?++m_order:0,false};
+    syncStatusSubscriptions();
     // Drop the old connection immediately on owner replacement, even while the
     // new owner's process start time is being checked in the background.
     selectActive(); emit clientsChanged(); ++m_probes;
@@ -166,18 +170,54 @@ void MprisPlayer::observe(const QString &name,const QString &owner,bool live) {
     });
 }
 void MprisPlayer::probeStatus(const QString &name,const QString &owner) {
-    // One-shot status read so selection can prefer a playing client. Inactive
-    // players are not tracked live: their later notifications never steal focus.
+    // Seed the status cache. A signal received during the read takes precedence.
+    const quint64 revision=m_instances.value(name).statusRevision;
     ++m_probes;
     auto msg=QDBusMessage::createMethodCall(owner,path,properties,"Get"); msg<<player<<QStringLiteral("PlaybackStatus");
     auto *w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(msg,1500),this);
-    connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,name,owner]{
+    connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,name,owner,revision]{
         QDBusPendingReply<QDBusVariant> r=*w; w->deleteLater(); --m_probes;
         if (m_instances.contains(name) && m_instances.value(name).owner==owner) {
-            auto &instance=m_instances[name]; instance.status=r.isError()?QString():r.value().variant().toString(); instance.ready=true;
+            auto &instance=m_instances[name];
+            if(revision==instance.statusRevision)instance.status=r.isError()?QString():r.value().variant().toString();
+            instance.ready=true;
         }
         finishDiscovery(); selectActive(); emit clientsChanged();
     });
+}
+void MprisPlayer::syncStatusSubscriptions() {
+    // Only enabled owners have a lightweight status subscription. Full metadata,
+    // artwork, position and controls still belong to the sole active owner.
+    QSet<QString> wanted;
+    if(m_playback)for(auto it=m_instances.cbegin();it!=m_instances.cend();++it)
+        if(profileIndex(it.key())>=0)wanted.insert(it.value().owner);
+    auto bus=QDBusConnection::sessionBus();
+    for(const auto &owner:m_statusOwners-wanted)
+        bus.disconnect(owner,path,properties,"PropertiesChanged",this,SLOT(playbackStatusChanged(QString,QVariantMap,QStringList)));
+    for(const auto &owner:wanted-m_statusOwners)
+        bus.connect(owner,path,properties,"PropertiesChanged",this,SLOT(playbackStatusChanged(QString,QVariantMap,QStringList)));
+    const auto added=wanted-m_statusOwners;
+    m_statusOwners=wanted;
+    // Re-enabled clients may have changed state while their subscription was off.
+    for(auto it=m_instances.cbegin();it!=m_instances.cend();++it)
+        if(it.value().ready && added.contains(it.value().owner) && profileIndex(it.key())>=0)
+            probeStatus(it.key(),it.value().owner);
+}
+void MprisPlayer::playbackStatusChanged(const QString &iface,const QVariantMap &updates,const QStringList &invalidated) {
+    if(!calledFromDBus() || iface!=player || !m_statusOwners.contains(message().service()))return;
+    const QString owner=message().service();
+    if(!updates.contains("PlaybackStatus")){
+        if(invalidated.contains("PlaybackStatus"))for(auto it=m_instances.cbegin();it!=m_instances.cend();++it)
+            if(it.value().owner==owner && profileIndex(it.key())>=0)probeStatus(it.key(),owner);
+        return;
+    }
+    const QString status=unwrap(updates.value("PlaybackStatus")).toString();
+    bool different=false;
+    for(auto it=m_instances.begin();it!=m_instances.end();++it)if(it.value().owner==owner){
+        ++it.value().statusRevision;
+        if(it.value().status!=status){it.value().status=status;different=true;}
+    }
+    if(different)selectActive();
 }
 int MprisPlayer::statusRank(const QString &,const QString &status) const {
     return status=="Playing" ? 2 : status=="Paused" ? 1 : 0;
@@ -193,7 +233,7 @@ int MprisPlayer::profileIndex(const QString &name) const {
     }
     return index;
 }
-void MprisPlayer::reloadConfiguration() { m_profiles=loadProfiles(); selectActive(); emit changed(); }
+void MprisPlayer::reloadConfiguration() { m_profiles=loadProfiles(); syncStatusSubscriptions(); selectActive(); emit changed(); }
 QString MprisPlayer::clientName() const {
     const int i=profileIndex(m_service);
     return i<0?QString():m_profiles[i].name;
@@ -245,8 +285,11 @@ void MprisPlayer::setActive(const QString &name,const QString &owner) {
     }
     ++m_generation;++m_revision; m_service=name; m_owner=owner;
     m_connected=false;m_values.clear();m_rootValues.clear();m_position=0;m_elapsed.invalidate();
-    m_refreshing=m_refreshAgain=m_positionPending=false;m_error.clear();
-    noteMetadata();updateCover();updateTimer();emit changed();
+    m_refreshing=m_refreshAgain=m_positionPending=m_positionAgain=m_trackPositionPending=false;m_error.clear();
+    m_metadataTimer.stop();m_metadataKey.clear();m_lyrics.clear();
+    m_artUrl.clear();m_cover=QImage();
+    if(m_coverReply){m_coverReply->abort();m_coverReply=nullptr;}
+    updateTimer();emit changed();
     if (!owner.isEmpty()) {
         bus.connect(owner,path,properties,"PropertiesChanged",this,SLOT(propertiesChanged(QString,QVariantMap,QStringList)));
         bus.connect(owner,path,player,"Seeked",this,SLOT(seeked(qlonglong)));
@@ -278,7 +321,7 @@ void MprisPlayer::refresh() {
             m_values=reply.value();m_connected=true;m_error.clear();
             m_position=unwrap(m_values.value("Position")).toLongLong();m_elapsed.restart();
             if(m_instances.contains(m_service))m_instances[m_service].status=m_values.value("PlaybackStatus").toString();
-            noteMetadata();updateCover();updateTimer();emit changed();
+            noteMetadata();updateTimer();emit changed();selectActive();
         } else if(reply.isError()){m_error="暂时无法读取播放状态";emit changed();}
         if(m_refreshAgain){m_refreshAgain=false;refresh();}
     });
@@ -286,27 +329,68 @@ void MprisPlayer::refresh() {
 void MprisPlayer::propertiesChanged(const QString &iface,const QVariantMap &updates,const QStringList &invalidated) {
     if (!calledFromDBus() || message().service()!=m_owner) return;
     if (iface==rootInterface) {
-        for(auto it=updates.begin();it!=updates.end();++it)m_rootValues[it.key()]=unwrap(it.value());
-        if (!invalidated.isEmpty()) refreshRoot(); emit changed(); return;
+        bool different=false;
+        for(auto it=updates.begin();it!=updates.end();++it){
+            const auto value=unwrap(it.value());
+            if(m_rootValues.value(it.key())!=value){m_rootValues[it.key()]=value;different=true;}
+        }
+        if (!invalidated.isEmpty()) refreshRoot();
+        if(different)emit changed();
+        return;
     }
     if(iface!=player || m_owner.isEmpty())return;
-    m_position=position();m_elapsed.restart();++m_revision;
-    for(auto it=updates.begin();it!=updates.end();++it)m_values[it.key()]=unwrap(it.value());
-    for(const auto &name:invalidated)m_values.remove(name);
-    if(updates.contains("Metadata")){m_position=0;noteMetadata();updateCover();requestPosition();}
-    if(updates.contains("PlaybackStatus") && m_instances.contains(m_service))m_instances[m_service].status=m_values.value("PlaybackStatus").toString();
-    if(updates.contains("Position"))m_position=unwrap(updates.value("Position")).toLongLong();
-    updateTimer();emit changed();
-    if(!invalidated.isEmpty() || m_refreshing || !m_connected)refresh();
+    const QString previousTrack=trackKey();
+    const qint64 previousPosition=position();
+    bool controlsChanged=false;
+    for(auto it=updates.begin();it!=updates.end();++it){
+        const auto value=unwrap(it.value());
+        if(it.key()=="Metadata")m_values[it.key()]=value;
+        else if(it.key()=="Position"){
+            m_values[it.key()]=value;
+            if(value.toLongLong()!=previousPosition)controlsChanged=true;
+        }
+        else if(m_values.value(it.key())!=value){m_values[it.key()]=value;controlsChanged=true;}
+    }
+    for(const auto &name:invalidated){
+        if(m_values.remove(name) && name!="Metadata")controlsChanged=true;
+    }
+    const bool metadataChanged=(updates.contains("Metadata") || invalidated.contains("Metadata")) && noteMetadata();
+    const bool trackChanged=previousTrack!=trackKey();
+    if(controlsChanged || metadataChanged){
+        ++m_revision;
+        m_position=trackChanged?0:previousPosition;
+        m_elapsed.restart();
+        if(trackChanged){m_lyrics.clear();m_trackPositionPending=true;}
+        if(updates.contains("Position")){
+            m_position=unwrap(updates.value("Position")).toLongLong();
+            m_trackPositionPending=false;
+        }
+        updateTimer();
+        // Metadata-only bursts repaint once when the derived data is ready.
+        // Playback status, capabilities, seeks and volume remain immediate.
+        if(controlsChanged)emit changed();
+    }
+    if(!invalidated.isEmpty() || !m_connected || (m_refreshing && (controlsChanged || metadataChanged)))refresh();
 }
-void MprisPlayer::noteMetadata() {
+QString MprisPlayer::trackKey() const {
+    const QString id=trackId();
+    if(!id.isEmpty() && !id.endsWith("/NoTrack"))return id;
+    return title()+'\x1f'+artist()+'\x1f'+QString::number(length());
+}
+bool MprisPlayer::noteMetadata() {
     // Players resend identical Metadata with every status change; only a
     // different track/text bumps the revision and schedules derived work.
     const QVariantMap m=metadata();
     const QString key=trackId()+'\x1f'+title()+'\x1f'+artist()+'\x1f'+QString::number(length())+'\x1f'
         +unwrap(m.value("mpris:artUrl")).toString()+'\x1f'+unwrap(m.value("xesam:asText")).toString();
-    if(key==m_metadataKey)return;
+    if(key==m_metadataKey)return false;
     m_metadataKey=key;++m_metadataRevision;m_metadataTimer.start();
+    // Cancel a stale cover immediately, but defer the replacement decode/fetch.
+    const QString art=unwrap(m.value("mpris:artUrl")).toString();
+    if(m_coverReply && art!=m_artUrl){
+        auto *reply=m_coverReply.data();m_coverReply=nullptr;m_artUrl.clear();reply->abort();
+    }
+    return true;
 }
 QString MprisPlayer::currentLyric() const {
     const int i=Lyrics::lineAt(m_lyrics,position());
@@ -332,13 +416,15 @@ void MprisPlayer::seeked(qlonglong p){if(!calledFromDBus() || message().service(
 void MprisPlayer::setVisible(bool visible){m_visible=visible;updateTimer();if(visible)refresh();}
 void MprisPlayer::updateTimer(){if(m_visible && m_connected && playing()){if(!m_progress.isActive())m_progress.start();}else m_progress.stop();}
 void MprisPlayer::requestPosition(){
-    if(m_owner.isEmpty() || !m_visible || m_positionPending)return;
+    if(m_owner.isEmpty() || !m_visible)return;
+    if(m_positionPending){m_positionAgain=true;return;}
     m_positionPending=true;const int generation=m_generation,revision=m_revision;
     auto msg=QDBusMessage::createMethodCall(m_owner,path,properties,"Get");msg<<player<<QString("Position");
     auto *w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(msg,1500),this);
     connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,generation,revision]{
         QDBusPendingReply<QDBusVariant> r=*w;w->deleteLater();if(generation!=m_generation)return;m_positionPending=false;
         if(!r.isError() && revision==m_revision){m_position=r.value().variant().toLongLong();m_elapsed.restart();emit changed();}
+        if(m_positionAgain){m_positionAgain=false;requestPosition();}
     });
 }
 void MprisPlayer::invoke(const QString &method,const QList<QVariant> &args,bool root){
@@ -402,8 +488,11 @@ void MprisPlayer::updateCover(){
         QTimer::singleShot(8000,reply,[reply]{if(!reply->isFinished())reply->abort();});
         const int generation=m_generation;
         connect(reply,&QNetworkReply::finished,this,[this,reply,url,generation]{
-            if(generation==m_generation && m_coverReply==reply && m_artUrl==url && reply->error()==QNetworkReply::NoError)decodeCover(reply->read(maxCoverBytes));
-            if(m_coverReply==reply)m_coverReply=nullptr;reply->deleteLater();emit changed();
+            const bool current=generation==m_generation && m_coverReply==reply && m_artUrl==url
+                && unwrap(metadata().value("mpris:artUrl")).toString()==url;
+            if(current && reply->error()==QNetworkReply::NoError)decodeCover(reply->read(maxCoverBytes));
+            if(m_coverReply==reply)m_coverReply=nullptr;reply->deleteLater();
+            if(current)emit changed();
         });
     }
 }

@@ -11,11 +11,16 @@ QVector<Line> parse(const QString &lrc)
     QVector<Line> lines;
     qint64 offsetMs = 0;
     const QStringList rows = lrc.split(QRegularExpression(QStringLiteral("\\r\\n|\\r|\\n")));
+    // Offset is a document-wide tag; its placement must not change timing.
+    // For malformed files with several tags, the final declaration wins.
+    for(const auto &row:rows){
+        const auto offset=offsetTag.match(row.trimmed());
+        if(offset.hasMatch())offsetMs=offset.captured(1).toLongLong();
+    }
     for (const QString &row : rows) {
         QString rest = row.trimmed();
         const auto offset = offsetTag.match(rest);
         if (offset.hasMatch()) {
-            offsetMs = offset.captured(1).toLongLong();
             continue;
         }
         QVector<qint64> times;

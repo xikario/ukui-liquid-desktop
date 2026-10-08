@@ -1526,6 +1526,7 @@ void DesktopCanvas::setReduceMotion(bool reduce)
     LiquidPopup::theme().reducedMotion = reduce;
     QSettings settings;
     settings.setValue("appearance/reduceMotion", reduce);
+    emit reduceMotionChanged(reduce);
 }
 
 void DesktopCanvas::setGlassScrim(int preset)

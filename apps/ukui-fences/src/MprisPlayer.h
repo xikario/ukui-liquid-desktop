@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QDBusContext>
 #include <QMap>
+#include <QSet>
 #include "Lyrics.h"
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -66,6 +67,7 @@ signals:
     void metadataChanged();
 private slots:
     void propertiesChanged(const QString &, const QVariantMap &, const QStringList &);
+    void playbackStatusChanged(const QString &, const QVariantMap &, const QStringList &);
     void seeked(qlonglong position);
     void ownerChanged(const QString &, const QString &, const QString &);
 private:
@@ -83,11 +85,14 @@ private:
     void updateCover();
     void decodeCover(const QByteArray &bytes);
     void probeStatus(const QString &name, const QString &owner);
-    void noteMetadata();
+    bool noteMetadata();
+    QString trackKey() const;
+    void syncStatusSubscriptions();
     int statusRank(const QString &name, const QString &status) const;
     QVariantMap metadata() const;
-    struct Instance { QString owner; quint64 started=0, order=0; bool ready=false; uint pid=0; MusicClientProfile launch; QString status; };
+    struct Instance { QString owner; quint64 started=0, order=0; bool ready=false; uint pid=0; MusicClientProfile launch; QString status; quint64 statusRevision=0; };
     QMap<QString,Instance> m_instances;
+    QSet<QString> m_statusOwners;
     QMap<QString,quint64> m_nameVersions;
     QList<MusicClientProfile> m_profiles;
     QString m_service, m_owner, m_error, m_artUrl, m_lastProfile;
@@ -106,4 +111,5 @@ private:
     quint64 m_order=0;
     bool m_initialDiscovery=true, m_listPending=true, m_playback=true;
     bool m_connected=false, m_visible=false, m_refreshing=false, m_refreshAgain=false, m_positionPending=false;
+    bool m_positionAgain=false, m_trackPositionPending=false;
 };

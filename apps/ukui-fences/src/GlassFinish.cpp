@@ -173,8 +173,8 @@ const QVector<qint8> &grainTile()
         for (int i = 0; i < values.size(); i += 2) {
             state = state * 1664525u + 1013904223u;
             const qint8 v = qint8(int(state >> 24) % (GRAIN_LEVELS + 1));
-            // Antithetic pairs make the tile exactly zero-mean, so baking grain
-            // cannot shift the averaged tone that text contrast is measured on.
+            // Antithetic pairs make the tile exactly zero-mean before RGB
+            // clamping; black/white limits can still slightly bias the output.
             values[i] = v;
             values[i + 1] = qint8(-v);
         }

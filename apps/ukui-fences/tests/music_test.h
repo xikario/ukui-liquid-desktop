@@ -17,6 +17,11 @@ static int runMusicTest(const QString &root){
               "lyric lookup finds the line showing at a position");
         const auto shifted=Lyrics::parse("[offset:+500]\n[00:02.00]早半秒");
         check(shifted.size()==1 && shifted[0].us==1500000,"LRC offset tag shifts every line");
+        const auto trailing=Lyrics::parse("[00:02.00]早半秒\n[offset:+500]");
+        check(trailing.size()==1 && trailing[0].us==shifted[0].us,"trailing LRC offset has the same document-wide effect");
+        const auto multiple=Lyrics::parse("[offset:+500]\n[00:01][00:02]副歌\n[offset:-250]");
+        check(multiple.size()==2 && multiple[0].us==1250000 && multiple[1].us==2250000,
+              "the final LRC offset declaration applies consistently to every timestamp");
         check(Lyrics::parse("纯文本歌词\n第二行").isEmpty(),"untimed text yields no timed lyrics");
     }
     QSettings settings;settings.setValue("smartSpace/autoStart",false);settings.setValue("systemMonitor/autoStart",false);
@@ -39,6 +44,13 @@ static int runMusicTest(const QString &root){
         settle(120);const int builds=card->materialBuilds();
         play->click();settle(180);check(player->playing() && fixture.playCount==1 && player->progressActive(),"play control starts real MPRIS playback and visible progress timer");
         check(card->notesAnimating(),"MPRIS playing starts floating notes");
+        canvas.setReduceMotion(true);
+        check(!card->notesAnimating() && player->playing() && player->progressActive(),
+              "reducing motion immediately stops decorative notes while music and progress continue");
+        settle(90);
+        check(!card->notesAnimating(),"playing updates cannot restart notes while motion is reduced");
+        canvas.setReduceMotion(false);
+        check(card->notesAnimating(),"restoring motion resumes visible playing notes");
         const QImage firstNotes=card->grab(QRect(6,4,104,120)).toImage();settle(180);
         check(firstNotes!=card->grab(QRect(6,4,104,120)).toImage(),"floating notes visibly move over the cover");
         const QRect expandedArea(112,4,card->width()-124,card->height()-56);
@@ -67,25 +79,68 @@ static int runMusicTest(const QString &root){
         check(fixture.seekCount==seekCount,"changing track while dragging does not seek the new song unexpectedly");
         QTcpServer server;check(server.listen(QHostAddress::LocalHost),"isolated cover HTTP fixture starts");
         int downloads=0;QFile coverFile(root+"/cover.png");coverFile.open(QIODevice::ReadOnly);const QByteArray image=coverFile.readAll();
+        bool holdCover=false;
+        QList<QPointer<QTcpSocket>> heldCovers;
+        const auto sendCover=[&image](QTcpSocket *socket){
+            socket->write("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: "+QByteArray::number(image.size())+"\r\nConnection: close\r\n\r\n"+image);
+            socket->disconnectFromHost();
+        };
         QObject::connect(&server,&QTcpServer::newConnection,&server,[&]{
             auto *socket=server.nextPendingConnection();QObject::connect(socket,&QTcpSocket::readyRead,socket,[&,socket]{
                 if(socket->property("sent").toBool())return;socket->setProperty("sent",true);socket->readAll();++downloads;
-                socket->write("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: "+QByteArray::number(image.size())+"\r\nConnection: close\r\n\r\n"+image);socket->disconnectFromHost();
+                if(holdCover)heldCovers.append(socket);else sendCover(socket);
             });QObject::connect(socket,&QTcpSocket::disconnected,socket,&QObject::deleteLater);
         });
         fixture.art=QString("http://127.0.0.1:%1/cover.png").arg(server.serverPort());fixture.notify({{"Metadata",fixture.metadata()}});settle(200);
         check(downloads==1 && !player->cover().isNull(),"remote artwork loads asynchronously");
         const int revision=player->metadataRevision();
+        fixture.pos=45000000;fixture.notify({{"Position",fixture.pos}});settle(60);
+        const int reads=fixture.positionReads;
+        int updates=0;const auto repeatCounter=QObject::connect(player,&MprisPlayer::changed,[&]{++updates;});
         fixture.notify({{"Metadata",fixture.metadata()}});settle(100);
         check(downloads==1,"unchanged artwork is reused across metadata updates");
         check(player->metadataRevision()==revision,"identical metadata resends keep the metadata revision");
+        check(player->position()==45000000 && fixture.positionReads==reads && updates==0,
+              "identical metadata preserves paused progress without a Position query or UI update");
+        QObject::disconnect(repeatCounter);
+        fixture.song="只更新标题";fixture.notify({{"Metadata",fixture.metadata()}});settle(30);
+        check(player->position()==45000000,"editing metadata for the same track never resets progress");
+        settle(180);
+        check(fixture.positionReads==reads && player->position()==45000000,
+              "same-track metadata does not query playback position after the debounce");
         int rebuilds=0;auto counter=QObject::connect(player,&MprisPlayer::metadataChanged,[&]{++rebuilds;});
-        for(const char *track:{"/track/burst1","/track/burst2","/track/burst3"}){fixture.track=track;fixture.notify({{"Metadata",fixture.metadata()}});settle(15);}
+        for(const char *track:{"/track/burst1","/track/burst2","/track/burst3"}){
+            fixture.track=track;fixture.art=QString("http://127.0.0.1:%1%2.png").arg(server.serverPort()).arg(track);
+            fixture.notify({{"Metadata",fixture.metadata()}});settle(15);
+        }
         fixture.lyrics="[00:01.00][00:03.50]副歌\n[00:02]主歌";fixture.notify({{"Metadata",fixture.metadata()}});
+        fixture.vol=.21;fixture.notify({{"Volume",fixture.vol}});settle(20);
+        check(volume->value()==21 && rebuilds==0,"volume controls update immediately while metadata work is debounced");
         check(waitMusic([&]{return rebuilds>0;}) && player->metadataRevision()>=revision+4,"each distinct metadata bumps the revision");
         settle(200);
         check(rebuilds==1 && player->lyrics().size()==3 && player->lyrics().at(1).text=="主歌","metadata bursts collapse into one debounced lyrics rebuild");
+        check(downloads==2 && fixture.positionReads==reads+1,
+              "distinct track/artwork bursts fetch only the final cover and request position once");
         QObject::disconnect(counter);fixture.lyrics.clear();
+        fixture.track="/track/repeated_position";fixture.notify({{"Metadata",fixture.metadata()}});settle(20);
+        check(player->trackId()==fixture.track,"the repeated-position fixture publishes the new track through D-Bus");
+        fixture.notify({{"Position",fixture.pos}});settle(20);
+        check(player->position()==fixture.pos,"a new-track Position event overrides reset even when it repeats the previous numeric value");
+        settle(140);
+        check(fixture.positionReads==reads+1,"an explicit Position event avoids the deferred track-position query");
+        const int beforeSlow=downloads;holdCover=true;
+        fixture.art=QString("http://127.0.0.1:%1/slow.png").arg(server.serverPort());
+        fixture.notify({{"Metadata",fixture.metadata()}});
+        check(waitMusic([&]{return downloads==beforeSlow+1;}),"a delayed real cover request is in flight");
+        fixture.art=QString("http://127.0.0.1:%1/discarded.png").arg(server.serverPort());
+        fixture.notify({{"Metadata",fixture.metadata()}});settle(15);
+        fixture.art=QString("http://127.0.0.1:%1/slow.png").arg(server.serverPort());
+        fixture.notify({{"Metadata",fixture.metadata()}});
+        check(waitMusic([&]{return downloads==beforeSlow+2;}),
+              "returning to a cancelled cover URL retries it instead of leaving a cached empty cover");
+        holdCover=false;for(const auto &socket:heldCovers)if(socket)sendCover(socket);
+        check(waitMusic([&]{return !player->cover().isNull();}),
+              "only the current delayed cover becomes visible after a metadata burst");
         fixture.art=QUrl::fromLocalFile(root+"/cover.png").toString();fixture.notify({{"Metadata",fixture.metadata()}});settle(80);
         fixture.enabled=false;fixture.notify({{"CanControl",false}});settle(80);
         check(!play->isEnabled() && !seek->isEnabled() && !volume->isEnabled(),"player capability changes disable unsupported controls");

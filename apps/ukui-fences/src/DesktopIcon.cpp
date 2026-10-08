@@ -375,6 +375,20 @@ DesktopIcon::DesktopIcon(const DesktopItem &item, QWidget *parent)
     m_refreshFeedback.setEndValue(0.0);
     connect(&m_refreshFeedback, &QVariantAnimation::valueChanged,
             this, [this] { update(); });
+    m_refreshPulse.setSingleShot(true);
+    m_refreshPulse.setInterval(80);
+    connect(&m_refreshPulse,&QTimer::timeout,this,[this]{update();});
+    for(auto *ancestor=parent;ancestor;ancestor=ancestor->parentWidget()){
+        if(auto *canvas=qobject_cast<DesktopCanvas *>(ancestor)){
+            connect(canvas,&DesktopCanvas::reduceMotionChanged,this,[this](bool reduce){
+                if(!reduce)return;
+                m_clickAnimTimer.stop();m_clickAnim=false;m_clickAnimProgress=0;
+                if(m_refreshFeedback.state()==QAbstractAnimation::Running)triggerRefreshFeedback();
+                update();
+            });
+            break;
+        }
+    }
 
 }
 
@@ -780,9 +794,10 @@ void DesktopIcon::paintEvent(QPaintEvent *)
     p.setPen(textColor);
     p.drawText(textRect, flags, m_item.displayName);
 
-    if (m_refreshFeedback.state() == QAbstractAnimation::Running) {
+    if (m_refreshFeedback.state() == QAbstractAnimation::Running || m_refreshPulse.isActive()) {
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor(255, 255, 255, qRound(90 * m_refreshFeedback.currentValue().toReal())));
+        const qreal strength=m_refreshPulse.isActive()?.6:m_refreshFeedback.currentValue().toReal();
+        p.setBrush(QColor(255, 255, 255, qRound(90 * strength)));
         p.drawRoundedRect(rect(), 8, 8);
     }
 
@@ -793,7 +808,10 @@ void DesktopIcon::paintEvent(QPaintEvent *)
 void DesktopIcon::triggerRefreshFeedback()
 {
     m_refreshFeedback.stop();
-    if (LiquidPopup::theme().reducedMotion) return;
+    m_refreshPulse.stop();
+    if (LiquidPopup::theme().reducedMotion) {
+        m_refreshPulse.start();update();return;
+    }
     m_refreshFeedback.setDuration(LiquidPopup::Motion::Normal);
     m_refreshFeedback.start();
 }
@@ -823,9 +841,9 @@ void DesktopIcon::mousePressEvent(QMouseEvent *e)
         }
 
         // 触发点击动画（参考特效文件的 ping 效果）
-        m_clickAnim = true;
+        m_clickAnim = !LiquidPopup::theme().reducedMotion;
         m_clickAnimProgress = 0.0;
-        m_clickAnimTimer.start();
+        if(m_clickAnim)m_clickAnimTimer.start();
 
         e->accept();
     }

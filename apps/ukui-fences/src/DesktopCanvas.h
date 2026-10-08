@@ -99,6 +99,7 @@ signals:
     void desktopCoveredChanged(bool covered);
     // Glass readability preset changed: every cached glass surface rebuilds once.
     void glassFinishChanged();
+    void reduceMotionChanged(bool reduce);
 
 public slots:
     Q_SCRIPTABLE void setFenceLiquidGlassEnabled(bool enabled);

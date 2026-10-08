@@ -25,12 +25,13 @@ public:
     double vol=.65;
     bool enabled=true;
     int nextCount=0,previousCount=0,playCount=0,seekCount=0,raiseCount=0;
+    mutable int positionReads=0;
     QString seekTrack;
     QString status() const{return state;}
     QVariantMap metadata() const{return {{"xesam:title",song},{"xesam:artist",QStringList{"测试歌手"}},
         {"mpris:length",QVariant::fromValue<qlonglong>(180000000)},
         {"mpris:trackid",QVariant::fromValue(QDBusObjectPath(track))},{"mpris:artUrl",art},{"xesam:asText",lyrics}};}
-    qlonglong position() const{return pos;}
+    qlonglong position() const{++positionReads;return pos;}
     double volume() const{return vol;}
     double rate() const{return 1.0;}
     bool control() const{return enabled;}

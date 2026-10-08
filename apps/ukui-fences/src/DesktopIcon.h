@@ -119,6 +119,7 @@ private:
     qreal       m_clickAnimProgress = 0.0;
     QTimer      m_clickAnimTimer;
     QVariantAnimation m_refreshFeedback;
+    QTimer      m_refreshPulse;
     QTimer      m_renameTimer;
     QLineEdit  *m_renameEdit = nullptr;
     bool        m_finishingRename = false;

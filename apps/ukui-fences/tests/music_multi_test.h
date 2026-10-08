@@ -61,9 +61,15 @@ static int runMusicMultiTest(const QString &root) {
         profiles[1].enabled=true; MprisPlayer::saveProfiles(profiles); player->reloadConfiguration();
         check(waitMusic([&]{return player->connected() && player->activeService()==bName && player->canRaise();}),"enabling the last-started client switches the sole control target");
         check(player->title()==b.song && card->windowTitle().contains("客户端 B"),"song metadata and visible client identity follow the selected player");
-        a.state="Playing"; a.notify({{"PlaybackStatus",a.state},{"Metadata",a.metadata()}}); settle(80);
-        check(player->activeService()==bName && player->title()==b.song && !player->playing(),"old playback notifications never steal selection or overwrite the new player");
-        a.state="Paused";
+        a.notify({{"Metadata",a.metadata()}});settle(80);
+        check(player->activeService()==bName && player->title()==b.song && !player->playing(),
+              "inactive metadata alone cannot switch players or overwrite the selected track");
+        a.state="Playing";a.notify({{"PlaybackStatus",a.state}});
+        check(waitMusic([&]{return player->connected() && player->activeService()==aName && player->playing();}),
+              "a running inactive client becomes selected when it starts playing without re-registering");
+        a.state="Paused";a.notify({{"PlaybackStatus",a.state}});
+        check(waitMusic([&]{return player->connected() && player->activeService()==bName && !player->playing();}),
+              "between paused clients live status changes restore the newest client");
         card->findChild<QPushButton *>("musicNext")->click(); player->openPlayer();
         check(waitMusic([&]{return b.nextCount==1 && b.raiseCount==1;}) && a.nextCount==0 && a.raiseCount==0,"playback and Raise are routed exclusively to the active owner");
         const QString instance=bName+".instance77"; busB.registerService(instance);
@@ -85,9 +91,22 @@ static int runMusicMultiTest(const QString &root) {
         check(waitMusic([&]{return player->availableServices().contains(bName);}) && (settle(300),true)
               && player->activeService()==aName,"a playing client keeps priority over a newer paused client");
         a.state="Paused"; a.notify({{"PlaybackStatus",a.state}});
-        check(waitMusic([&]{return !player->playing();}),"paused state of the active client is tracked live");
-        busB.unregisterService(bName); busB.registerService(bName);
-        check(waitMusic([&]{return player->connected() && player->activeService()==bName;}),"between paused clients the newest one wins again");
+        check(waitMusic([&]{return player->connected() && player->activeService()==bName && !player->playing();}),
+              "pausing the active client immediately selects the newest paused client");
+        b.state="Stopped";b.notify({{"PlaybackStatus",b.state}});
+        check(waitMusic([&]{return player->connected() && player->activeService()==aName;}),
+              "a paused client has priority over the newest stopped client");
+        a.state="Playing";a.notify({{"PlaybackStatus",a.state}});
+        check(waitMusic([&]{return player->playing();}),"the paused selected client can resume playback");
+        b.state="Playing";b.notify({{"PlaybackStatus",b.state}});
+        check(waitMusic([&]{return player->connected() && player->activeService()==bName && player->playing();}),
+              "between live playing clients the newest process wins");
+        b.state="Paused";b.notify({{"PlaybackStatus",b.state}});
+        check(waitMusic([&]{return player->connected() && player->activeService()==aName && player->playing();}),
+              "pausing the newer client returns controls to the other playing client");
+        a.state="Paused";a.notify({{"PlaybackStatus",a.state}});
+        check(waitMusic([&]{return player->connected() && player->activeService()==bName && !player->playing();}),
+              "status-only handovers settle back to the newest paused client");
         // Keep the unconfigured client newest, as the settings checks below expect.
         busB.unregisterService(ignored); busB.registerService(ignored);
         check(waitMusic([&]{return player->availableServices().contains(ignored);}),"unconfigured client is rediscovered after re-registration");

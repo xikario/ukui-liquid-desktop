@@ -82,6 +82,15 @@ static int runDesktopRefreshTest(const QString &root)
     check(stable != loose->grab().toImage(), "F5 gives visible refresh feedback on the existing icon");
     settle(200);
     check(stable == loose->grab().toImage(), "refresh feedback ends without changing icon appearance or selection");
+    canvas.setReduceMotion(true);
+    QApplication::sendEvent(&canvas,&f5);settle(15);
+    const QImage pulse=loose->grab().toImage();
+    check(stable!=pulse,"reduced-motion refresh still has visible static feedback");
+    settle(20);
+    check(pulse==loose->grab().toImage(),"reduced-motion feedback does not animate between frames");
+    settle(100);
+    check(stable==loose->grab().toImage(),"the reduced-motion pulse ends and restores the existing icon");
+    canvas.setReduceMotion(false);
     entry(loosePath, "Loose after"); entry(fencePath, "Fence after");
     QApplication::sendEvent(&canvas, &f5); settle(200);
     check(loose && loose->item().displayName == "Loose after" && loose->isSelected()

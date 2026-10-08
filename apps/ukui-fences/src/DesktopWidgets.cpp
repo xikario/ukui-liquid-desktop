@@ -183,7 +183,6 @@ void LiquidDesklet::rebuildMaterial() {
         const qreal radius=qMax(16.,theme.radius);
         m_material=GlassFinish::withEdge(GlassFinish::withGrain(GlassFinish::withScrim(m_optics->renderPanel(QRect(QPoint(),size()),radius),GlassFinish::scrim())),
             GlassFinish::squirclePath(QRectF(rect()),radius));
-        qInfo().noquote()<<QStringLiteral("[glass] %1 %2x%3 rebuilt in %4 ms").arg(m_key).arg(width()).arg(height()).arg(timer.elapsed());
         if(!m_material.isNull())VideoWallpaperRegion::publish(this,VideoWallpaperRegion::coverage(m_material,devicePixelRatioF()));
         QVector<QColor> cells=materialCells();
         // Mid-grey glass (a scrimmed white wallpaper) cannot give 7:1 to any
@@ -199,6 +198,7 @@ void LiquidDesklet::rebuildMaterial() {
         m_ink=Palette::ensureContrast(QColor("#f4f7ff"),cells,Palette::PrimaryTextContrast);
         m_muted=Palette::ensureContrast(QColor("#b8c6d9"),cells,Palette::SecondaryTextContrast);
         ++m_materialBuilds;setProperty("liquidMaterialBuilds",m_materialBuilds);setProperty("liquidOpticalGpu",m_optics->usedGpu());
+        qInfo().noquote()<<QStringLiteral("[glass] %1 %2x%3 rebuilt in %4 ms (including contrast)").arg(m_key).arg(width()).arg(height()).arg(timer.elapsed());
         update();
     });
 }
@@ -214,7 +214,9 @@ void LiquidDesklet::paintEvent(QPaintEvent *event) {
     if(!m_materialPending && (m_material.isNull() || m_material.devicePixelRatio()!=devicePixelRatioF()))rebuildMaterial();
     QPainter p(this);p.setClipRegion(event->region());p.setRenderHint(QPainter::Antialiasing);
     if(m_material.isNull()){p.setPen(Qt::NoPen);p.setBrush(QColor(28,43,59,240));p.drawRoundedRect(QRectF(rect()),16,16);}
-    else p.drawImage(QRectF(rect()),m_material,QRectF(m_material.rect()));
+    // The cache already carries the device pixel ratio. Drawing its native
+    // pixels avoids clip-dependent resampling of fine grain at fractional DPI.
+    else p.drawImage(QPointF(0,0),m_material);
     paintContent(p);
     if(m_editMode) {
         p.setBrush(Qt::NoBrush);p.setPen(QPen(QColor(154,232,219,170),1,Qt::DashLine));

@@ -73,11 +73,13 @@ MusicDesklet::MusicDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"music","
         if(isVisible())m_player->setVisible(!covered);
         syncNotesAnimation();
     });
+    connect(canvas,&DesktopCanvas::reduceMotionChanged,this,[this]{syncNotesAnimation();});
     arrangeControls();updateControls();
 }
 QRect MusicDesklet::notesArea() const {return QRect(6,4,width()-12,qMax(1,height()-54));}
 void MusicDesklet::syncNotesAnimation() {
-    const bool animate=isVisible() && !m_canvas->desktopCovered() && m_player->connected() && m_player->playing();
+    const bool animate=isVisible() && !m_canvas->desktopCovered() && !m_canvas->reduceMotion()
+        && m_player->connected() && m_player->playing();
     if (animate && !m_notesTimer.isActive()) {
         m_notesFrameSeconds=0;
         m_notesClock.start();

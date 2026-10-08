@@ -23,7 +23,7 @@ MusicClientsSettings::MusicClientsSettings(QWidget *parent)
     setObjectName("musicClientsForm");
     setProperty("settingsManagesDraft",true);
     auto *layout=new QVBoxLayout(this); layout->setContentsMargins(0,0,0,0); layout->setSpacing(10);
-    auto *hint=new QLabel("先手动打开一次播放器，再添加已运行的客户端，自动识别启动信息。多个同时运行时选择最后启动的，退出后回到仍在运行的客户端。仅支持提供 MPRIS 接口的播放器。",this);
+    auto *hint=new QLabel("先手动打开一次播放器，再添加已运行的客户端，自动识别启动信息。多个同时运行时优先播放中，其次暂停；同状态选择最后启动的。状态变化或退出后自动切换。仅支持提供 MPRIS 接口的播放器。",this);
     hint->setWordWrap(true); hint->setProperty("hint",true); layout->addWidget(hint);
     m_clients=new QListWidget(this); m_clients->setObjectName("musicClients");
     m_clients->setStyleSheet("QListWidget::indicator {width:15px;height:15px;border:1px solid #bbd9df;border-radius:3px;background:#203746;} QListWidget::indicator:checked {background:#52c7b8;border-color:#bbf1e5;}");
