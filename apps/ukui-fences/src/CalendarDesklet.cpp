@@ -67,7 +67,7 @@ CalendarDesklet::CalendarDesklet(DesktopCanvas *canvas):LiquidDesklet(canvas,"ca
     m_yearButton->setToolTip("选择年份");m_monthButton->setToolTip("选择月份");
     connect(m_yearButton,&QPushButton::clicked,this,&CalendarDesklet::showYearMenu);
     connect(m_monthButton,&QPushButton::clicked,this,&CalendarDesklet::showMonthMenu);
-    connect(m_collapse,&QPushButton::clicked,this,[this]{setAgendaCollapsed(!m_agendaCollapsed);});
+    connect(m_collapse,&QPushButton::clicked,this,[this]{setAgendaCollapsed(!m_agendaCollapsed,true);});
     m_previous->setToolTip("上个月");m_next->setToolTip("下个月");m_all->setToolTip("显示本月及今天附近的系统待办");
     m_list=new QListWidget(this);m_list->setObjectName("calendarAgenda");m_list->setFrameShape(QFrame::NoFrame);
     m_list->setItemDelegate(new AgendaDelegate(m_list));
@@ -143,19 +143,29 @@ void CalendarDesklet::updateDateButtons(){
     m_yearButton->setText(QString::number(m_month.year())+" 年 ▾");
     m_monthButton->setText(QString::number(m_month.month())+" 月 ▾");
 }
-void CalendarDesklet::setAgendaCollapsed(bool collapsed){
-    if(collapsed && !m_agendaCollapsed)m_expandedHeight=height();
+void CalendarDesklet::setAgendaCollapsed(bool collapsed, bool animate){
+    constexpr int shutHeight=270;
+    if(collapsed && !m_agendaCollapsed && !drawerRunning())m_expandedHeight=qBound(390,height(),700);
     m_agendaCollapsed=collapsed;
-    // Keep a separate expanded height so repeated toggles and restarts restore it.
-    setMinimumHeight(collapsed?270:390);setMaximumHeight(collapsed?270:700);
-    resize(width(),collapsed?270:m_expandedHeight);
-    move(x(),qBound(0,y(),qMax(0,m_canvas->height()-height())));
-    for(QWidget *w:{static_cast<QWidget *>(m_list),static_cast<QWidget *>(m_all),static_cast<QWidget *>(m_open)})w->setVisible(!collapsed);
     m_collapse->setText(collapsed?"＋":"−");
     m_collapse->setToolTip(collapsed?"展开系统待办":"收起系统待办");m_collapse->setAccessibleName(m_collapse->toolTip());
     QSettings settings;settings.setValue("desklets/calendar/agendaCollapsed",collapsed);
     settings.setValue("desklets/calendar/expandedHeight",m_expandedHeight);settings.sync();
-    arrangeControls();savePlacement();update();
+    const QWidgetList agenda={m_list,m_all,m_open};
+    auto settle=[this,collapsed,agenda]{
+        // Keep a separate expanded height so repeated toggles and restarts restore it.
+        setMinimumHeight(collapsed?shutHeight:390);setMaximumHeight(collapsed?shutHeight:700);
+        for(QWidget *w:agenda)w->setVisible(!collapsed);
+        savePlacement();
+    };
+    if(!animate || !isVisible()){
+        setMinimumHeight(collapsed?shutHeight:390);setMaximumHeight(collapsed?shutHeight:700);
+        resize(width(),collapsed?shutHeight:m_expandedHeight);
+        move(x(),qBound(0,y(),qMax(0,m_canvas->height()-height())));
+        settle();arrangeControls();update();return;
+    }
+    // The agenda slides like a fence drawer under the month grid.
+    runDrawer(!collapsed,shutHeight,m_expandedHeight,228,34,agenda,settle);
 }
 void CalendarDesklet::showMonthMenu(){
     const int month=pickDateValue(this,m_monthButton,"calendarMonth",m_month.month(),1,12,"月");
@@ -204,16 +214,18 @@ void CalendarDesklet::paintContent(QPainter &p){
         bool marked=false;for(const auto &v:m_items){auto o=v.toObject();if(date>=QDate::fromString(o["date"].toString(),Qt::ISODate) && date<=QDate::fromString(o["endDate"].toString(),Qt::ISODate)){marked=true;break;}}
         if(marked){p.setPen(Qt::NoPen);p.setBrush(accent);p.drawEllipse(QPointF(cell.left()+3,cell.top()+8),1.4,1.4);}
     }
-    if(!m_agendaCollapsed){
-    p.setPen(QColor(230,245,250,35));p.drawLine(16,230,width()-16,230);
-    text(p,QRectF(18,236,width()-184,24),m_allDates?QString("系统待办 · %1 项").arg(m_items.size()):m_selected.toString("M月d日 · 待办"),12,ink,true,Qt::AlignLeft|Qt::AlignVCenter);
-    }
+    if(!m_agendaCollapsed && !drawerCapturing())paintAgendaHeader(p);
     QString footer=m_agendaCollapsed?"休：放假  班：调休上班":"休：放假  班：调休上班 · 点击事项查看";
     if(!selected.isEmpty() && !selected["scheduleKnown"].toBool())footer=QString::number(m_selected.year())+" 年放假调休数据尚未收录";
     if(!m_calendarWarning.isEmpty())footer=m_calendarWarning;
     if(!m_warning.isEmpty())footer=m_warning;
     text(p,QRectF(16,height()-25,width()-32,18),footer,10,muted,false,Qt::AlignLeft|Qt::AlignVCenter);
 }
+void CalendarDesklet::paintAgendaHeader(QPainter &p){
+    p.setPen(QColor(230,245,250,35));p.drawLine(16,230,width()-16,230);
+    text(p,QRectF(18,236,width()-184,24),m_allDates?QString("系统待办 · %1 项").arg(m_items.size()):m_selected.toString("M月d日 · 待办"),12,inkColor(),true,Qt::AlignLeft|Qt::AlignVCenter);
+}
+void CalendarDesklet::paintDrawerContent(QPainter &p){paintAgendaHeader(p);}
 void CalendarDesklet::mousePressEvent(QMouseEvent *e){if(e->button()==Qt::LeftButton){for(int d=1;d<=m_month.daysInMonth();++d)if(dateCell(d).contains(e->pos())){selectDate(QDate(m_month.year(),m_month.month(),d));e->accept();return;}}LiquidDesklet::mousePressEvent(e);}
 void CalendarDesklet::mouseMoveEvent(QMouseEvent *e){
     LiquidDesklet::mouseMoveEvent(e);QString tip;

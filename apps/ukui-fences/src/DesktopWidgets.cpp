@@ -25,6 +25,8 @@
 #include <QDBusPendingCall>
 #include <QLocale>
 #include <QtMath>
+#include <QPropertyAnimation>
+#include <QAbstractItemView>
 #include <algorithm>
 #include <climits>
 
@@ -163,44 +165,161 @@ void LiquidDesklet::invalidateMaterial(){
     m_preparation->invalidate();m_materialPending=false;m_materialDirty=true;
     if(isVisible())m_materialTimer.start();
 }
-void LiquidDesklet::rebuildMaterial() {
-    m_materialTimer.stop();m_materialDirty=false;
+QImage LiquidDesklet::backdrop() const {
     const qreal dpr=devicePixelRatioF();
     auto wallpaper=m_canvas->wallpaperBackdrop(QRect(mapToGlobal(QPoint()),size()),dpr);
     if(wallpaper.isNull()) {wallpaper=QImage(QSize(qRound(width()*dpr),qRound(height()*dpr)),QImage::Format_RGB32);wallpaper.setDevicePixelRatio(dpr);wallpaper.fill(QColor("#344257"));}
+    return wallpaper;
+}
+bool LiquidDesklet::materialFits() const {
+    return !m_material.isNull() && qFuzzyCompare(m_material.devicePixelRatio(),devicePixelRatioF())
+        && m_materialGlobal==QRect(mapToGlobal(QPoint()),size());
+}
+void LiquidDesklet::rebuildMaterial() {
+    m_materialTimer.stop();
+    // A running drawer only blits its snapshot; the glass follows once it stops.
+    if(m_drawerRunning){m_materialDirty=true;return;}
+    m_materialDirty=false;
+    const qreal dpr=devicePixelRatioF();
     const QRect requested(mapToGlobal(QPoint()),size());
     m_materialPending=true;
-    m_preparation->request(wallpaper,[this,requested,dpr](const LiquidMaterial::Prepared &material){
+    m_preparation->request(backdrop(),[this,requested,dpr](const LiquidMaterial::Prepared &material){
         m_materialPending=false;
         if(requested!=QRect(mapToGlobal(QPoint()),size()) || !qFuzzyCompare(dpr,devicePixelRatioF()) || m_materialDirty){
             if(isVisible())rebuildMaterial();
             return;
         }
-        const auto &theme=LiquidPopup::theme();
-        m_optics->setOptics(theme.refraction,theme.tint,theme.highlight,1.0);
-        m_optics->setPreparedWallpaper(material);
-        QElapsedTimer timer;timer.start();
-        const qreal radius=qMax(16.,theme.radius);
-        m_material=GlassFinish::withEdge(GlassFinish::withGrain(GlassFinish::withScrim(m_optics->renderPanel(QRect(QPoint(),size()),radius),GlassFinish::scrim())),
-            GlassFinish::squirclePath(QRectF(rect()),radius));
-        if(!m_material.isNull())VideoWallpaperRegion::publish(this,VideoWallpaperRegion::coverage(m_material,devicePixelRatioF()));
-        QVector<QColor> cells=materialCells();
-        // Mid-grey glass (a scrimmed white wallpaper) cannot give 7:1 to any
-        // text colour; nudge the baked material toward the readable side once.
-        if(const qreal lift=Palette::toneLift(cells,Palette::PrimaryTextContrast+.05,nullptr);lift>0){
-            QColor text;Palette::toneLift(cells,Palette::PrimaryTextContrast+.05,&text);
-            QPainter tone(&m_material);tone.setCompositionMode(QPainter::CompositionMode_SourceAtop);
-            QColor veil=text==QColor(Qt::white)?QColor(Qt::black):QColor(Qt::white);veil.setAlphaF(qMin<qreal>(1,lift+.004));
-            tone.fillRect(QRectF(rect()),veil);tone.end();
-            cells=materialCells();
-            qInfo().noquote()<<QStringLiteral("[glass] %1 tone lift %2 for 7:1 text").arg(m_key).arg(lift,0,'f',3);
-        }
-        m_ink=Palette::ensureContrast(QColor("#f4f7ff"),cells,Palette::PrimaryTextContrast);
-        m_muted=Palette::ensureContrast(QColor("#b8c6d9"),cells,Palette::SecondaryTextContrast);
-        ++m_materialBuilds;setProperty("liquidMaterialBuilds",m_materialBuilds);setProperty("liquidOpticalGpu",m_optics->usedGpu());
-        qInfo().noquote()<<QStringLiteral("[glass] %1 %2x%3 rebuilt in %4 ms (including contrast)").arg(m_key).arg(width()).arg(height()).arg(timer.elapsed());
-        update();
+        bakeMaterial(material);
     });
+}
+void LiquidDesklet::bakeMaterialNow() {
+    m_materialTimer.stop();m_preparation->invalidate();m_materialPending=false;m_materialDirty=false;
+    bakeMaterial(LiquidMaterial::prepare(backdrop()));
+}
+void LiquidDesklet::bakeMaterial(const LiquidMaterial::Prepared &material) {
+    const auto &theme=LiquidPopup::theme();
+    m_optics->setOptics(theme.refraction,theme.tint,theme.highlight,1.0);
+    m_optics->setPreparedWallpaper(material);
+    QElapsedTimer timer;timer.start();
+    const qreal radius=qMax(16.,theme.radius);
+    m_material=GlassFinish::withEdge(GlassFinish::withGrain(GlassFinish::withScrim(m_optics->renderPanel(QRect(QPoint(),size()),radius),GlassFinish::scrim())),
+        GlassFinish::squirclePath(QRectF(rect()),radius));
+    m_materialGlobal=QRect(mapToGlobal(QPoint()),size());
+    if(!m_material.isNull())VideoWallpaperRegion::publish(this,VideoWallpaperRegion::coverage(m_material,devicePixelRatioF()));
+    QVector<QColor> cells=materialCells();
+    // Desklets share the fences' dark glass with light text. Bright glass
+    // (a scrimmed white wallpaper) is deepened once, never milked over.
+    if(const qreal lift=Palette::toneLift(cells,Palette::PrimaryTextContrast+.05,Qt::white);lift>0){
+        QPainter tone(&m_material);tone.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+        QColor veil(Qt::black);veil.setAlphaF(qMin<qreal>(1,lift+.004));
+        tone.fillRect(QRectF(rect()),veil);tone.end();
+        cells=materialCells();
+        qInfo().noquote()<<QStringLiteral("[glass] %1 tone deepen %2 for 7:1 light text").arg(m_key).arg(lift,0,'f',3);
+    }
+    m_ink=Palette::ensureContrast(QColor("#f4f7ff"),cells,Palette::PrimaryTextContrast);
+    m_muted=Palette::ensureContrast(QColor("#b8c6d9"),cells,Palette::SecondaryTextContrast);
+    ++m_materialBuilds;setProperty("liquidMaterialBuilds",m_materialBuilds);setProperty("liquidOpticalGpu",m_optics->usedGpu());
+    qInfo().noquote()<<QStringLiteral("[glass] %1 %2x%3 rebuilt in %4 ms (including contrast)").arg(m_key).arg(width()).arg(height()).arg(timer.elapsed());
+    // A finished drawer keeps showing its last frame until the glass fits.
+    if(!m_drawerRunning){m_drawerBase={};m_drawerContent={};}
+    update();
+}
+void LiquidDesklet::runDrawer(bool open, int shutHeight, int openHeight, int slideTop, int footer,
+                              const QWidgetList &sliding, std::function<void()> finished) {
+    const int maxY=qMax(0,m_canvas->height()-openHeight);
+    const int targetHeight=open?openHeight:shutHeight;
+    const QRect target(x(),open?qBound(0,y(),maxY):y(),width(),targetHeight);
+    const int span=qMax(1,openHeight-shutHeight);
+    const int duration=isVisible()?LiquidPopup::Motion::duration(LiquidPopup::Motion::Slow,qreal(qAbs(targetHeight-height()))/span,120):0;
+    m_drawerFinished=std::move(finished);
+    setMinimumHeight(qMin(shutHeight,height()));setMaximumHeight(QWIDGETSIZE_MAX);
+    if(m_drawer)m_drawer->stop();
+    if(duration<=0){
+        m_drawerRunning=false;m_drawerBase={};m_drawerContent={};
+        setGeometry(target);finishDrawer();return;
+    }
+    if(!m_drawerRunning){
+        // Capture the open card once: glass and fixed content without child
+        // widgets, and the sliding band (its children included) separately.
+        const QRect start=geometry();
+        m_drawerCapturing=true;
+        setGeometry(QRect(x(),qBound(0,y(),maxY),width(),openHeight));
+        if(!materialFits())bakeMaterialNow();
+        const qreal dpr=devicePixelRatioF();
+        QVector<bool> shown;for(QWidget *w:sliding){shown.append(w->isVisible());w->hide();}
+        m_drawerBase=grab();
+        m_drawerSlideTop=slideTop;m_drawerFooter=qMax(footer,int(qMax(16.,LiquidPopup::theme().radius))+2);
+        m_drawerShut=shutHeight;
+        const QSize band(width(),qMax(1,openHeight-m_drawerFooter-slideTop));
+        m_drawerContent=QPixmap(band*dpr);m_drawerContent.setDevicePixelRatio(dpr);m_drawerContent.fill(Qt::transparent);
+        {
+            QPainter p(&m_drawerContent);p.setRenderHint(QPainter::Antialiasing);p.translate(0,-slideTop);
+            paintDrawerContent(p);
+            for(QWidget *w:sliding){w->show();
+                if(auto *view=qobject_cast<QAbstractItemView *>(w))view->doItemsLayout();
+                p.drawPixmap(w->pos(),w->grab());w->hide();}
+        }
+        for(int i=0;i<sliding.size();++i)sliding[i]->setVisible(shown[i]);
+        setGeometry(start);
+        m_drawerCapturing=false;
+        setProperty("drawerCaptures",property("drawerCaptures").toInt()+1);
+    }
+    for(QWidget *w:sliding)w->hide();
+    m_drawerRunning=true;
+    if(!m_drawer){
+        m_drawer=new QPropertyAnimation(this,"geometry",this);
+        connect(m_drawer,&QPropertyAnimation::finished,this,[this]{m_drawerRunning=false;finishDrawer();});
+    }
+    // Opening settles with the fences' small spring; closing glides in.
+    QEasingCurve curve(open?QEasingCurve::OutBack:QEasingCurve::InOutCubic);
+    if(open)curve.setOvershoot(0.9);
+    m_drawer->setEasingCurve(curve);m_drawer->setDuration(duration);
+    m_drawer->setStartValue(geometry());m_drawer->setEndValue(target);
+    m_drawer->start();update();
+}
+void LiquidDesklet::finishDrawer() {
+    auto finished=std::move(m_drawerFinished);m_drawerFinished={};
+    if(finished)finished();
+    arrangeControls();m_saveTimer.start();
+    VideoWallpaperRegion::publish(this,VideoWallpaperRegion::rounded(QRectF(rect()),qMax(16.,LiquidPopup::theme().radius),devicePixelRatioF()));
+    // One glass build per toggle: the open size was baked for the snapshot.
+    if(materialFits() && !m_materialDirty){m_drawerBase={};m_drawerContent={};}
+    else if(isVisible()){m_preparation->invalidate();m_materialPending=false;rebuildMaterial();}
+    else {m_drawerBase={};m_drawerContent={};invalidateMaterial();}
+    update();
+}
+void LiquidDesklet::paintDrawer(QPainter &p) const {
+    const qreal dpr=m_drawerBase.devicePixelRatio();
+    const qreal fullH=m_drawerBase.height()/dpr,w=width(),h=height(),sw=m_drawerBase.width();
+    const qreal band=m_drawerFooter,shut=m_drawerShut,top=m_drawerSlideTop;
+    p.setClipPath(GlassFinish::squirclePath(QRectF(rect()),qMax(16.,LiquidPopup::theme().radius)),Qt::IntersectClip);
+    p.setRenderHint(QPainter::SmoothPixmapTransform);
+    // Fixed glass and content stay put; the lower rim and footer ride the
+    // edge. During the spring overshoot a thin strip above them stretches.
+    const qreal fixedH=qMin(h,fullH)-band;
+    p.drawPixmap(QRectF(0,0,w,fixedH),m_drawerBase,QRectF(0,0,sw,fixedH*dpr));
+    if(h>fullH)p.drawPixmap(QRectF(0,fixedH,w,h-fullH),m_drawerBase,QRectF(0,(fullH-band-2)*dpr,sw,2*dpr));
+    p.drawPixmap(QRectF(0,h-band,w,band),m_drawerBase,QRectF(0,(fullH-band)*dpr,sw,band*dpr));
+    const qreal t=qBound(0.0,(h-shut)/qMax(1.0,fullH-shut),1.0);
+    const qreal motion=qSin(M_PI*t);
+    // Agenda rides on the lower edge and tucks under the calendar grid.
+    if(!m_drawerContent.isNull() && h-band>top){
+        p.save();
+        p.setClipRect(QRectF(0,top,w,h-band-top),Qt::IntersectClip);
+        p.setOpacity(qBound(0.0,t*1.5-.15,1.0));
+        p.drawPixmap(QPointF(0,top+h-fullH),m_drawerContent);
+        p.restore();
+    }
+    if(motion>.01 && m_drawerRunning){
+        QLinearGradient tuck(0,top,0,top+10);
+        tuck.setColorAt(0,QColor(0,0,0,qRound(70*motion)));tuck.setColorAt(1,Qt::transparent);
+        p.fillRect(QRectF(0,top,w,qMax(0.0,qMin(10.0,h-band-top))),tuck);
+        QLinearGradient lip(0,h-9,0,h);
+        lip.setColorAt(0,Qt::transparent);lip.setColorAt(1,QColor(255,255,255,qRound(42*motion)));
+        p.fillRect(QRectF(0,h-9,w,9),lip);
+        p.setPen(QPen(QColor(255,255,255,qRound(90*motion)),1));
+        p.drawLine(QLineF(10,h-.5,w-10,h-.5));
+    }
 }
 QVector<QColor> LiquidDesklet::materialCells() const {
     // Once per material build: 12x8 averaged cells. The outer ring holds the
@@ -211,6 +330,7 @@ QVector<QColor> LiquidDesklet::materialCells() const {
     return cells;
 }
 void LiquidDesklet::paintEvent(QPaintEvent *event) {
+    if(!m_drawerBase.isNull() && !m_drawerCapturing){QPainter p(this);p.setClipRegion(event->region());p.setRenderHint(QPainter::Antialiasing);paintDrawer(p);return;}
     if(!m_materialPending && (m_material.isNull() || m_material.devicePixelRatio()!=devicePixelRatioF()))rebuildMaterial();
     QPainter p(this);p.setClipRegion(event->region());p.setRenderHint(QPainter::Antialiasing);
     if(m_material.isNull()){p.setPen(Qt::NoPen);p.setBrush(QColor(28,43,59,240));p.drawRoundedRect(QRectF(rect()),16,16);}
@@ -227,8 +347,9 @@ void LiquidDesklet::paintEvent(QPaintEvent *event) {
 }
 void LiquidDesklet::resizeEvent(QResizeEvent *e){QWidget::resizeEvent(e);if(m_ready){
     VideoWallpaperRegion::publish(this,VideoWallpaperRegion::rounded(QRectF(rect()),qMax(16.,LiquidPopup::theme().radius),devicePixelRatioF()));
-    arrangeControls();invalidateMaterial();m_saveTimer.start();}}
-void LiquidDesklet::moveEvent(QMoveEvent *e){QWidget::moveEvent(e);if(m_ready){invalidateMaterial();m_saveTimer.start();}}
+    // A running drawer blits its snapshot: no child relayout or glass per frame.
+    if(!m_drawerRunning){arrangeControls();if(!m_drawerCapturing){invalidateMaterial();m_saveTimer.start();}}}}
+void LiquidDesklet::moveEvent(QMoveEvent *e){QWidget::moveEvent(e);if(m_ready && !m_drawerRunning && !m_drawerCapturing){invalidateMaterial();m_saveTimer.start();}}
 void LiquidDesklet::showEvent(QShowEvent *e){QWidget::showEvent(e);arrangeControls();if(m_materialDirty)rebuildMaterial();}
 void LiquidDesklet::mousePressEvent(QMouseEvent *e) {
     if(e->button()!=Qt::LeftButton){QWidget::mousePressEvent(e);return;}

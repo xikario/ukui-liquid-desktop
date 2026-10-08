@@ -71,19 +71,15 @@ QColor ensureContrast(const QColor &foreground, const QVector<QColor> &backgroun
     return mix(foreground, target, high);
 }
 
-qreal toneLift(const QVector<QColor> &backgrounds, qreal ratio, QColor *text)
+qreal toneLift(const QVector<QColor> &backgrounds, qreal ratio, const QColor &text)
 {
-    const bool white = minContrast(Qt::white, backgrounds) >= minContrast(Qt::black, backgrounds);
-    const QColor extreme = white ? QColor(Qt::white) : QColor(Qt::black);
-    const QColor opposite = white ? QColor(Qt::black) : QColor(Qt::white);
-    if (text)
-        *text = extreme;
+    const QColor opposite = luminance(text) > .5 ? QColor(Qt::black) : QColor(Qt::white);
     auto lifted = [&](qreal amount) {
         QVector<QColor> moved;
         moved.reserve(backgrounds.size());
         for (const QColor &background : backgrounds)
             moved.append(mix(background, opposite, amount));
-        return minContrast(extreme, moved);
+        return minContrast(text, moved);
     };
     if (backgrounds.isEmpty() || lifted(0) >= ratio)
         return 0;

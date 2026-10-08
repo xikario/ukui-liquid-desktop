@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QTimer>
 #include <QImage>
+#include <QPixmap>
 #include <functional>
 #include <memory>
 class DesktopCanvas;
@@ -11,7 +12,7 @@ class ActivityRecorder;
 class QPushButton;
 class QSpinBox;
 class QPainter;
-namespace LiquidMaterial { class Preparation; }
+namespace LiquidMaterial { class Preparation; struct Prepared; }
 
 // Desktop desklets use this one cached material, placement, menu and persistence layer.
 class LiquidDesklet : public QWidget {
@@ -32,6 +33,7 @@ public:
     QColor inkColor() const { return m_ink; }
     QColor mutedColor() const { return m_muted; }
     QVector<QColor> materialCells() const;
+    bool drawerRunning() const { return m_drawerRunning; }
 public slots:
     void invalidateMaterial();
 protected:
@@ -50,16 +52,36 @@ protected:
     QPushButton *button(const QString &text, const QString &name);
     void text(QPainter &p, const QRectF &rect, const QString &value, int size,
               const QColor &color, bool bold = false, int align = Qt::AlignCenter) const;
+    // Fence-style drawer between `shutHeight` and `openHeight`. The open card
+    // is captured once: glass plus fixed content, and the band from `slideTop`
+    // to `footer` above the lower edge (sliding children plus
+    // paintDrawerContent). Frames only blit; the glass is rebuilt once after.
+    void runDrawer(bool open, int shutHeight, int openHeight, int slideTop, int footer,
+                   const QWidgetList &sliding, std::function<void()> finished);
+    bool drawerCapturing() const { return m_drawerCapturing; }
+    virtual void paintDrawerContent(QPainter &) {}
     DesktopCanvas *m_canvas;
     QString m_key, m_title;
 private:
     void rebuildMaterial();
+    QImage backdrop() const;
+    void bakeMaterial(const LiquidMaterial::Prepared &material);
+    void bakeMaterialNow();
+    bool materialFits() const;
+    void paintDrawer(QPainter &p) const;
+    void finishDrawer();
     void constrainToCanvas();
     QPoint boundedPosition(const QPoint &position, bool snap) const;
     std::unique_ptr<LiquidOpticsRenderer> m_optics;
     LiquidMaterial::Preparation *m_preparation;
     QImage m_material;
+    QRect m_materialGlobal;
     QTimer m_materialTimer, m_saveTimer;
+    class QPropertyAnimation *m_drawer = nullptr;
+    std::function<void()> m_drawerFinished;
+    QPixmap m_drawerBase, m_drawerContent;
+    int m_drawerShut = 0, m_drawerSlideTop = 0, m_drawerFooter = 0;
+    bool m_drawerRunning = false, m_drawerCapturing = false;
     bool m_editMode = false;
     bool m_drag = false, m_resize = false, m_ready = false, m_materialDirty = true;
     bool m_materialPending = false;

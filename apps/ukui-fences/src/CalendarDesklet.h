@@ -15,9 +15,10 @@ public:
     QDate selectedDate() const {return m_selected;}
     void selectDate(QDate date);
     void syncCalendarData();
-    void setAgendaCollapsed(bool collapsed);
+    void setAgendaCollapsed(bool collapsed, bool animate = false);
 protected:
     void paintContent(QPainter &) override;
+    void paintDrawerContent(QPainter &) override;
     void arrangeControls() override;
     void mousePressEvent(QMouseEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
@@ -31,6 +32,7 @@ private:
     void updateDateButtons();
     void rewatch();
     void updateList();
+    void paintAgendaHeader(QPainter &);
     void openSystemCalendar(QDate date);
     QRect gridRect() const;
     QRect dateCell(int day) const;

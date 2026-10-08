@@ -23,10 +23,10 @@ QColor ensureContrast(const QColor &foreground, const QColor &background, qreal 
 // Same, against every background at once (worst case over sampled cells).
 qreal minContrast(const QColor &foreground, const QVector<QColor> &backgrounds);
 QColor ensureContrast(const QColor &foreground, const QVector<QColor> &backgrounds, qreal ratio);
-// When no text colour can reach `ratio` over `backgrounds`, the backdrop has
-// to move instead: returns the amount (0..1) to mix every background toward
-// the extreme opposite the readable text, and that text extreme in `text`.
-qreal toneLift(const QVector<QColor> &backgrounds, qreal ratio, QColor *text);
+// When `text` (black or white) cannot reach `ratio` over `backgrounds`, the
+// backdrop has to move instead: returns the amount (0..1) to mix every
+// background toward the opposite extreme.
+qreal toneLift(const QVector<QColor> &backgrounds, qreal ratio, const QColor &text);
 // Linear RGB mix used for hover (10%) and press (18%) states.
 QColor mix(const QColor &base, const QColor &overlay, qreal amount);
 
