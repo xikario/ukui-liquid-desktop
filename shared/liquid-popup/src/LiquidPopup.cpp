@@ -272,21 +272,28 @@ protected:
             updateItemMetrics();
         }
         if(e->type()==QEvent::Show) {
+            snapshotReady=false;
             prepare();
             openedClock.start();swallowRelease=false;
             // Show follows final placement and precedes native mapping.
             // Capture only the popup footprint, not an entire monitor.
             if(tip) tip->hide();
             QToolTip::hideText();
+            availableArea=screenRect(menu->geometry().center());
+            constrainPosition();
             backdropArea=QRect(menu->mapToGlobal(QPoint()),menu->size());
-            availableArea=screenRect(backdropArea.center());
             backdrop=capture(backdropArea,menu->devicePixelRatioF());
             rebuildMaterial();
+            snapshotReady=true;
             if(!theme().reducedMotion && QGuiApplication::platformName()=="xcb") {
                 fade.stop();fade.setStartValue(.15);fade.setEndValue(1.0);
                 fade.setDuration(theme().openMs);fade.setEasingCurve(QEasingCurve::OutCubic);fade.start();
             }
-        } else if(e->type()==QEvent::Resize && styled && menu->isVisible()) {
+        } else if(e->type()==QEvent::Resize && styled && snapshotReady && menu->isVisible()) {
+            // Other Show filters can resize a now-visible menu before this
+            // filter receives Show. Until the opening snapshot is ready, the
+            // screen bounds are empty or belong to a previous opening.
+            // Show handles that final size; never clamp it to stale bounds.
             // QAction text can change after Show (e.g. async package lookup).
             // Keep the alpha material and native silhouette at the same size.
             // Reuse the opening snapshot: capturing a mapped menu would feed
@@ -295,12 +302,7 @@ protected:
             // dbusmenu submenus are filled after Show: an empty menu maps at
             // zero width, so its material was null and its mask a few pixels.
             // That mask hid every lazily filled third-level menu.
-            const QPoint bounded(
-                qBound(availableArea.left(),menu->x(),
-                       qMax(availableArea.left(),availableArea.right()-menu->width()+1)),
-                qBound(availableArea.top(),menu->y(),
-                       qMax(availableArea.top(),availableArea.bottom()-menu->height()+1)));
-            if(menu->pos()!=bounded) menu->move(bounded);
+            constrainPosition();
             if(backdropArea.width()<minimumBackdrop || backdropArea.height()<minimumBackdrop) {
                 // Nothing meaningful was captured while empty and masked away,
                 // so this snapshot cannot contain the menu's own text.
@@ -320,6 +322,15 @@ protected:
             restore();
         }
         return false;
+    }
+    void constrainPosition() {
+        if(availableArea.isEmpty())return;
+        const QPoint bounded(
+            qBound(availableArea.left(),menu->x(),
+                   qMax(availableArea.left(),availableArea.right()-menu->width()+1)),
+            qBound(availableArea.top(),menu->y(),
+                   qMax(availableArea.top(),availableArea.bottom()-menu->height()+1)));
+        if(menu->pos()!=bounded)menu->move(bounded);
     }
     QImage alignedBackdrop() const {
         const QRect area(menu->mapToGlobal(QPoint()),menu->size());
@@ -354,6 +365,8 @@ protected:
         menu->setMask(QRegion(path.toFillPolygon().toPolygon()));
     }
     void restore() {
+        snapshotReady=false;
+        availableArea={};backdropArea={};
         if (!styled) return;
         hover.stop();pendingHover.reset();hoverClock.invalidate();metricsKey.clear();
         styled = false;
@@ -396,6 +409,7 @@ private:
     QString originalStyle;
     QRegion originalMask;
     bool styled = false, updatingMetrics = false, originalTranslucent = false, originalAutoFill = false;
+    bool snapshotReady = false;
     QMenu *menu;
     QImage material, backdrop;
     QRect backdropArea, availableArea;

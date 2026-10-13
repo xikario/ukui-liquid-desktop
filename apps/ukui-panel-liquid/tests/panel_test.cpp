@@ -48,6 +48,21 @@ public:
         return false;
     }
 };
+class NativeMenuShowLayout : public QObject {
+public:
+    QMenu *menu=nullptr;
+    bool applied=false;
+    bool eventFilter(QObject *object,QEvent *event) override {
+        if(object==menu && event->type()==QEvent::Show && !applied) {
+            applied=true;
+            // Model a native/OEM layout adjustment while Show is being
+            // delivered. Installing after polishing puts this filter before
+            // the skin, so Resize reenters it before its Show initialization.
+            menu->resize(menu->width()+30,menu->height()+10);
+        }
+        return false;
+    }
+};
 static void check(bool ok,const char *s){if(!ok){qCritical()<<s;std::exit(1);}qInfo()<<"PASS:"<<s;}
 int main(int argc,char **argv) {
     QTemporaryDir dir;qputenv("XDG_CONFIG_HOME",dir.path().toUtf8());
@@ -162,6 +177,67 @@ int main(int argc,char **argv) {
             QProcess::execute("xprop",{"-id",window,"-f",blur,"32c","-set",blur,"0, 0, 780, 60"});
             panel.resize(790,60);settle();
             check(!blurProperty().contains(" = "),"geometry change removes OEM rectangular blur");
+        }
+        {
+            // The native panel creates a fresh parented QMenu and execs it at
+            // the pointer. A Show-time layout adjustment can deliver Resize
+            // while visible but before the skin initializes its screen bounds.
+            // Exercise that ordering through the installed plugin, rather
+            // than LiquidPopup::execAt(), which pre-polishes its menu.
+            const QRect screenArea=QApplication::primaryScreen()->availableGeometry();
+            const QPoint originalPanelPosition=panel.pos();
+            panel.move(screenArea.left()+qMax(0,(screenArea.width()-panel.width())/2),
+                       screenArea.bottom()-panel.height()+1);
+            app.processEvents();
+            const QPoint click=panel.mapToGlobal(QPoint(panel.width()/2,panel.height()/2));
+            QCursor::setPos(click);
+            QMenu nativeContextMenu(&panel);
+            nativeContextMenu.addAction("设置任务栏");
+            nativeContextMenu.addAction("显示“任务视图”按钮")->setCheckable(true);
+            nativeContextMenu.addAction("显示桌面");
+            nativeContextMenu.addSeparator();
+            nativeContextMenu.addAction("系统监视器");
+            nativeContextMenu.addMenu("调整大小")->addAction("默认大小");
+            nativeContextMenu.addMenu("调整位置")->addAction("底部");
+            nativeContextMenu.addAction("隐藏任务栏");
+            nativeContextMenu.addAction("锁定任务栏")->setCheckable(true);
+            nativeContextMenu.addAction("关于麒麟");
+            nativeContextMenu.ensurePolished();
+            NativeMenuShowLayout showLayout;showLayout.menu=&nativeContextMenu;
+            nativeContextMenu.installEventFilter(&showLayout);
+            QRect openingGeometry;
+            QTimer::singleShot(0,&nativeContextMenu,[&]{
+                openingGeometry=nativeContextMenu.geometry();
+                qInfo()<<"native panel first context-menu geometry"<<openingGeometry<<"click"<<click;
+                check(showLayout.applied,"native menu exercises a visible layout resize before its skin handles Show");
+                check(nativeContextMenu.isVisible() && screenArea.contains(openingGeometry),
+                      "first native panel context menu stays inside the clicked screen");
+                check(qAbs(openingGeometry.bottom()-click.y())<=panel.height()+12
+                          && openingGeometry.top()<click.y()
+                          && openingGeometry.left()<=click.x() && openingGeometry.right()>=click.x(),
+                      "first native panel exec keeps its menu above and near the taskbar click instead of the screen origin");
+                // Lazy dbusmenu/package content must still be constrained once
+                // Show has completed; the initialization guard cannot disable
+                // genuine post-show resizing.
+                nativeContextMenu.addAction("异步新增的较长任务栏菜单项目，用来扩大实际弹窗宽度");
+                nativeContextMenu.addAction("异步新增项目二");
+                nativeContextMenu.adjustSize();
+                QTimer::singleShot(0,&nativeContextMenu,[&]{
+                    const QRect grownGeometry=nativeContextMenu.geometry();
+                    qInfo()<<"native panel grown context-menu geometry"<<grownGeometry;
+                    // The small offscreen display can cap/relayout height;
+                    // the longer label must still grow the real popup width.
+                    check(grownGeometry.width()>openingGeometry.width(),
+                          "native context menu actually widens after its first Show");
+                    check(screenArea.contains(grownGeometry)
+                              && grownGeometry.left()<=click.x() && grownGeometry.right()>=click.x(),
+                          "post-show native menu growth remains clamped on the clicked screen near its opening point");
+                    nativeContextMenu.close();
+                });
+            });
+            nativeContextMenu.exec(click);
+            panel.move(originalPanelPosition);
+            app.processEvents();
         }
         QMenu menu(&panel);menu.addAction("原菜单项目");menu.popup(QPoint(100,110));app.processEvents();
         auto *toggle=menu.findChild<QAction *>("liquidPanelEnabledAction");
