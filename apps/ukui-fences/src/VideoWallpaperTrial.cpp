@@ -43,7 +43,11 @@ VideoWallpaperTrial::~VideoWallpaperTrial(){restore={};changed={};stop();}
 bool VideoWallpaperTrial::start(const QString &path) {
     const auto file=QFileInfo(path);
     if(QGuiApplication::platformName()!="xcb" || !file.isFile() || file.suffix().toLower()!="mp4")return false;
-    const QString python=QStandardPaths::findExecutable("python3"),ffmpeg=QStandardPaths::findExecutable("ffmpeg");
+    // PyGObject/Gio belongs to the distribution Python. A user Python or venv
+    // earlier in PATH may not have it, even when the system package is installed.
+    const QString python=QStandardPaths::findExecutable("python3",
+        {QStringLiteral("/usr/bin"),QStringLiteral("/bin")});
+    const QString ffmpeg=QStandardPaths::findExecutable("ffmpeg");
     QString helper=QStandardPaths::findExecutable("ukui-fences-video-trial");
     if(helper.isEmpty())helper=QStringLiteral(UKUI_FENCES_VIDEO_TRIAL_PATH);
     if(python.isEmpty() || ffmpeg.isEmpty() || !QFileInfo::exists(helper))return false;
@@ -66,9 +70,10 @@ bool VideoWallpaperTrial::start(const QString &path) {
         poster(image);state="starting";
         if(changed)changed();
         auto env=QProcessEnvironment::systemEnvironment();
-        env.insert("PYTHONUNBUFFERED","1");
         process.setProcessEnvironment(env);
-        process.start(python,{helper,"--parent",QString::number(canvas->winId()),"--file",source});
+        // Isolate this system helper from PYTHONHOME/PYTHONPATH and user site
+        // packages without changing the environment of the rest of the desktop.
+        process.start(python,{"-I","-u",helper,"--parent",QString::number(canvas->winId()),"--file",source});
     });
     return true;
 }

@@ -18,6 +18,13 @@ static int runVideoTrialTest(const QString &root)
     auto executable=[&](const QString &name,const QByteArray &body){QFile file(root+"/bin/"+name);file.open(QIODevice::WriteOnly);file.write(body);file.close();file.setPermissions(QFile::ReadOwner|QFile::WriteOwner|QFile::ExeOwner);};
     executable("ffmpeg",("#!/usr/bin/python3\nimport sys,time\ntime.sleep(.1)\nsys.stdout.buffer.write(open('"+root+"/poster.png','rb').read())\n").toUtf8());
     executable("ffprobe","#!/usr/bin/python3\nimport time,sys\ntime.sleep(.4)\nsys.exit(1)\n");
+    // A user Python may precede the distribution interpreter and lack GI.
+    // Keep it on PATH throughout the real playback and settings Apply flow;
+    // invoking it must fail, rather than accidentally satisfying the fixture.
+    executable("python3", R"SH(#!/bin/sh
+printf 'unexpected interpreter\n' >> "${0%/*}/python3-called"
+exit 73
+)SH");
     const auto oldPath=qgetenv("PATH");qputenv("PATH",(root+"/bin:").toUtf8()+oldPath);
     DesktopCanvas canvas;canvas.showAndActivate();QElapsedTimer timer;timer.start();
     while(!canvas.isVisible()&&timer.elapsed()<5000)settle(20);
@@ -43,6 +50,11 @@ static int runVideoTrialTest(const QString &root)
           "trial never persists media, first frame or changed fitting mode");
     executable("ukui-fences-video-trial", R"PY(#!/usr/bin/python3
 import json,sys,time,os
+with open(os.path.join(os.path.dirname(sys.argv[0]),'interpreter.json'),'w') as runtime:
+    json.dump(dict(isolated=sys.flags.isolated),runtime)
+if not sys.flags.isolated:
+    print(json.dumps(dict(event='error',reason='helper inherited user Python environment')),flush=True)
+    sys.exit(74)
 log=open(os.path.join(os.path.dirname(sys.argv[0]),'geometry.jsonl'),'a',buffering=1)
 first=sys.stdin.readline();log.write(first);json.loads(first)
 print(json.dumps(dict(event='media', decoder='vaapi', sourceFps=60)), flush=True)
@@ -66,6 +78,11 @@ for line in sys.stdin:
     check(deferredSave,"media metadata alone does not save an unverified video");
     check(QSettings().value("wallpaper/videoPath")==media.fileName()
           && state().value("persistent").toBool(),"verified hardware playback saves the selected video");
+    QFile runtime(root+"/bin/interpreter.json");runtime.open(QIODevice::ReadOnly);
+    check(QJsonDocument::fromJson(runtime.readAll()).object().value("isolated").toInt()==1
+          && !QFileInfo::exists(root+"/bin/python3-called"),
+          "hardware-verified video uses isolated system Python even when incompatible user Python leads PATH");
+    runtime.close();
     auto freeRegion=[&]{
         QFile log(root+"/bin/geometry.jsonl");log.open(QIODevice::ReadOnly);QJsonObject geometry;
         while(!log.atEnd()){
@@ -233,6 +250,10 @@ print('{"streams":[{"width":640,"height":360}],"format":{"duration":"10.0"}}')
             while(!apply->isEnabled() && timer.elapsed()<6000)settle(20);
             check(prompted && state().value("active").toBool() && state().value("persistent").toBool()
                 && !form->property("settingsDirty").toBool(),"confirmed low-resolution video applies and clears unsaved state");
+            check(state().value("hardwareReady").toBool()
+                && QSettings().value("wallpaper/videoPath")==media.fileName()
+                && !QFileInfo::exists(root+"/bin/python3-called"),
+                "wallpaper Apply saves hardware playback without falling back to PATH's incompatible Python");
             answer.stop();
             bool videoClosePrompt=false;
             QTimer videoCloseGuard;videoCloseGuard.setInterval(20);

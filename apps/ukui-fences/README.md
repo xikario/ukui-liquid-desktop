@@ -116,7 +116,9 @@ XDG 环境变量可改变默认用户目录。API 密钥优先使用系统 Secre
 
 构建依赖 Qt 5 Core/Gui/Widgets/DBus/Network、X11、OpenGL、Zlib 和 C++17；完整说明见 [构建文档](../../docs/BUILD.md)。文件操作依赖 GIO，启动器使用 `gdbus`；智能空间和日历脚本需要 Python 3。PDF/OCR 按需使用 Poppler 与 Tesseract；API 诊断使用 curl 和密钥环；音乐桌面入口使用 gtk-launch，客户端需提供 MPRIS；农历使用系统 ICU。
 
-视频壁纸额外依赖 Python 3 GI（GLib/Gio）、libmpv、FFmpeg/ffprobe，以及可互操作的 VAAPI/OpenGL 驱动；硬件播放失败会恢复图片壁纸，不自动转成软件解码。
+视频壁纸额外依赖系统 Python 3 GI（GLib/Gio）、libmpv、FFmpeg/ffprobe，以及可互操作的 VAAPI/OpenGL 驱动；播放器固定使用系统 Python 的隔离模式，不受 PATH 中用户 Python、虚拟环境或 PYTHONHOME/PYTHONPATH 影响。硬件播放失败会恢复图片壁纸，不自动转成软件解码。
+
+点击“应用”后因用户 Python 缺少 GI 导致回退图片的问题已修复；原因与回归见 [运行时修复记录](../../docs/VIDEO_APPLY_RUNTIME_FIX_20261013.md)。
 
 视频启动与缓存已补充核验：无缓存首帧时不显示纯色过渡层，视频帧准备好后才显示；临时过渡层在画布完成绘制后释放。主动隐藏后恢复从首帧播放，普通窗口遮挡恢复继续原位置。新预览缓存最多 640×360，确认后的三帧保持稳定，缓存保留当前与上一视频。详见 [评审修复与实际启动、遮挡测试](../../docs/VIDEO_REVIEW_STARTUP_FIXES_20261006.md)。
 
