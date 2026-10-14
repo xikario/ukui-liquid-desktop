@@ -33,11 +33,31 @@
 #include <QJsonObject>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#undef Bool
 class UKUIPanel : public QWidget {
     Q_OBJECT
 public:
+    enum Alignment { AlignLeft=-1, AlignCenter=0, AlignRight=1 };
     using QWidget::QWidget;
+    int layoutCalls=0;
     void paintEvent(QPaintEvent *) override {QPainter p(this);p.fillRect(rect(),QColor("#ad2144"));}
+public slots:
+    void setAlignment(UKUIPanel::Alignment alignment,bool save) {
+        m_alignment=alignment;Q_UNUSED(save);
+    }
+    void setLength(int length,bool percent,bool save) {
+        ++layoutCalls;
+        const QRect area=QApplication::primaryScreen()->geometry();
+        resize(percent?area.width()*length/100:length,height());
+        move(area.left()+(area.width()-width())/2,area.bottom()-height()+1);
+        if(save) {
+            QSettings s(qEnvironmentVariable("XDG_CONFIG_HOME")+"/ukui/panel.conf",QSettings::IniFormat);
+            s.setValue("panel1/alignment",int(m_alignment));
+            s.setValue("panel1/width",length);s.setValue("panel1/width-percent",percent);s.sync();
+        }
+    }
+private:
+    Alignment m_alignment=AlignCenter;
 };
 class PointerPaintProbe : public QObject {
 public:
@@ -76,6 +96,13 @@ int main(int argc,char **argv) {
     replaceWallpaper(QColor("#bd6542"));qputenv("UKUI_LIQUID_WALLPAPER",wallpaper.toUtf8());
     auto settle=[] {QEventLoop loop;QTimer::singleShot(700,&loop,&QEventLoop::quit);loop.exec();};
     QApplication app(argc,argv);UKUIPanel panel;panel.setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint);panel.setAttribute(Qt::WA_TranslucentBackground);panel.resize(780,60);
+    panel.setObjectName("UKUIPanel panel1");
+    {
+        QSettings native(dir.path()+"/ukui/panel.conf",QSettings::IniFormat);
+        native.setValue("panel1/width",68);native.setValue("panel1/width-percent",true);
+        native.setValue("panel1/alignment",0);native.setValue("panel1/position","Bottom");
+        native.setValue("taskbar/apps/1/desktop","preserve.desktop");
+    }
     QLabel label("原有任务栏内容",&panel);label.move(60,20);panel.show();
     QTimer::singleShot(150,&app,[&]{
         check(panel.property("liquidPanelAttached").toBool(),"Qt style plugin attaches without panel source ABI");
@@ -258,6 +285,35 @@ int main(int argc,char **argv) {
         auto dialogs=panel.findChildren<QDialog *>();
         check(!dialogs.isEmpty() && dialogs.first()->isVisible(),"appearance settings dialog opens");
         auto *appearanceDialog=dialogs.first();
+        auto *centered=appearanceDialog->findChild<QCheckBox *>("liquidPanelCentered");
+        auto *centeredLength=appearanceDialog->findChild<QSlider *>("liquidPanelCenteredLength");
+        check(centered && centered->isEnabled() && centered->isChecked()
+                  && centeredLength && centeredLength->value()==68,
+              "layout controls read existing native centered configuration without changing it");
+        check(panel.layoutCalls==0,"opening appearance settings does not write native layout");
+        const QRect beforeLayout=panel.geometry();
+        centered->click();
+        QSettings native(dir.path()+"/ukui/panel.conf",QSettings::IniFormat);native.sync();
+        check(!centeredLength->isEnabled() && native.value("panel1/width").toInt()==100
+                  && panel.width()==QApplication::primaryScreen()->geometry().width(),
+              "disabling centered layout uses native full edge length and persists it");
+        centered->click();
+        const int callsBeforeDrag=panel.layoutCalls;
+        centeredLength->setSliderDown(true);centeredLength->setValue(55);centeredLength->setValue(72);
+        check(panel.layoutCalls==callsBeforeDrag,"dragging centered length does not repeatedly relayout the dock");
+        centeredLength->setSliderDown(false);native.sync();
+        check(panel.layoutCalls==callsBeforeDrag+1 && native.value("panel1/width").toInt()==72
+                  && native.value("panel1/alignment").toInt()==0
+                  && native.value("panel1/width-percent").toBool()
+                  && native.value("taskbar/apps/1/desktop").toString()=="preserve.desktop",
+              "release applies and saves native centered length once without changing pinned apps");
+        const QRect screenGeometry=QApplication::primaryScreen()->geometry();
+        check(qAbs(panel.geometry().center().x()-screenGeometry.center().x())<=1,
+              "native layout callback centers the actual window");
+        centered->click();centered->click();native.sync();
+        check(centeredLength->value()==72 && native.value("panel1/width").toInt()==72,
+              "centering restores the chosen length after a full-width toggle");
+        panel.setGeometry(beforeLayout);app.processEvents();
         auto *titlebar=appearanceDialog->findChild<QWidget *>("liquidDialogTitlebar");
         auto *titleClose=appearanceDialog->findChild<QAbstractButton *>("liquidDialogClose");
         auto *titleIcon=appearanceDialog->findChild<QLabel *>("liquidDialogIcon");
@@ -310,7 +366,7 @@ int main(int argc,char **argv) {
         check(panel.property("liquidMaterialReady").toBool() && panel.grab().toImage()!=before,
               "reenabling adaptation asynchronously loads latest wallpaper");
         auto sliders=dialogs.first()->findChildren<QSlider *>();
-        check(sliders.size()==7,"material and see-through sliders exist");
+        check(sliders.size()==8,"layout, material and see-through sliders exist");
         dialogs.first()->findChild<QSlider *>("liquidPanelShade")->setValue(72);settle();saved.sync();
         check(qAbs(saved.value("appearance/opacity").toDouble()-.72)<.001,"slider changes persist after the bounded debounce");
         dialogs.first()->findChild<QSlider *>("liquidPanelChroma")->setValue(35);settle();saved.sync();
@@ -355,6 +411,12 @@ int main(int argc,char **argv) {
               "shared titlebar close exits the real panel settings dialog");
         check(qAbs(saved.value("appearance/clarity").toDouble()-.61)<.001,
               "shared titlebar closing flushes the final pending settings value");
+        settings->trigger();app.processEvents();
+        auto *reopenedCenter=panel.findChild<QCheckBox *>("liquidPanelCentered");
+        auto *reopenedLength=panel.findChild<QSlider *>("liquidPanelCenteredLength");
+        check(reopenedCenter && reopenedCenter->isChecked() && reopenedLength && reopenedLength->value()==72,
+              "reopening layout settings reads the saved native length");
+        panel.findChild<QAbstractButton *>("liquidDialogClose")->click();settle();
         panel.resize(860,60);settle();
         check(!panel.mask().contains(QPoint(859,0)) && panel.mask().contains(QPoint(858,30)),"resize retains rounded ends");
         validatePhysicalShape();

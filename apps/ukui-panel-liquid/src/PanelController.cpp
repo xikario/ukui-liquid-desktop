@@ -33,6 +33,76 @@
 #include <QLayout>
 #include "PanelNative.h"
 
+namespace {
+void addPanelLayoutSettings(QFormLayout *form, QWidget *dialog, QWidget *panel,
+                            const QString &preferences)
+{
+    auto *centered=new QCheckBox("任务栏居中",dialog);
+    centered->setObjectName("liquidPanelCentered");
+    form->addRow(centered);
+    auto *row=new QWidget(dialog);
+    auto *layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
+    auto *length=new QSlider(Qt::Horizontal,row);
+    length->setObjectName("liquidPanelCenteredLength");length->setRange(30,95);
+    auto *number=new QLabel(row);number->setMinimumWidth(42);
+    layout->addWidget(length);layout->addWidget(number);form->addRow("居中长度（%）",row);
+    auto *hint=new QLabel("居中整个任务栏；取消后铺满屏幕边缘。图标较多时，系统会保留容纳图标所需的最小长度。",dialog);
+    hint->setWordWrap(true);form->addRow(hint);
+
+    // OEM exposes these Qt slots: let it own geometry, struts, persistence and
+    // screen changes. Never move the dock ourselves or access private fields.
+    const auto *meta=panel->metaObject();
+    const int alignmentIndex=meta->indexOfMethod("setAlignment(UKUIPanel::Alignment,bool)");
+    const int lengthIndex=meta->indexOfMethod("setLength(int,bool,bool)");
+    const QString prefix=QStringLiteral("UKUIPanel ");
+    const QString panelName=panel->objectName().startsWith(prefix)?panel->objectName().mid(prefix.size()):QString();
+    if(alignmentIndex<0 || lengthIndex<0 || panelName.isEmpty() || panelName.contains('/')) {
+        centered->setEnabled(false);row->setEnabled(false);
+        hint->setText("当前系统任务栏未提供兼容的布局接口，暂不能在这里调整居中。");
+        return;
+    }
+    QSettings native(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)+"/ukui/panel.conf",QSettings::IniFormat);
+    native.beginGroup(panelName);
+    const QString position=native.value("position","Bottom").toString();
+    const bool vertical=position=="Left" || position=="Right";
+    QScreen *screen=QGuiApplication::screenAt(panel->mapToGlobal(panel->rect().center()));
+    if(!screen)screen=QGuiApplication::primaryScreen();
+    const int extent=screen?(vertical?screen->geometry().height():screen->geometry().width()):1;
+    const int configured=native.value("width",100).toInt();
+    const int percent=native.value("width-percent",true).toBool()?configured:qRound(100.*configured/qMax(1,extent));
+    const bool isCentered=native.value("alignment",0).toInt()==0 && percent<100;
+    const QString savedKey="layout/"+panelName+"/centeredLength";
+    QSettings saved(preferences,QSettings::IniFormat);
+    length->setValue(qBound(30,isCentered?percent:saved.value(savedKey,68).toInt(),95));
+    number->setText(QString::number(length->value())+"%");
+    centered->setChecked(isCentered);row->setEnabled(isCentered);
+    const QPointer<QWidget> guard(panel);
+    const QMetaMethod align=meta->method(alignmentIndex),resize=meta->method(lengthIndex);
+    auto apply=[guard,align,resize,centered,length,hint,preferences,savedKey]{
+        if(!guard)return;
+        const int center=0;
+        const int value=centered->isChecked()?length->value():100;
+        const bool aligned=align.invoke(guard,Qt::DirectConnection,
+            QGenericArgument("UKUIPanel::Alignment",&center),Q_ARG(bool,false));
+        const bool resized=aligned && resize.invoke(guard,Qt::DirectConnection,
+            Q_ARG(int,value),Q_ARG(bool,true),Q_ARG(bool,true));
+        if(!resized) {
+            hint->setText("系统任务栏未能应用布局，请重新打开设置后重试。");
+            return;
+        }
+        QSettings settings(preferences,QSettings::IniFormat);
+        settings.setValue(savedKey,length->value());
+    };
+    QObject::connect(centered,&QCheckBox::toggled,dialog,[row,apply](bool on){row->setEnabled(on);apply();});
+    // Dragging previews only the number; commit once on release to avoid
+    // repeated native dock relayout/material rebuilds. Keyboard changes apply.
+    QObject::connect(length,&QSlider::valueChanged,dialog,[length,number,apply](int value){
+        number->setText(QString::number(value)+"%");if(!length->isSliderDown())apply();
+    });
+    QObject::connect(length,&QSlider::sliderReleased,dialog,apply);
+}
+}
+
 QString PanelController::configFile() const {
     return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)+"/ukui/liquid-panel.ini";
 }
@@ -190,6 +260,7 @@ void PanelController::settingsDialog(QWidget *owner) {
     auto *form=new QFormLayout(dialog);
     auto *intro=new QLabel("以桌面壁纸生成液态材质。清晰度调节磨砂，液态强度调节弯折；修改后立即保存。",dialog);
     intro->setWordWrap(true);form->addRow(intro);
+    addPanelLayoutSettings(form,dialog,owner,configFile());
     auto *follow=new QCheckBox("自适应壁纸（更换壁纸后自动更新材质）",dialog);
     follow->setObjectName("liquidPanelFollowWallpaper");follow->setChecked(m_followWallpaper);form->addRow(follow);
     connect(follow,&QCheckBox::toggled,this,[this](bool on){
