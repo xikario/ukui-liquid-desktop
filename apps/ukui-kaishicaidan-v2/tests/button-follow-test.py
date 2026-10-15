@@ -67,6 +67,15 @@ with tempfile.TemporaryDirectory() as tmp:
    destroy(d,w);publish([]);wait_for(lambda:not windows('开始菜单按钮'),'overlay disappears when panel exits')
    w=panel(200);wait_for(lambda:tracks(200),'overlay recovers after panel replacement')
    subprocess.run(['xdotool','key','Super_L'],check=True);wait_for(menu_visible,'Windows key still opens menu')
+   subprocess.run(['gdbus','call','--session','--dest','org.ukui.menu','--object-path','/org/ukui/menu','--method','org.ukui.menu.WinKeyResponse'],stdout=subprocess.DEVNULL,check=True)
+   time.sleep(.3);assert menu_visible();print('PASS: native WinKeyResponse does not toggle the same key twice',flush=True)
+   subprocess.run(['xdotool','key','Super_L'],check=True);wait_for(lambda:not menu_visible(),'second Windows key closes menu')
+   for key in ['Super_L+e','Super_L+r','Super_R+e']:
+    subprocess.run(['xdotool','key',key],check=True)
+    time.sleep(.2);assert not menu_visible()
+   print('PASS: Super combinations do not open menu',flush=True)
+   subprocess.run(['gdbus','call','--session','--dest','org.ukui.menu','--object-path','/org/ukui/menu','--method','org.ukui.menu.Activate','{}'],stdout=subprocess.DEVNULL,check=True)
+   wait_for(menu_visible,'native D-Bus Activate opens Liquid menu')
    assert app.poll() is None
    subprocess.run(['gdbus','call','--session','--dest','org.ukui.kaishicaidan.v2','--object-path','/ukuiKaishicaidanV2','--method','org.ukui.kaishicaidan.v2.quitApp'],stdout=subprocess.DEVNULL,check=True,timeout=5)
    assert app.wait(timeout=5)==0

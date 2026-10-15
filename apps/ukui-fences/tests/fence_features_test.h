@@ -53,6 +53,28 @@ static int runFenceFeaturesTest(const QString &isolated)
     {
         DesktopCanvas canvas;
         settle(200);
+        // A bright Window palette must not fill the transparent content layer
+        // when it is captured for the drawer animation.
+        FenceWidget empty("snapshot regression", QRect(0,0,320,240), &canvas);
+        empty.setLiquidGlassEnabled(false);
+        QPalette bright = empty.palette();
+        bright.setColor(QPalette::Window, Qt::white);
+        empty.setPalette(bright);
+        empty.show(); settle(30);
+        const qreal snapshotDpr = empty.devicePixelRatioF();
+        const QPoint sample(qRound(280*snapshotDpr),qRound(80*snapshotDpr));
+        const QColor rest = empty.grab().toImage().pixelColor(sample);
+        empty.setCollapsed(true);
+        for (auto *animation : empty.findChildren<QPropertyAnimation *>()) {
+            animation->pause();
+            animation->setCurrentTime(animation->duration()/2);
+        }
+        const QColor motion = empty.grab().toImage().pixelColor(sample);
+        check(qAbs(rest.red()-motion.red())<15 && qAbs(rest.green()-motion.green())<15
+                  && qAbs(rest.blue()-motion.blue())<15,
+              "drawer content capture preserves background instead of filling Window palette");
+        empty.hide();
+        for (auto *animation : empty.findChildren<QPropertyAnimation *>()) animation->stop();
         auto *industry=byId(canvas,"industry");
         auto *shaped=byId(canvas,"shaped");
         if (!industry || !shaped) return 2;

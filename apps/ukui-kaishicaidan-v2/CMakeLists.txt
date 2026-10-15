@@ -68,7 +68,7 @@ set(LAUNCHER_SOURCES
     ../ukui-fences/src/LiquidIconRenderer.cpp
     src/glass.qrc
 )
-add_executable(ukui-kaishicaidan-v2 src/main.cpp ${LAUNCHER_SOURCES})
+add_executable(ukui-kaishicaidan-v2 src/main.cpp src/UkuiMenuCompat.h ${LAUNCHER_SOURCES})
 
 target_compile_definitions(ukui-kaishicaidan-v2 PRIVATE
     UKUI_KAISHICAIDAN_V2=1
@@ -153,4 +153,23 @@ if(BUILD_TESTING AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
         set_tests_properties(launcher-pointer-${SCALE} PROPERTIES TIMEOUT 30
             ENVIRONMENT "QT_SCALE_FACTOR=${SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1;KAISHICAIDAN_GLASS_FAST=1")
     endforeach()
+endif()
+
+if(BUILD_TESTING AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    find_program(XDOTOOL_EXECUTABLE xdotool)
+    find_program(XWININFO_EXECUTABLE xwininfo)
+    find_program(GDBUS_EXECUTABLE gdbus)
+    if(Python3_FOUND AND XDOTOOL_EXECUTABLE AND XWININFO_EXECUTABLE AND GDBUS_EXECUTABLE)
+        add_test(NAME launcher-native-menu-routing
+            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
+                ${DBUS_RUN_SESSION_EXECUTABLE} -- ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/button-follow-test.py)
+        set_tests_properties(launcher-native-menu-routing PROPERTIES TIMEOUT 45
+            ENVIRONMENT "UKUI_KAISHICAIDAN_V2_BIN=$<TARGET_FILE:ukui-kaishicaidan-v2>;QT_SCALE_FACTOR=1.5;QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1")
+    endif()
+    if(Python3_FOUND)
+        add_test(NAME launcher-menu-routing-install
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/menu_routing_install_test.py)
+    endif()
 endif()

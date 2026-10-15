@@ -386,7 +386,15 @@ void FenceWidget::setCollapsed(bool c)
         layoutIcons();
         QWidget *content = m_embeddedWidget ? m_embeddedWidget : m_iconViewport;
         if (content && content->isVisible()) {
-            m_collapseContent = content->grab();
+            // grab() forces DrawWindowBackground even for an unfilled child,
+            // baking the system Window palette into this transparent layer.
+            // Capture only content; the drawer already paints its glass base.
+            const qreal dpr = content->devicePixelRatioF();
+            m_collapseContent = QPixmap(QSize(qCeil(content->width()*dpr),
+                                             qCeil(content->height()*dpr)));
+            m_collapseContent.setDevicePixelRatio(dpr);
+            m_collapseContent.fill(Qt::transparent);
+            content->render(&m_collapseContent, QPoint(), QRegion(), QWidget::DrawChildren);
             m_collapseContentPos = content->pos();
         }
         m_iconViewport->hide();
