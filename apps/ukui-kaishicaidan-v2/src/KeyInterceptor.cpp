@@ -134,6 +134,7 @@ void xrecordCallback(char *closure, void *rawData)
                     ki->m_superDown = true;
                     ki->m_combined = false;
                     ki->m_pressTime = QDateTime::currentMSecsSinceEpoch();
+                    emit ki->superKeyObserved(true);
                 }
             } else {
                 if (ki->m_superDown) {
@@ -145,6 +146,7 @@ void xrecordCallback(char *closure, void *rawData)
         } else { // KeyRelease (type 3)
             if (isSuper && ki->m_superDown) {
                 ki->m_superDown = false;
+                emit ki->superKeyObserved(false);
                 qint64 duration = QDateTime::currentMSecsSinceEpoch() - ki->m_pressTime;
                 if (keyDebugEnabled())
                     qDebug() << "[XRecord] Super KeyRelease, duration:" << duration

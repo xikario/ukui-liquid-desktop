@@ -167,6 +167,17 @@ if(BUILD_TESTING AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/button-follow-test.py)
         set_tests_properties(launcher-native-menu-routing PROPERTIES TIMEOUT 45
             ENVIRONMENT "UKUI_KAISHICAIDAN_V2_BIN=$<TARGET_FILE:ukui-kaishicaidan-v2>;QT_SCALE_FACTOR=1.5;QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1")
+        foreach(RECORD_MODE enabled disabled)
+            set(RECORD_ARGS)
+            if(RECORD_MODE STREQUAL "disabled")
+                set(RECORD_ARGS "-extension RECORD")
+            endif()
+            add_test(NAME launcher-native-cold-${RECORD_MODE}
+                COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24 ${RECORD_ARGS}"
+                    ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_cold_activation_test.py)
+            set_tests_properties(launcher-native-cold-${RECORD_MODE} PROPERTIES TIMEOUT 40
+                ENVIRONMENT "UKUI_KAISHICAIDAN_V2_BIN=$<TARGET_FILE:ukui-kaishicaidan-v2>;QT_SCALE_FACTOR=1;QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1")
+        endforeach()
     endif()
     if(Python3_FOUND)
         add_test(NAME launcher-desktop-launch

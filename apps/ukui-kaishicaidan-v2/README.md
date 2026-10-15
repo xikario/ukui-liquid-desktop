@@ -30,6 +30,8 @@ cmake --install apps/ukui-kaishicaidan-v2/build-v2 --prefix "$HOME/.local"
 
 要完全接管原系统菜单，安装后运行 `python3 packaging/install-menu-routing.py`。
 该脚本备份并配置当前用户的原菜单自启动覆盖及 D-Bus 激活入口，不修改系统文件。
+写入前校验全部目标并暂存配置，失败时逆序恢复；有效或悬空符号链接均备份链接本身，
+通过替换目录项发布，不改写链接目标。回滚失败时会报告未恢复路径和备份目录。
 随后通过 `org.gnome.SessionManager.stopModule('org.ukui.menu.desktop')` 停止旧菜单的会话自动重启，
 退出并重启 V2，使它取得 `org.ukui.menu`。备份位置由脚本输出。
 本机 UKUI 的 `/org/ukui/menu` 接口也由 V2 提供；Win 键由 XRecord 单次处理，
@@ -46,6 +48,9 @@ gdbus call --session --dest org.gnome.SessionManager --object-path /org/gnome/Se
 ```
 
 恢复原菜单时，先退出 V2，按备份中的 `*-target.txt` 恢复原有文件；没有对应备份的目标是新建文件，删除该目标。
+链接备份可能是悬空链接，检查时使用 `test -e` 或 `test -L`，不要仅按“目标是否存在”判断。
+恢复链接或普通文件时可用 `cp -a --remove-destination 备份路径 目标路径` 保留原类型；
+`before.json` 也记录了各目标的备份路径，值为 null 表示原来不存在。
 随后调用 `org.freedesktop.DBus.ReloadConfig` 刷新激活入口，并用会话管理器的
 `startModule org.ukui.menu.desktop` 恢复原菜单。若不再使用 V2，也移除其独立自启动项。
 

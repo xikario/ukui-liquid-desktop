@@ -112,6 +112,8 @@ int main(int argc, char *argv[])
 #endif
 
     KeyInterceptor keyInterceptor(&menu);
+    QObject::connect(&keyInterceptor, &KeyInterceptor::superKeyObserved,
+                     &nativeMenu, &UkuiMenuCompat::observeSuperKey);
     app.installNativeEventFilter(&keyInterceptor);
     nativeMenu.setKeyMonitorActive(keyInterceptor.grabWinKey());
 
