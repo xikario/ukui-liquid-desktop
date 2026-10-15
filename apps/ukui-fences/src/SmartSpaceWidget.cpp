@@ -853,6 +853,7 @@ SmartSpaceWidget::SmartSpaceWidget(bool fenceEmbedded, QWidget *parent)
         if (auto *canvas = qobject_cast<DesktopCanvas *>(ancestor)) {
             connect(canvas, &DesktopCanvas::wallpaperChanged, this, [this] {
                 m_glassBackdrop = {};
+                m_glassSharpBackdrop = {};
                 m_glassMaterial = {};
                 refreshGlassBackdrop();
                 update();
@@ -1744,6 +1745,17 @@ void SmartSpaceWidget::setSimpleTheme(int mode, bool persist)
         saveSettings();
 }
 
+void SmartSpaceWidget::setGlassOpticsEnabled(bool enabled, bool persist)
+{
+    if(m_glassOpticsEnabled!=enabled) {
+        m_glassOpticsEnabled=enabled;
+        m_glassMaterial={};m_glassSharpBackdrop={};
+        if(!enabled)m_glassOptics.clear();
+        refreshGlassBackdrop();update();
+    }
+    if(persist)saveSettings();
+}
+
 void SmartSpaceWidget::refreshInheritedTheme()
 {
     // The redesigned UI intentionally has two explicit, opaque palettes.
@@ -2034,6 +2046,13 @@ void SmartSpaceWidget::showHeaderMenu()
                                QFileInfo::exists(knowledgeDbPath()));
     knowledgeStop->setEnabled(knowledgeBusy);
     menu.addSeparator();
+    QAction *optics=menu.addAction(QStringLiteral("水滴折射玻璃（预览）"));
+    optics->setObjectName(QStringLiteral("smartGlassOpticsAction"));
+    optics->setCheckable(true);optics->setChecked(m_glassOpticsEnabled);
+    connect(optics,&QAction::triggered,this,[this](bool enabled){
+        if(enabled)setSimpleTheme(3,false);
+        setGlassOpticsEnabled(enabled);
+    });
     QAction *settings = menu.addAction(
         smartMenuIcon(QStringLiteral("settings")),
         QStringLiteral("智能空间设置"));
@@ -2131,6 +2150,7 @@ void SmartSpaceWidget::restoreSettings()
         QStringLiteral("indexIntervalMinutes"), 30).toInt(), 1440);
     const int storedThemeMode = qBound(0, settings.value(
         QStringLiteral("themeMode"), 1).toInt(), 6);
+    m_glassOpticsEnabled=settings.value(QStringLiteral("glassOptics"),false).toBool();
     m_customBaseSkin = qBound(0, settings.value(
         QStringLiteral("customBaseSkin"), 0).toInt(), 4);
     if (storedThemeMode == 3)
@@ -2258,6 +2278,7 @@ void SmartSpaceWidget::saveSettings() const
     settings.setValue(QStringLiteral("indexIntervalMinutes"),
                       m_indexIntervalMinutes);
     settings.setValue(QStringLiteral("themeMode"), m_themeMode);
+    settings.setValue(QStringLiteral("glassOptics"), m_glassOpticsEnabled);
     settings.setValue(QStringLiteral("customBaseSkin"), m_customBaseSkin);
     settings.setValue(QStringLiteral("customOpacity"), m_customOpacity);
     settings.setValue(QStringLiteral("customColorsEnabled"), m_customColorsEnabled);
@@ -2415,7 +2436,8 @@ void SmartSpaceWidget::refreshGlassBackdrop()
     const QRect sampleGeometry(mapToGlobal(QPoint()), size());
     const qreal sampleDpr = devicePixelRatioF();
     if (!m_glassBackdrop.isNull() && m_glassBackdropGeometry == sampleGeometry
-        && qFuzzyCompare(m_glassBackdropDpr, sampleDpr)) return;
+        && qFuzzyCompare(m_glassBackdropDpr, sampleDpr)
+        && (!m_glassOpticsEnabled || !m_glassSharpBackdrop.isNull())) return;
 
     // Sample the canvas' final wallpaper cache directly. Hiding and grabbing
     // the X11 root can capture the previous compositor frame (or this window).
@@ -2451,10 +2473,14 @@ void SmartSpaceWidget::refreshGlassBackdrop()
     m_glassBackdropGeometry = sampleGeometry;
     m_glassBackdropDpr = sampleDpr;
     m_glassBackdrop = {};
+    m_glassSharpBackdrop = {};
     m_glassMaterial = {};
     if (!source.isNull()) {
         const QImage image = source.toImage().convertToFormat(
             QImage::Format_ARGB32_Premultiplied);
+        if(m_glassOpticsEnabled)
+            m_glassSharpBackdrop=image.scaled(qMax(1,image.width()/2),qMax(1,image.height()/2),
+                Qt::IgnoreAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_RGB32);
         const QSize small(qMax(1, image.width() / 8),
                           qMax(1, image.height() / 8));
         m_glassBackdrop = image.scaled(
@@ -2783,8 +2809,9 @@ void SmartSpaceWidget::updateRoundedMask()
     } else if (m_themeMode == 3) {
         // Match the painted glass inset; a wider provisional cutout leaves a
         // poster-coloured ring around the material.
-        if (!m_glassMaterial.isNull() && m_glassMaterialSize == size())
-            VideoWallpaperRegion::publish(this, VideoWallpaperRegion::coverage(m_glassMaterial, devicePixelRatioF()));
+        if (!m_glassMaterial.isNull() && m_glassMaterialSize == size()
+            && qFuzzyCompare(m_glassMaterial.devicePixelRatioF(),devicePixelRatioF()))
+            VideoWallpaperRegion::publish(this, m_glassCoverage);
         else
             VideoWallpaperRegion::publish(this, VideoWallpaperRegion::rounded(
                 QRectF(rect()).adjusted(5,5,-5,-5),19,devicePixelRatioF()));
@@ -5406,6 +5433,13 @@ QWidget *SmartSpaceWidget::createSettingsPage(QWidget *parent)
     themeMode->setCurrentIndex(themeMode->findData(m_themeMode));
     themeMode->setMinimumWidth(220);
     appearanceLayout->addWidget(themeMode);
+    auto *glassOptics=new QComboBox(appearanceTab);
+    glassOptics->setObjectName(QStringLiteral("smartGlassOpticsChoice"));
+    glassOptics->addItem(QStringLiteral("轻量柔光（原样式）"),false);
+    glassOptics->addItem(QStringLiteral("水滴折射（预览）"),true);
+    glassOptics->setCurrentIndex(m_glassOpticsEnabled?1:0);
+    appearanceLayout->addWidget(new QLabel(QStringLiteral("液态玻璃质感"),appearanceTab));
+    appearanceLayout->addWidget(glassOptics);
     auto *appearanceDetail = new QLabel(QStringLiteral(
         "黑夜模式和白天模式使用纯色界面；液态玻璃适合叠加在桌面壁纸上。"
         "设置保存后，下次打开智能空间会继续使用当前皮肤。"), appearanceTab);
@@ -5845,6 +5879,7 @@ QWidget *SmartSpaceWidget::createSettingsPage(QWidget *parent)
     m_indexMode = indexMode->currentData().toInt();
     m_indexIntervalMinutes = interval->value();
     m_themeMode = themeMode->currentData().toInt();
+    setGlassOpticsEnabled(glassOptics->currentData().toBool(),false);
     m_customOpacity = 100;
     m_customColorsEnabled = false;
     m_defaultHidden = defaultHidden->isChecked();
@@ -5985,10 +6020,15 @@ const QImage &SmartSpaceWidget::glassMaterial()
     painter.setPen(QPen(QColor(255, 255, 255, 48), 0.9, Qt::SolidLine, Qt::RoundCap));
     painter.drawPath(topHighlight);
     painter.end();
+    if(m_glassOpticsEnabled)m_glassOptics.apply(m_glassMaterial,m_glassSharpBackdrop);
+    setProperty("smartGlassMaterialBuilds",property("smartGlassMaterialBuilds").toInt()+1);
+    setProperty("smartGlassOpticsLutBytes",qlonglong(m_glassOptics.bytes()));
+    setProperty("smartGlassOpticsGeometryBuilds",m_glassOptics.geometryBuilds());
     m_glassMaterial = GlassFinish::withGrain(GlassFinish::withScrim(m_glassMaterial, GlassFinish::scrim()));
     // Use the pixels actually painted, including the highlight, rather than
     // the wider provisional rounded rectangle that exposes a poster halo.
-    VideoWallpaperRegion::publish(this, VideoWallpaperRegion::coverage(m_glassMaterial, devicePixelRatioF()));
+    m_glassCoverage=VideoWallpaperRegion::coverage(m_glassMaterial, devicePixelRatioF());
+    VideoWallpaperRegion::publish(this, m_glassCoverage);
     return m_glassMaterial;
 }
 

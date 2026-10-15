@@ -73,6 +73,7 @@ add_executable(ukui-fences
     src/SystemMonitor.cpp
     src/MonitorDiagnosisDialog.cpp
     src/SmartSpaceWidget.cpp
+    src/SmartSpaceOptics.cpp
     src/MenuStyle.h
     resources.qrc
 )
@@ -148,6 +149,14 @@ if(BUILD_TESTING)
                     --wallpaper-only)
         set_tests_properties(smart_space_wallpaper_sync PROPERTIES
             TIMEOUT 45 LABELS "integration;ui;glass;wallpaper")
+        foreach(OPTICS_SCALE 1 1.25 1.5 2)
+            add_test(NAME smart_space_optics_${OPTICS_SCALE}
+                COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24 -dpi 96"
+                    ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --smart-optics-only)
+            set_tests_properties(smart_space_optics_${OPTICS_SCALE} PROPERTIES TIMEOUT 35
+                ENVIRONMENT "QT_SCALE_FACTOR=${OPTICS_SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_FENCES_GLASS_NO_GL=1;UKUI_FENCES_OPTICS_ARTIFACTS=${CMAKE_BINARY_DIR}/artifacts/smart-optics-20261015/scale-${OPTICS_SCALE}"
+                LABELS "integration;ui;glass")
+        endforeach()
         add_test(NAME desktop_selection_drag
             COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
                     ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test>

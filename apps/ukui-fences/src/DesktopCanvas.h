@@ -129,6 +129,8 @@ public slots:
     Q_SCRIPTABLE void hideSmartSpaceToEdge();
     Q_SCRIPTABLE void revealSmartSpaceFromEdge();
     Q_SCRIPTABLE bool smartSpaceEdgeHidden() const;
+    Q_SCRIPTABLE void setSmartSpaceGlassOptics(bool enabled);
+    Q_SCRIPTABLE bool smartSpaceGlassOptics() const;
     Q_SCRIPTABLE int smartSpaceX() const;
     Q_SCRIPTABLE int smartSpaceY() const;
     Q_SCRIPTABLE int smartSpaceWidth() const;

@@ -3053,6 +3053,19 @@ bool DesktopCanvas::smartSpaceEdgeHidden() const
     return m_smartSpace && m_smartSpace->edgeHidden();
 }
 
+void DesktopCanvas::setSmartSpaceGlassOptics(bool enabled)
+{
+    if(!m_smartSpace)setSmartSpaceVisible(true);
+    if(!m_smartSpace)return;
+    if(enabled)m_smartSpace->setSimpleTheme(3,false);
+    m_smartSpace->setGlassOpticsEnabled(enabled);
+}
+
+bool DesktopCanvas::smartSpaceGlassOptics() const
+{
+    return m_smartSpace && m_smartSpace->glassOpticsEnabled();
+}
+
 int DesktopCanvas::smartSpaceX() const
 {
     return m_smartSpace ? m_smartSpace->x() : -1;

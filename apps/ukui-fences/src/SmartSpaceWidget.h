@@ -16,6 +16,7 @@ class PointerEffect;
 #include <QTimer>
 #include <QVector>
 #include <QWidget>
+#include "SmartSpaceOptics.h"
 
 class QFileSystemWatcher;
 class QContextMenuEvent;
@@ -64,6 +65,7 @@ class SmartSpaceWidget : public QWidget
     Q_OBJECT
     friend struct PointerEffectTestAccess;
     friend class SmartSpaceStartupTestAccess;
+    friend class SmartSpaceOpticsTestAccess;
 public:
     explicit SmartSpaceWidget(bool fenceEmbedded = false,
                               QWidget *parent = nullptr);
@@ -86,6 +88,9 @@ public:
     // Refresh the wallpaper material behind the liquid-glass skin. Call this
     // before mapping a newly-created widget so the first frame is clean.
     void refreshGlassBackdrop();
+    void setGlassOpticsEnabled(bool enabled, bool persist = true);
+    bool glassOpticsEnabled() const { return m_glassOpticsEnabled; }
+    void setSimpleTheme(int mode, bool persist = true);
     void hideToNearestEdge();
     void revealFromEdge();
     bool edgeHidden() const { return m_edgeHidden; }
@@ -121,7 +126,6 @@ private:
     void animateEdgeReveal();
     void animateEdgeFrame(const QPixmap &snapshot, const QRect &area, bool revealing);
     void applyMenuTheme(QMenu *menu) const;
-    void setSimpleTheme(int mode, bool persist = true);
     void configureIndexScheduling();
     QWidget *createPanel(const QString &title, QWidget *content,
                          const QString &objectName);
@@ -287,7 +291,11 @@ private:
     QPoint m_expandedPosition;
     QSize m_expandedSize {920, 520};
     QImage m_glassBackdrop;
+    QImage m_glassSharpBackdrop;
     QImage m_glassMaterial;
+    QRegion m_glassCoverage;
+    SmartSpaceOptics m_glassOptics;
+    bool m_glassOpticsEnabled = false;
     QSize m_glassMaterialSize;
     QRect m_glassBackdropGeometry;
     qreal m_glassBackdropDpr = 0;

@@ -75,6 +75,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "video_trial_test.h"
 #include "smart_space_startup_test.h"
 #include "smart_space_position_test.h"
+#include "smart_space_optics_test.h"
 #include "menu_shortcut_test.h"
 #include "pointer_effect_test.h"
 
@@ -158,6 +159,8 @@ int main(int argc, char **argv)
         return runSmartSpaceStartupTest(isolated.path());
     if (app.arguments().contains("--smart-space-position-only"))
         return runSmartSpacePositionTest();
+    if (app.arguments().contains("--smart-optics-only"))
+        return SmartSpaceOpticsTestAccess::run(isolated.path());
     if (app.arguments().contains("--monitor-placement-only"))
         return runMonitorPlacementTest();
     if (app.arguments().contains("--monitor-diagnosis-only"))
