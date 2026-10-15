@@ -10,6 +10,7 @@ static int runSmartWallpaperTest(const QString &root)
     qputenv("GSETTINGS_BACKEND", "keyfile");
     QSettings settings;
     settings.setValue("smartSpace/themeMode", 3);
+    settings.setValue("smartSpace/glassOptics", true);
     settings.setValue("smartSpace/defaultHidden", false);
     settings.setValue("smartSpace/alwaysOnTop", false);
     settings.setValue("smartSpace/autoStart", false);

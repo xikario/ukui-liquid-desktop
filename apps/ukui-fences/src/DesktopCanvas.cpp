@@ -1606,6 +1606,10 @@ void DesktopCanvas::prepareFenceGlass()
             if (key == m_wallpaperCache.cacheKey() && m_fenceGlassRenderer) {
                 m_fenceGlassRenderer->setPreparedWallpaper(material);
                 m_fenceGlassWallpaperKey = key;
+                emit liquidGlassReady();
+            } else {
+                // A second wallpaper may arrive while the first is diffusing.
+                prepareFenceGlass();
             }
             for (auto *fence : m_fences) fence->invalidateGlassCache();
             finishInitialWallpaper();

@@ -7,6 +7,7 @@
 #include "SettingsComboPopup.h"
 #include "SmartSpaceWidget.h"
 #include "GlassFinish.h"
+#include "FenceGlassRenderer.h"
 #include "VideoWallpaperRegion.h"
 #include "DesktopCanvas.h"
 
@@ -853,12 +854,16 @@ SmartSpaceWidget::SmartSpaceWidget(bool fenceEmbedded, QWidget *parent)
         if (auto *canvas = qobject_cast<DesktopCanvas *>(ancestor)) {
             connect(canvas, &DesktopCanvas::wallpaperChanged, this, [this] {
                 m_glassBackdrop = {};
-                m_glassSharpBackdrop = {};
                 m_glassMaterial = {};
                 refreshGlassBackdrop();
                 update();
             });
             connect(canvas, &DesktopCanvas::glassFinishChanged, this, [this] {
+                m_glassMaterial = {};
+                update();
+            });
+            connect(canvas, &DesktopCanvas::liquidGlassReady, this, [this] {
+                if (!m_glassOpticsEnabled) return;
                 m_glassMaterial = {};
                 update();
             });
@@ -1749,8 +1754,8 @@ void SmartSpaceWidget::setGlassOpticsEnabled(bool enabled, bool persist)
 {
     if(m_glassOpticsEnabled!=enabled) {
         m_glassOpticsEnabled=enabled;
-        m_glassMaterial={};m_glassBackdrop={};m_glassSharpBackdrop={};
-        if(!enabled)m_glassOptics.clear();
+        m_glassMaterial={};m_glassBackdrop={};m_glassBackdropGeometry={};
+        m_standaloneGlassRenderer.reset();
         if (m_themeMode == 3 && !m_fenceEmbedded && layout()) {
             const int inset = enabled ? 16 : 12;
             layout()->setContentsMargins(inset, inset, inset, inset);
@@ -2050,7 +2055,7 @@ void SmartSpaceWidget::showHeaderMenu()
                                QFileInfo::exists(knowledgeDbPath()));
     knowledgeStop->setEnabled(knowledgeBusy);
     menu.addSeparator();
-    QAction *optics=menu.addAction(QStringLiteral("水滴折射玻璃（预览）"));
+    QAction *optics=menu.addAction(QStringLiteral("分区同款玻璃（预览）"));
     optics->setObjectName(QStringLiteral("smartGlassOpticsAction"));
     optics->setCheckable(true);optics->setChecked(m_glassOpticsEnabled);
     connect(optics,&QAction::triggered,this,[this](bool enabled){
@@ -2428,8 +2433,9 @@ void SmartSpaceWidget::scheduleGlassBackdropRefresh()
 {
     if (m_themeMode != 3 || m_edgeHidden)
         return;
-    if (!m_glassBackdropRefreshTimer.isActive())
-        m_glassBackdropRefreshTimer.start(80);
+    // Restart on each geometry event; moving/resizing reuses the old image
+    // until the pointer settles instead of running a large shader every frame.
+    m_glassBackdropRefreshTimer.start(80);
 }
 
 void SmartSpaceWidget::refreshGlassBackdrop()
@@ -2439,9 +2445,9 @@ void SmartSpaceWidget::refreshGlassBackdrop()
 
     const QRect sampleGeometry(mapToGlobal(QPoint()), size());
     const qreal sampleDpr = devicePixelRatioF();
-    if (!m_glassBackdrop.isNull() && m_glassBackdropGeometry == sampleGeometry
-        && qFuzzyCompare(m_glassBackdropDpr, sampleDpr)
-        && (!m_glassOpticsEnabled || !m_glassSharpBackdrop.isNull())) return;
+    if ((m_glassOpticsEnabled ? !m_glassMaterial.isNull() : !m_glassBackdrop.isNull())
+        && m_glassBackdropGeometry == sampleGeometry
+        && qFuzzyCompare(m_glassBackdropDpr, sampleDpr)) return;
 
     // Sample the canvas' final wallpaper cache directly. Hiding and grabbing
     // the X11 root can capture the previous compositor frame (or this window).
@@ -2450,6 +2456,16 @@ void SmartSpaceWidget::refreshGlassBackdrop()
         canvas = qobject_cast<DesktopCanvas *>(ancestor);
         if (canvas)
             break;
+    }
+    if (m_glassOpticsEnabled && canvas) {
+        m_glassBackdropGeometry = sampleGeometry;
+        m_glassBackdropDpr = sampleDpr;
+        m_glassBackdrop = {};
+        m_glassMaterial = {};
+        m_standaloneGlassRenderer.reset();
+        canvas->prepareFenceGlass();
+        update();
+        return;
     }
     const bool wasVisible = !canvas && isVisible();
     if (wasVisible)
@@ -2487,11 +2503,14 @@ void SmartSpaceWidget::refreshGlassBackdrop()
 
 void SmartSpaceWidget::cacheGlassBackdrop(const QImage &raw)
 {
-    m_glassBackdrop = {}; m_glassSharpBackdrop = {}; m_glassMaterial = {};
+    m_glassBackdrop = {}; m_glassMaterial = {};
     if (raw.isNull()) return;
     if (m_glassOpticsEnabled) {
-        SmartSpaceOptics::prepareBackdrop(raw, devicePixelRatioF(),
-                                         m_glassBackdrop, m_glassSharpBackdrop);
+        m_glassBackdrop = raw.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        m_glassBackdrop.setDevicePixelRatio(devicePixelRatioF());
+        if (!m_standaloneGlassRenderer)
+            m_standaloneGlassRenderer = std::make_unique<FenceGlassRenderer>();
+        m_standaloneGlassRenderer->setWallpaper(m_glassBackdrop);
     } else {
         const QImage image = raw.convertToFormat(QImage::Format_ARGB32_Premultiplied);
         m_glassBackdrop = image.scaled(qMax(1, image.width() / 8), qMax(1, image.height() / 8),
@@ -2818,7 +2837,8 @@ void SmartSpaceWidget::updateRoundedMask()
             VideoWallpaperRegion::publish(this, m_glassCoverage);
         else
             VideoWallpaperRegion::publish(this, VideoWallpaperRegion::rounded(
-                QRectF(rect()).adjusted(5,5,-5,-5),19,devicePixelRatioF()));
+                m_glassOpticsEnabled ? QRectF(rect()).adjusted(2,2,-2,-2) : QRectF(rect()).adjusted(5,5,-5,-5),
+                m_glassOpticsEnabled ? 10 : 19,devicePixelRatioF()));
     } else {
         VideoWallpaperRegion::publish(this, VideoWallpaperRegion::rounded(
             QRectF(rect()).adjusted(1,1,-1,-1),16,devicePixelRatioF()));
@@ -5440,7 +5460,7 @@ QWidget *SmartSpaceWidget::createSettingsPage(QWidget *parent)
     auto *glassOptics=new QComboBox(appearanceTab);
     glassOptics->setObjectName(QStringLiteral("smartGlassOpticsChoice"));
     glassOptics->addItem(QStringLiteral("轻量柔光（原样式）"),false);
-    glassOptics->addItem(QStringLiteral("水滴折射（预览）"),true);
+    glassOptics->addItem(QStringLiteral("分区同款玻璃（预览）"),true);
     glassOptics->setCurrentIndex(m_glassOpticsEnabled?1:0);
     appearanceLayout->addWidget(new QLabel(QStringLiteral("液态玻璃质感"),appearanceTab));
     appearanceLayout->addWidget(glassOptics);
@@ -5956,13 +5976,14 @@ void SmartSpaceWidget::setEditMode(bool edit)
 
 QRegion SmartSpaceWidget::glassPointerDamage(const QPoint &position) const
 {
-    const QRectF material = QRectF(rect()).adjusted(5,5,-5,-5);
+    const QRectF material = m_glassOpticsEnabled ? QRectF(rect()).adjusted(2,2,-2,-2) : QRectF(rect()).adjusted(5,5,-5,-5);
+    const int radius = m_glassOpticsEnabled ? 10 : 19;
     const QPointF pointer(position);
     const QPointF candidates[] = {
-        QPointF(qBound(material.left()+19,pointer.x(),material.right()-19),material.top()),
-        QPointF(qBound(material.left()+19,pointer.x(),material.right()-19),material.bottom()),
-        QPointF(material.left(),qBound(material.top()+19,pointer.y(),material.bottom()-19)),
-        QPointF(material.right(),qBound(material.top()+19,pointer.y(),material.bottom()-19))
+        QPointF(qBound(material.left()+radius,pointer.x(),material.right()-radius),material.top()),
+        QPointF(qBound(material.left()+radius,pointer.x(),material.right()-radius),material.bottom()),
+        QPointF(material.left(),qBound(material.top()+radius,pointer.y(),material.bottom()-radius)),
+        QPointF(material.right(),qBound(material.top()+radius,pointer.y(),material.bottom()-radius))
     };
     qreal distance = std::numeric_limits<qreal>::max();
     for (const auto &candidate : candidates) {
@@ -5972,16 +5993,67 @@ QRegion SmartSpaceWidget::glassPointerDamage(const QPoint &position) const
     }
     if (distance >= 52.0*52.0) return {};
     QPainterPath rim;
-    rim.addRoundedRect(material, 19, 19);
+    if (m_glassOpticsEnabled) rim = GlassFinish::squirclePath(material.adjusted(1.5,1.5,-1.5,-1.5), 8.5);
+    else rim.addRoundedRect(material, 19, 19);
     return pointerRimDamage(rim, pointer, 112);
 }
 
 const QImage &SmartSpaceWidget::glassMaterial()
 {
     const qreal dpr = devicePixelRatioF();
+    if (m_glassOpticsEnabled && m_glassBackdropRefreshTimer.isActive() && !m_glassMaterial.isNull())
+        return m_glassMaterial;
     if (!m_glassMaterial.isNull() && m_glassMaterialSize == size()
         && qFuzzyCompare(m_glassMaterial.devicePixelRatioF(), dpr))
         return m_glassMaterial;
+
+    auto publish = [this, dpr] {
+        setProperty("smartGlassMaterialBuilds",property("smartGlassMaterialBuilds").toInt()+1);
+        m_glassCoverage = VideoWallpaperRegion::coverage(m_glassMaterial, dpr);
+        VideoWallpaperRegion::publish(this, m_glassCoverage);
+    };
+    if (m_glassOpticsEnabled) {
+        QElapsedTimer timer; timer.start();
+        DesktopCanvas *canvas = nullptr;
+        for (QWidget *ancestor = parentWidget(); ancestor; ancestor = ancestor->parentWidget()) {
+            canvas = qobject_cast<DesktopCanvas *>(ancestor);
+            if (canvas) break;
+        }
+        QImage panel;
+        bool gpu = false;
+        // Leave a transparent safety gutter inside the QWidget. Qt/X11 can
+        // fail to restore an antialiased pixel exactly on a child boundary
+        // during partial paints. The gutter has no dark border or shadow.
+        const QSize panelSize = size()-QSize(4,4);
+        if (canvas) {
+            panel = canvas->renderLiquidGlass(QRect(canvas->mapFromGlobal(mapToGlobal(QPoint(2,2))), panelSize), 10.0);
+            gpu = canvas->m_fenceGlassRenderer && canvas->m_fenceGlassRenderer->usedGpu();
+        } else if (m_standaloneGlassRenderer) {
+            panel = m_standaloneGlassRenderer->renderPanel(QRect(QPoint(2,2), panelSize), 10.0);
+            gpu = m_standaloneGlassRenderer->usedGpu();
+        }
+        // A canvas preparation in flight will emit liquidGlassReady(). Keep
+        // this cache invalid rather than freezing a dark substitute panel.
+        if (panel.isNull()) return m_glassMaterial;
+        const QSize pixels(qMax(1,qRound(panelSize.width()*dpr)), qMax(1,qRound(panelSize.height()*dpr)));
+        if (panel.size()!=pixels) panel=panel.scaled(pixels, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        panel.setDevicePixelRatio(dpr);
+        // Same order and parameters as FenceWidget::prepareGlassCache(). No
+        // custom trough, black frame or second readability veil on top.
+        const QImage finished = GlassFinish::withEdge(GlassFinish::withGrain(GlassFinish::withScrim(
+            panel, GlassFinish::scrim())), GlassFinish::squirclePath(QRectF(QPointF(),QSizeF(panelSize)),10));
+        m_glassMaterial = QImage(QSize(qRound(width()*dpr),qRound(height()*dpr)),QImage::Format_ARGB32_Premultiplied);
+        m_glassMaterial.setDevicePixelRatio(dpr);m_glassMaterial.fill(Qt::transparent);
+        { QPainter compose(&m_glassMaterial);compose.drawImage(QPointF(2,2),finished); }
+        m_glassMaterialSize = size();
+        setProperty("smartGlassMaterialBackend", canvas ? "fence-shared" : "fence-local");
+        setProperty("smartGlassUsedGpu", gpu);
+        publish();
+        qInfo().noquote()<<QStringLiteral("[glass] smart-space %1x%2 %3 %4 rebuilt in %5 ms")
+            .arg(width()).arg(height()).arg(canvas?QStringLiteral("shared"):QStringLiteral("standalone"))
+            .arg(gpu?QStringLiteral("GPU"):QStringLiteral("CPU fallback")).arg(timer.elapsed());
+        return m_glassMaterial;
+    }
 
     // Compose the stationary wallpaper, veil, gradients and rim once. Pointer
     // motion only restores its small damaged region from this material image.
@@ -6024,20 +6096,10 @@ const QImage &SmartSpaceWidget::glassMaterial()
     painter.setPen(QPen(QColor(255, 255, 255, 48), 0.9, Qt::SolidLine, Qt::RoundCap));
     painter.drawPath(topHighlight);
     painter.end();
-    if (m_glassOpticsEnabled) {
-        SmartSpaceOptics::tintSurface(m_glassMaterial, m_glassBackdrop);
-        m_glassOptics.apply(m_glassMaterial, m_glassSharpBackdrop);
-    }
-    setProperty("smartGlassMaterialBuilds",property("smartGlassMaterialBuilds").toInt()+1);
-    setProperty("smartGlassOpticsLutBytes",qlonglong(m_glassOptics.bytes()));
-    setProperty("smartGlassOpticsGeometryBuilds",m_glassOptics.geometryBuilds());
     m_glassMaterial = GlassFinish::withGrain(GlassFinish::withScrim(m_glassMaterial, GlassFinish::scrim()));
-    setProperty("smartGlassReadingShade", m_glassOpticsEnabled
-        ? m_glassOptics.protectReadingArea(m_glassMaterial, m_textColor, m_mutedColor) : 0.0);
-    // Use the pixels actually painted, including the highlight, rather than
-    // the wider provisional rounded rectangle that exposes a poster halo.
-    m_glassCoverage=VideoWallpaperRegion::coverage(m_glassMaterial, devicePixelRatioF());
-    VideoWallpaperRegion::publish(this, m_glassCoverage);
+    setProperty("smartGlassMaterialBackend", "legacy");
+    setProperty("smartGlassUsedGpu", false);
+    publish();
     return m_glassMaterial;
 }
 
@@ -6059,11 +6121,16 @@ void SmartSpaceWidget::paintEvent(QPaintEvent *event)
             painter.fillRect(rect(), Qt::transparent);
             painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
         }
-        painter.drawImage(QPoint(0, 0), glassMaterial());
+        const QImage &material = glassMaterial();
+        if (m_glassMaterialSize == size()) painter.drawImage(QPoint(0, 0), material);
+        else painter.drawImage(rect(), material); // temporary resize stretch
 
         if (m_glassPointerActive && !glassPointerDamage(m_glassPointerPosition).isEmpty()) {
             QPainterPath rim;
-            rim.addRoundedRect(QRectF(rect()).adjusted(5, 5, -5, -5), 19, 19);
+            // Keep moving light inside opaque material. Painting on the
+            // translucent outermost pixel can accumulate a trail on X11.
+            if (m_glassOpticsEnabled) rim = GlassFinish::squirclePath(QRectF(rect()).adjusted(3.5,3.5,-3.5,-3.5),8.5);
+            else rim.addRoundedRect(QRectF(rect()).adjusted(5, 5, -5, -5), 19, 19);
             // Match the monitor's restrained reflection: a fine rim and faint
             // inner glow, without a separate curved caustic or wide light band.
             QRadialGradient reflection(m_glassPointerPosition, 112);

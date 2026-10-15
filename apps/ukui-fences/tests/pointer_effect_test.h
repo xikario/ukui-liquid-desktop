@@ -27,6 +27,7 @@ struct PointerEffectTestAccess {
                  "desklets/music/autoStart", "desklets/calendar/autoStart"})
             settings.setValue(key, false);
         settings.setValue("smartSpace/themeMode", 3);
+        settings.setValue("smartSpace/glassOptics", true);
         settings.setValue("smartSpace/defaultHidden", false);
         settings.setValue("smartSpace/indexMode", 0);
         settings.setValue("smartSpace/alwaysOnTop", false);
@@ -140,7 +141,8 @@ struct PointerEffectTestAccess {
         QSettings settings;
         for(const char *key:{"smartSpace/autoStart","systemMonitor/autoStart","desklets/clock/autoStart",
                             "desklets/activity/autoStart","desklets/music/autoStart","desklets/calendar/autoStart"})settings.setValue(key,false);
-        settings.setValue("smartSpace/themeMode",3);settings.setValue("smartSpace/defaultHidden",false);
+        settings.setValue("smartSpace/themeMode",3);settings.setValue("smartSpace/glassOptics",true);
+        settings.setValue("smartSpace/defaultHidden",false);
         settings.setValue("smartSpace/indexMode",0);settings.setValue("smartSpace/alwaysOnTop",false);settings.sync();
         const QString path=root+"/pointer-wall.png";wallpaper(QSize(1440,900),1).save(path);
         QDir().mkpath(root+"/config/kyfences");QFile layout(root+"/config/kyfences/layout.json");layout.open(QIODevice::WriteOnly);

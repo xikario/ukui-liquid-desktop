@@ -16,9 +16,10 @@ class PointerEffect;
 #include <QTimer>
 #include <QVector>
 #include <QWidget>
-#include "SmartSpaceOptics.h"
+#include <memory>
 
 class QFileSystemWatcher;
+class FenceGlassRenderer;
 class QContextMenuEvent;
 class QEvent;
 class QLineEdit;
@@ -291,10 +292,11 @@ private:
     QPoint m_expandedPosition;
     QSize m_expandedSize {920, 520};
     QImage m_glassBackdrop;
-    QImage m_glassSharpBackdrop;
     QImage m_glassMaterial;
     QRegion m_glassCoverage;
-    SmartSpaceOptics m_glassOptics;
+    // Used only without a DesktopCanvas (standalone/test host). Production
+    // Smart Space reuses the canvas' existing fence renderer and diffusion.
+    std::unique_ptr<FenceGlassRenderer> m_standaloneGlassRenderer;
     bool m_glassOpticsEnabled = false;
     QSize m_glassMaterialSize;
     QRect m_glassBackdropGeometry;

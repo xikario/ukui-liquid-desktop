@@ -50,6 +50,8 @@ class DesktopCanvas : public QWidget
     Q_CLASSINFO("D-Bus Interface", "org.ukui.fences")
     friend class FenceWidget;
     friend class SystemMonitor;
+    friend class SmartSpaceWidget;
+    friend class SmartSpaceOpticsTestAccess;
     friend class FencesSettingsWindow;
 public:
     explicit DesktopCanvas(QWidget *parent = nullptr);
@@ -95,6 +97,9 @@ signals:
     void desktopVisibilityChanged();
     void initialWallpaperReady();
     void wallpaperChanged();
+    // Wallpaper diffusion is asynchronous; consumers retry cached panels
+    // when the shared fence renderer has accepted the latest source.
+    void liquidGlassReady();
     // Maximized/fullscreen windows hide the desktop: animations and polling pause.
     void desktopCoveredChanged(bool covered);
     // Glass readability preset changed: every cached glass surface rebuilds once.
