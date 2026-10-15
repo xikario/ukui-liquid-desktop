@@ -1,4 +1,8 @@
 #include "SmartSpaceOptics.h"
+#include "Palette.h"
+#include <QPainter>
+#include <QLinearGradient>
+#include <QRadialGradient>
 #include <QtMath>
 #include <cmath>
 
@@ -76,6 +80,75 @@ void SmartSpaceOptics::prepareBackdrop(const QImage &wallpaper, qreal dpr,
 void SmartSpaceOptics::clear()
 {
     QVector<Sample>().swap(m_samples);m_size={};m_dpr=0;
+}
+
+void SmartSpaceOptics::tintSurface(QImage &material, const QImage &frost)
+{
+    if (material.isNull() || frost.isNull()) return;
+    const qreal dpr = material.devicePixelRatioF();
+    const QRectF bounds(0, 0, material.width() / dpr, material.height() / dpr);
+    {
+        QPainter painter(&material);
+        // The original material owns the exact antialiased outline. SourceAtop
+        // changes color inside that coverage, without adding a second mask.
+        painter.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+        painter.drawImage(bounds, frost);
+        const qreal diagonal = (bounds.width() + bounds.height()) * .5;
+        QLinearGradient veil(0, 0, diagonal, diagonal);
+        veil.setColorAt(0, QColor(10, 15, 20, 72));
+        veil.setColorAt(1, QColor(10, 15, 20, 98));
+        painter.fillRect(bounds, veil);
+        QRadialGradient glow(QPointF(bounds.width() * .22, bounds.height() * .04),
+                             qMax(bounds.width(), bounds.height()) * .78);
+        glow.setColorAt(0, QColor(255, 255, 255, 18));
+        glow.setColorAt(.25, QColor(255, 255, 255, 10));
+        glow.setColorAt(.5, QColor(255, 255, 255, 5));
+        glow.setColorAt(.75, QColor(255, 255, 255, 1));
+        glow.setColorAt(1, QColor(255, 255, 255, 0));
+        painter.fillRect(bounds, glow);
+    }
+}
+
+qreal SmartSpaceOptics::protectReadingArea(QImage &material, const QColor &text, const QColor &muted)
+{
+    if (material.isNull()) return 0;
+    // Check the final scrim/grain result rather than darkening a second time
+    // before those passes. The frost is smooth; small headroom covers points
+    // between this 24-logical-pixel sampling grid.
+    const qreal dpr = material.devicePixelRatioF();
+    const int inset = qCeil(36 * dpr), step = qMax(1, qRound(24 * dpr));
+    QVector<QColor> backgrounds;
+    for (int y = inset; y < material.height() - inset; y += step) {
+        const auto *row = reinterpret_cast<const QRgb *>(material.constScanLine(y));
+        for (int x = inset; x < material.width() - inset; x += step) {
+            const QRgb p = row[x];
+            if (qAlpha(p) != 255) continue;
+            backgrounds.append(QColor(qMin(255, qRed(p) + 2), qMin(255, qGreen(p) + 2),
+                                      qMin(255, qBlue(p) + 2)));
+        }
+    }
+    const qreal shade = qMax(Palette::toneLift(backgrounds, Palette::PrimaryTextContrast + .2, text),
+                             Palette::toneLift(backgrounds, Palette::SecondaryTextContrast + .1, muted));
+    if (shade > 0) {
+        prepare(material.size(), dpr);
+        const int opacity = qCeil(shade * 255);
+        int sampleIndex = 0;
+        for (int y = 0; y < material.height(); ++y) {
+            auto *row = reinterpret_cast<QRgb *>(material.scanLine(y));
+            for (int x = 0; x < material.width(); ++x) {
+                const int pixel = y * material.width() + x;
+                int keep = 255 - opacity;
+                if (sampleIndex < m_samples.size() && m_samples[sampleIndex].pixel == pixel) {
+                    keep = 255 - opacity * (255 - m_samples[sampleIndex].mix) / 255;
+                    ++sampleIndex;
+                }
+                const QRgb p = row[x];
+                row[x] = qRgba(qRed(p) * keep / 255, qGreen(p) * keep / 255,
+                                qBlue(p) * keep / 255, qAlpha(p));
+            }
+        }
+    }
+    return shade;
 }
 
 void SmartSpaceOptics::prepare(QSize size,qreal dpr)
@@ -163,6 +236,8 @@ void SmartSpaceOptics::apply(QImage &material,const QImage &source)
         const QRgb red=sample(rx+s.dispersionX*2,ry+s.dispersionY*2);
         const QRgb green=sample(rx,ry);
         const QRgb blue=sample(rx-s.dispersionX*2,ry-s.dispersionY*2);
+        const int luma=(qRed(red)*77+qGreen(green)*150+qBlue(blue)*29)/256;
+        auto saturated=[&](int value){return qBound(0,luma+(value-luma)*310/256,255);};
         auto channel=[&](int base,int clear,int tint){
             base=base*255/a;
             // A neutral veil keeps a readable dark rim under bright images.
@@ -170,7 +245,7 @@ void SmartSpaceOptics::apply(QImage &material,const QImage &source)
             const int result=qBound(0,(base*(255-s.mix)+clear*s.mix)/255+s.light,255);
             return (result*a+127)/255;
         };
-        row[x]=qRgba(channel(qRed(old),qRed(red),8),channel(qGreen(old),qGreen(green),13),
-                     channel(qBlue(old),qBlue(blue),21),a);
+        row[x]=qRgba(channel(qRed(old),saturated(qRed(red)),8),channel(qGreen(old),saturated(qGreen(green)),13),
+                     channel(qBlue(old),saturated(qBlue(blue)),21),a);
     }
 }

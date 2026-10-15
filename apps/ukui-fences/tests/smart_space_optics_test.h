@@ -1,6 +1,8 @@
 #pragma once
 #include "SmartSpaceWidget.h"
 #include "VideoWallpaperRegion.h"
+#include "Palette.h"
+#include "GlassFinish.h"
 #include <QLineEdit>
 #include <QElapsedTimer>
 
@@ -17,6 +19,15 @@ public:
         }
         return total/qMax(1,count);
     }
+    static QVector<QColor> readingColors(const QImage &image, qreal dpr) {
+        QVector<QColor> colors;
+        const int inset=qCeil(40*dpr),step=qMax(1,qRound(9*dpr));
+        for(int y=inset;y<image.height()-inset;y+=step) {
+            const auto *row=reinterpret_cast<const QRgb *>(image.constScanLine(y));
+            for(int x=inset;x<image.width()-inset;x+=step)colors.append(QColor::fromRgb(row[x]));
+        }
+        return colors;
+    }
     static int run(const QString &root) {
         QSettings settings;
         settings.setValue("smartSpace/themeMode",3);
@@ -25,6 +36,20 @@ public:
         settings.setValue("smartSpace/indexMode",0);settings.sync();
         QWidget host;host.resize(1200,760);host.show();
         SmartSpaceWidget widget(false,&host);widget.resize(920,520);widget.move(50,40);widget.show();settle(100);
+        // Render real result rows using fictional in-memory entries only.
+        const QString fixtureRoot=root+QStringLiteral("/示例资料");
+        widget.m_roots=QStringList{fixtureRoot};
+        const QStringList names={QStringLiteral("项目方案示例.docx"),QStringLiteral("季度汇报示例.pptx"),
+            QStringLiteral("资料清单示例.xlsx"),QStringLiteral("工作纪要示例.pdf")};
+        for(int i=0;i<names.size();++i) {
+            SmartSpaceEntry entry;entry.root=fixtureRoot;entry.parentPath=fixtureRoot+QStringLiteral("/办公文档");
+            entry.name=names[i];entry.path=entry.parentPath+QLatin1Char('/')+entry.name;
+            entry.suffix=QFileInfo(entry.name).suffix();entry.category=QStringLiteral("文档");
+            entry.content=QStringLiteral("这里是合成的预览文字，用于检查白色标题、辅助信息与液态底色的可读性。");
+            entry.size=4096*(i+1);entry.modified=QDateTime(QDate(2026,10,15),QTime(9,30));
+            widget.m_entries.append(entry);
+        }
+        widget.updateResults();widget.m_statusLabel->setText(QStringLiteral("样式预览 · 合成测试内容"));settle(60);
         const qreal dpr=widget.devicePixelRatioF();
         const QImage source=wallpaper(widget.size(),dpr);
         auto setBackdrop=[&](const QImage &image) { widget.cacheGlassBackdrop(image); };
@@ -66,6 +91,36 @@ public:
         settle(80);
         check(widget.property("smartGlassMaterialBuilds").toInt()==builds && widget.m_glassOptics.geometryBuilds()==geometryBuilds,
               "stationary partial paints reuse the material and optical geometry");
+        const auto savedScrim=GlassFinish::scrim();
+        for(const auto scrim:{GlassFinish::Scrim::Balanced,GlassFinish::Scrim::Transparent}) {
+            GlassFinish::setScrim(scrim);
+            for(int scene=0;scene<3;++scene) {
+                QImage sceneSource(source.size(),QImage::Format_RGB32);sceneSource.setDevicePixelRatio(dpr);
+                if(scene==0)sceneSource.fill(Qt::white);
+                else if(scene==1) {
+                    QPainter painter(&sceneSource);
+                    QLinearGradient gradient(0,0,widget.width(),widget.height());
+                    gradient.setColorAt(0,Qt::white);gradient.setColorAt(.5,QColor(255,240,160));
+                    gradient.setColorAt(1,QColor(220,245,255));painter.fillRect(widget.rect(),gradient);
+                } else sceneSource.fill(qRgb(18,45,33));
+                setBackdrop(sceneSource);const QImage readable=widget.glassMaterial();
+                const auto colors=readingColors(readable,dpr);
+                const qreal primary=Palette::minContrast(widget.m_textColor,colors);
+                const qreal secondary=Palette::minContrast(widget.m_mutedColor,colors);
+                check(primary>=Palette::PrimaryTextContrast && secondary>=Palette::SecondaryTextContrast,
+                      "bright/mixed/dark wallpapers retain readable primary and secondary text");
+                qInfo()<<"OPTICS_READING"<<"dpr"<<dpr<<"scrim"<<int(scrim)<<"scene"<<scene
+                       <<"primary"<<primary<<"secondary"<<secondary
+                       <<"extra shade"<<widget.property("smartGlassReadingShade").toDouble();
+                if(scene==0) {
+                    check(widget.property("smartGlassReadingShade").toDouble()>0,"white wallpaper receives adaptive reading shade");
+                    if(scrim==GlassFinish::Scrim::Balanced)widget.grab().save(artifacts+"/white-wallpaper.png");
+                } else if(scene==2) {
+                    check(widget.property("smartGlassReadingShade").toDouble()==0,"dark wallpaper avoids unnecessary extra shade");
+                }
+            }
+        }
+        GlassFinish::setScrim(savedScrim);
         QImage changedSource=source.mirrored(true,false);setBackdrop(changedSource);
         const QImage changedWallpaper=widget.glassMaterial();
         check(changedWallpaper!=after && widget.m_glassOptics.geometryBuilds()==geometryBuilds,
@@ -79,6 +134,7 @@ public:
         check(widget.glassMaterial()==before && widget.m_glassOptics.bytes()==0,
               "original style restores exactly and releases the optical LUT");
         check(widget.layout()->contentsMargins()==QMargins(12,12,12,12),"original content margins restore");
+        check(widget.property("smartGlassReadingShade").toDouble()==0,"original style has no preview reading shade");
         QImage uniform(QSize(63,37),QImage::Format_RGB32);uniform.fill(qRgb(42,112,231));
         QImage frost,edge;SmartSpaceOptics::prepareBackdrop(uniform,dpr,frost,edge);
         bool constant=true;

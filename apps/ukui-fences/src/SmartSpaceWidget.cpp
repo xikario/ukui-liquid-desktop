@@ -6024,11 +6024,16 @@ const QImage &SmartSpaceWidget::glassMaterial()
     painter.setPen(QPen(QColor(255, 255, 255, 48), 0.9, Qt::SolidLine, Qt::RoundCap));
     painter.drawPath(topHighlight);
     painter.end();
-    if(m_glassOpticsEnabled)m_glassOptics.apply(m_glassMaterial,m_glassSharpBackdrop);
+    if (m_glassOpticsEnabled) {
+        SmartSpaceOptics::tintSurface(m_glassMaterial, m_glassBackdrop);
+        m_glassOptics.apply(m_glassMaterial, m_glassSharpBackdrop);
+    }
     setProperty("smartGlassMaterialBuilds",property("smartGlassMaterialBuilds").toInt()+1);
     setProperty("smartGlassOpticsLutBytes",qlonglong(m_glassOptics.bytes()));
     setProperty("smartGlassOpticsGeometryBuilds",m_glassOptics.geometryBuilds());
     m_glassMaterial = GlassFinish::withGrain(GlassFinish::withScrim(m_glassMaterial, GlassFinish::scrim()));
+    setProperty("smartGlassReadingShade", m_glassOpticsEnabled
+        ? m_glassOptics.protectReadingArea(m_glassMaterial, m_textColor, m_mutedColor) : 0.0);
     // Use the pixels actually painted, including the highlight, rather than
     // the wider provisional rounded rectangle that exposes a poster halo.
     m_glassCoverage=VideoWallpaperRegion::coverage(m_glassMaterial, devicePixelRatioF());

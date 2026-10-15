@@ -1,4 +1,5 @@
 #pragma once
+#include <QColor>
 #include <QImage>
 #include <QVector>
 
@@ -9,7 +10,12 @@ public:
     // Both sources are local wallpaper crops. Only rebuilt on a backdrop change.
     static void prepareBackdrop(const QImage &wallpaper, qreal dpr,
                                 QImage &frost, QImage &edge);
+    // Recolor existing coverage without changing its alpha.
+    static void tintSurface(QImage &material, const QImage &frost);
     void apply(QImage &material, const QImage &sharp);
+    // Check the finished reading surface once; fade extra shade through the
+    // existing optical band so the outer reflection can remain bright.
+    qreal protectReadingArea(QImage &material, const QColor &text, const QColor &muted);
     void clear();
     qsizetype bytes() const { return qsizetype(m_samples.capacity()) * sizeof(Sample); }
     int geometryBuilds() const { return m_builds; }
