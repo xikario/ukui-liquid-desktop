@@ -169,6 +169,11 @@ if(BUILD_TESTING AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
             ENVIRONMENT "UKUI_KAISHICAIDAN_V2_BIN=$<TARGET_FILE:ukui-kaishicaidan-v2>;QT_SCALE_FACTOR=1.5;QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1")
     endif()
     if(Python3_FOUND)
+        add_test(NAME launcher-desktop-launch
+            COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/desktop_launch_test.py)
+        set_tests_properties(launcher-desktop-launch PROPERTIES TIMEOUT 20
+            ENVIRONMENT "UKUI_KAISHICAIDAN_V2_BIN=$<TARGET_FILE:ukui-kaishicaidan-v2>")
         add_test(NAME launcher-menu-routing-install
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/menu_routing_install_test.py)
     endif()

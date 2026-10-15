@@ -1,5 +1,14 @@
 # 分区动画白底与原开始菜单回弹修复
 
+## 应用点击后立即退出（后续修复）
+
+原启动辅助进程调用 g_app_info_launch，应用继承菜单 QProcess 的 stdout/stderr
+管道。辅助进程结束、QProcess 销毁后，应用输出日志可能触发 SIGPIPE 并退出。
+改用 GLib 2.28 的 g_desktop_app_info_launch_uris_as_manager，应用输出重定向到
+/dev/null；辅助进程自身的启动错误仍反馈给菜单，保留 desktop Exec、Terminal 等语义。
+回归用例延迟写 stdout/stderr 并恢复默认 SIGPIPE 处理，确认父级关闭管道后应用存活：
+修复前失败，修复后通过。实际从菜单点击软件商店已确认进程和窗口正常。
+
 ## 分区展开泛白
 
 `QWidget::grab()` 默认带 `DrawWindowBackground`。内容视口本来不填背景，
