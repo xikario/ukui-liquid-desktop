@@ -160,6 +160,8 @@ private:
     static DiskIoTotals readDiskIoTotals();
     static QVector<double> readLoadAverages();
     static QString readCpuModel();
+    static QString platformDescription();
+    static QString defaultWidgetTitle();
     struct Sample {
         CpuTotals cpu;
         MemStats memory;
@@ -275,7 +277,7 @@ private:
     QString m_apiModel = QStringLiteral("deepseek-flash");
     bool m_apiModelCustom = false;
     QString m_customApiModel;
-    QString m_widgetTitle = QStringLiteral("飞腾桌面资源监控");
+    QString m_widgetTitle = QStringLiteral("桌面资源监控");
     QString m_widgetFontFamily;
     int m_widgetFontSize = 9;
     int m_windowOpacity = 100;
@@ -363,6 +365,7 @@ private:
     static constexpr int EXPANDED_H = 440;
     static constexpr int HEADER_H = 54;
     static constexpr int MARGIN = 16;
+    static constexpr int CORE_LIMIT = 32;
     static constexpr int DEFAULT_STAT_INTERVAL_SEC = 5;
     static constexpr int HEAVY_EVERY_TICKS = 6;
     static constexpr int HISTORY_POINTS = 20;

@@ -21,6 +21,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QSysInfo>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFontMetrics>
@@ -185,7 +186,7 @@ SystemMonitor::SystemMonitor(QWidget *parent)
     m_prevCpu = readCpuTotals();
     m_lastProcTotal = m_prevCpu.total;
     m_coreCount = std::max(1, m_prevCpu.coreTotal.size());
-    m_corePercents = QVector<double>(std::min(m_coreCount, 8), 0.0);
+    m_corePercents = QVector<double>(std::min(m_coreCount, CORE_LIMIT), 0.0);
     m_cpuHistory = QVector<double>(HISTORY_POINTS, 0.0);
     m_memHistory = QVector<double>(HISTORY_POINTS, 0.0);
     m_diskHistory = QVector<double>(HISTORY_POINTS, 0.0);
@@ -358,13 +359,30 @@ QString SystemMonitor::readCpuModel()
                               : compactModelName(hardware);
 }
 
+QString SystemMonitor::platformDescription()
+{
+    // Describe the real machine instead of a hardcoded vendor. This keeps the
+    // title and the diagnosis prompt accurate on every supported platform
+    // (for example Hygon x86_64, Phytium ARM64, Zhaoxin, Kunpeng).
+    const QString model = readCpuModel();
+    const QString arch = QSysInfo::currentCpuArchitecture();
+    if (model == QStringLiteral("处理器"))
+        return QStringLiteral("%1 处理器").arg(arch.isEmpty() ? QStringLiteral("本机") : arch);
+    return QStringLiteral("%1 · %2").arg(model, arch);
+}
+
+QString SystemMonitor::defaultWidgetTitle()
+{
+    return QStringLiteral("桌面资源监控");
+}
+
 SystemMonitor::Sample SystemMonitor::collectSample(bool processes, int count,
     quint64 previousTotal, QHash<int, quint64> previousTicks, int targetPid, bool disk)
 {
     Sample sample;
     sample.cpu = readCpuTotals(); sample.memory = readMemStats();
     const int cores = qMax(1, sample.cpu.coreTotal.size());
-    for (int i = 0; i < qMin(8, cores); ++i) sample.frequencies << readCoreFrequencyGhz(i);
+    for (int i = 0; i < qMin(CORE_LIMIT, cores); ++i) sample.frequencies << readCoreFrequencyGhz(i);
     if (processes) {
         const quint64 delta = previousTotal && sample.cpu.total > previousTotal ? sample.cpu.total - previousTotal : 0;
         sample.processes = readProcessSnapshot(count, delta, previousTicks, cores);
@@ -645,7 +663,7 @@ void SystemMonitor::applyStats(const Sample &sample, bool heavy)
         m_cpuPercent =
             clampPercent((totalDelta - idleDelta) * 100.0 / totalDelta);
 
-    const int coreCount = std::min(current.coreTotal.size(), 8);
+    const int coreCount = std::min(current.coreTotal.size(), CORE_LIMIT);
     if (m_corePercents.size() != coreCount)
         m_corePercents = QVector<double>(coreCount, 0.0);
     for (int i = 0; i < coreCount; ++i) {
@@ -664,7 +682,7 @@ void SystemMonitor::applyStats(const Sample &sample, bool heavy)
     m_coreCount = current.coreTotal.isEmpty()
         ? std::max(1, QThread::idealThreadCount())
         : current.coreTotal.size();
-    m_coreFrequenciesGhz.resize(std::min(8, m_coreCount));
+    m_coreFrequenciesGhz.resize(std::min(CORE_LIMIT, m_coreCount));
     for (int i = 0; i < m_coreFrequenciesGhz.size(); ++i)
         m_coreFrequenciesGhz[i] = sample.frequencies.value(i);
 
@@ -926,7 +944,10 @@ QFont SystemMonitor::uiFont(int sizeOffset, bool bold) const
     QFont result = font();
     if (!m_widgetFontFamily.isEmpty())
         result.setFamily(m_widgetFontFamily);
-    result.setPixelSize(qBound(7, m_widgetFontSize + sizeOffset, 28));
+    // 整个部件按 m_scale 线性缩放，字号必须先放大再缩小，
+    // 否则缩到 0.65 时正文不足 6 像素。渲染后至少 9 像素（中文可读下限）。
+    const int floor = int(std::ceil(9.0 / qMax(m_scale, 0.35)));
+    result.setPixelSize(qBound(7, std::max(m_widgetFontSize + sizeOffset, floor), 28));
     result.setBold(bold);
     return result;
 }
@@ -1348,14 +1369,22 @@ void SystemMonitor::paintEvent(QPaintEvent *event)
     const int coreAreaX = cpuCard.left() + 92;
     const int coreAreaY = cpuCard.top() + 105;
     const int coreAreaW = cpuCard.right() - coreAreaX - 12;
-    const int shownCores = std::min(8, std::max(1, m_coreCount));
+    const int shownCores = std::min(CORE_LIMIT, std::max(1, m_coreCount));
+    // Prefer two rows above eight cores, adding rows when the compact card
+    // cannot fit every four-pixel track without spilling into the next card.
     const int coreGap = 3;
+    const int rowCapacity = qMax(1, (coreAreaW + coreGap) / (4 + coreGap));
+    const int coreRows = qMax(shownCores > 8 ? 2 : 1,
+                             (shownCores + rowCapacity - 1) / rowCapacity);
+    const int coresPerRow = (shownCores + coreRows - 1) / coreRows;
+    const int trackHeight = qMax(1, (36 - coreGap * (coreRows - 1)) / coreRows);
     const int coreW =
-        std::max(4, (coreAreaW - coreGap * (shownCores - 1)) / shownCores);
+        std::max(4, (coreAreaW - coreGap * (coresPerRow - 1)) / coresPerRow);
     m_coreRects.clear();
     for (int i = 0; i < shownCores; ++i) {
-        const QRect track(coreAreaX + i * (coreW + coreGap),
-                          coreAreaY, coreW, 36);
+        const QRect track(coreAreaX + (i % coresPerRow) * (coreW + coreGap),
+                          coreAreaY + (i / coresPerRow) * (trackHeight + coreGap),
+                          coreW, trackHeight);
         m_coreRects.append(track);
         painter.setPen(Qt::NoPen);
         painter.setBrush(colors.track);
@@ -1516,11 +1545,16 @@ void SystemMonitor::restoreSettings()
         saveCredential(m_apiKey);
     else if (storedInKeyring)
         runCredentialJob(QStringLiteral("read"));
-    m_widgetTitle = settings.value(
-        QStringLiteral("title"),
-        QStringLiteral("飞腾桌面资源监控")).toString().trimmed();
-    if (m_widgetTitle.isEmpty())
-        m_widgetTitle = QStringLiteral("飞腾桌面资源监控");
+    const QString legacyTitles[] = {
+        QStringLiteral("飞腾桌面资源监控"),
+        // Historic config on some deployments stored a mojibake first glyph
+        // (U+98FE instead of U+98DE). Migrate it with the intact spelling.
+        QString::fromUtf8("\u98fe\u817e\u684c\u9762\u8d44\u6e90\u76d1\u63a7"),
+    };
+    m_widgetTitle = settings.value(QStringLiteral("title")).toString().trimmed();
+    if (m_widgetTitle.isEmpty() || m_widgetTitle == legacyTitles[0]
+        || m_widgetTitle == legacyTitles[1])
+        m_widgetTitle = defaultWidgetTitle();
     m_widgetFontFamily =
         settings.value(QStringLiteral("fontFamily")).toString();
     m_widgetFontSize = qBound(
@@ -1814,8 +1848,9 @@ QByteArray SystemMonitor::buildDiagnosisPayload() const
         : QStringLiteral(
               "本次任务是整机健康诊断。请区分正常前台工作负载、瞬时尖峰和"
               "持续性资源瓶颈，不要因为单个进程占用较高就武断判定异常。");
-    QString systemPrompt = QStringLiteral(
-        "你是针对国产飞腾处理器与银河麒麟/Linux 平台的智能运维专家。"
+    QString systemPrompt = QStringLiteral("你是针对%1处理器与银河麒麟/Linux 平台的智能运维专家。")
+                               .arg(platformDescription())
+                           + QStringLiteral(
         "你是只读诊断顾问，只提供分析、文字建议和供用户手动核对的命令示例；"
         "不会也不得执行命令、结束进程、更改设置或声称已完成任何操作。"
         "输入是约15秒的趋势采样，实际时长与有效样本数以输入为准，包含本地规则评级、"
@@ -2386,7 +2421,7 @@ QWidget *SystemMonitor::createSettingsPage(QWidget *parent)
         }
         m_widgetTitle = titleEdit->text().trimmed();
         if (m_widgetTitle.isEmpty())
-            m_widgetTitle = QStringLiteral("飞腾桌面资源监控");
+            m_widgetTitle = defaultWidgetTitle();
         m_widgetFontFamily = fontCombo->currentData().toString();
         m_widgetFontSize = fontSize->value();
         m_windowOpacity = opacitySlider->value();

@@ -1,4 +1,5 @@
 #pragma once
+#include <QSysInfo>
 #include <QClipboard>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -74,6 +75,31 @@ struct SystemMonitorTestAccess {
         SystemMonitor monitor(&host);
         monitor.setSkin(SystemMonitor::Skin::Dark);
         monitor.m_timer.stop(); monitor.move(20, 20); monitor.show(); settle(80);
+        check(SystemMonitor::defaultWidgetTitle() == QStringLiteral("桌面资源监控"),
+              "default monitor title is platform neutral");
+        check(SystemMonitor::platformDescription().contains(QSysInfo::currentCpuArchitecture()),
+              "diagnosis platform includes the actual CPU architecture");
+        const int realCores = monitor.m_coreCount;
+        for (bool compact : {false, true}) {
+            monitor.m_compact = compact;
+            monitor.resize(monitor.baseSize());
+            for (int cores : {1, 8, 16, 32, 64}) {
+                monitor.m_coreCount = cores;
+                monitor.grab();
+                const QRect cpuCard(monitor.MARGIN, monitor.HEADER_H + 14,
+                    (monitor.logicalWidth() - monitor.MARGIN*2 - 24)/3, 156);
+                check(monitor.m_coreRects.size() == qMin(cores, monitor.CORE_LIMIT),
+                      "CPU tracks represent every supported core");
+                for (int i=0; i<monitor.m_coreRects.size(); ++i) {
+                    check(cpuCard.contains(monitor.m_coreRects[i]), "CPU tracks stay inside compact or expanded card");
+                    for (int j=0; j<i; ++j)
+                        check(!monitor.m_coreRects[i].intersects(monitor.m_coreRects[j]), "CPU tracks never overlap");
+                }
+            }
+        }
+        monitor.m_coreCount = realCores;
+        monitor.m_compact = false;
+        monitor.resize(monitor.baseSize());
         monitor.m_aiText = QStringLiteral("完整诊断：资源占用与下一步建议\n")
             + QStringLiteral("只提供文字建议；请先保存工作并确认进程身份。\n").repeated(240)
             + QStringLiteral("<a href=\"file:///tmp/test\">这只是文本</a>\n最后一行：结束前再三确认");

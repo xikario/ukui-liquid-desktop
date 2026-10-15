@@ -137,14 +137,20 @@ FenceWidget::FenceWidget(const QString &title,
     , m_id(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8))
     , m_title(title)
 {
-    setAttribute(Qt::WA_TranslucentBackground);
+    // Same rule as LiquidDesklet: canvas children keep the 24-bit visual or
+    // this UKUI/X11 compositor drops the whole window (invisible fences).
+    setAttribute(Qt::WA_TranslucentBackground, false);
+    setAttribute(Qt::WA_NoSystemBackground, false);
+    setAttribute(Qt::WA_OpaquePaintEvent, false);
     setAutoFillBackground(false);
     setAcceptDrops(true);
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     setGeometry(geo);
     m_iconViewport = new QWidget(this);
-    m_iconViewport->setAttribute(Qt::WA_TranslucentBackground);
+    m_iconViewport->setAttribute(Qt::WA_TranslucentBackground, false);
+    m_iconViewport->setAttribute(Qt::WA_NoSystemBackground, false);
+    m_iconViewport->setAttribute(Qt::WA_OpaquePaintEvent, false);
     m_iconViewport->setAutoFillBackground(false);
     m_iconViewport->setMouseTracking(true);
     m_iconViewport->installEventFilter(this);
