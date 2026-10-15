@@ -32,6 +32,8 @@
 #include <QMetaMethod>
 #include <QLayout>
 #include "PanelNative.h"
+#include "WindowEffectsSettings.h"
+#include <QTabWidget>
 
 namespace {
 void addPanelLayoutSettings(QFormLayout *form, QWidget *dialog, QWidget *panel,
@@ -258,8 +260,23 @@ void PanelController::settingsDialog(QWidget *owner) {
         dialog->style()->standardIcon(QStyle::SP_DesktopIcon)));
     dialog->setMinimumWidth(400);
     auto *form=new QFormLayout(dialog);
+    auto *outerForm=form;
     auto *intro=new QLabel("以桌面壁纸生成液态材质。清晰度调节磨砂，液态强度调节弯折；修改后立即保存。",dialog);
     intro->setWordWrap(true);form->addRow(intro);
+    auto *tabs=new QTabWidget(dialog);tabs->setObjectName("liquidPanelSettingsTabs");
+    auto *appearancePage=new QWidget(tabs);form=new QFormLayout(appearancePage);
+    tabs->addTab(appearancePage,"任务栏外观");
+    // Create the compositor view on demand: opening appearance alone does
+    // not start any effects queries or enlarge the dialog for that page.
+    auto *effectsPage=new QWidget(tabs);auto *effectsLayout=new QVBoxLayout(effectsPage);
+    effectsLayout->setContentsMargins(0,0,0,0);
+    tabs->addTab(effectsPage,"窗口动画");outerForm->addRow(tabs);
+    connect(tabs,&QTabWidget::currentChanged,dialog,[effectsPage,effectsLayout](int index){
+        if(index==1 && effectsLayout->count()==0){
+            effectsLayout->addWidget(new WindowEffectsSettings(effectsPage));effectsLayout->addStretch();
+            LiquidPopup::installControls(effectsPage);
+        }
+    });
     addPanelLayoutSettings(form,dialog,owner,configFile());
     auto *follow=new QCheckBox("自适应壁纸（更换壁纸后自动更新材质）",dialog);
     follow->setObjectName("liquidPanelFollowWallpaper");follow->setChecked(m_followWallpaper);form->addRow(follow);
@@ -295,7 +312,7 @@ void PanelController::settingsDialog(QWidget *owner) {
     hint->setWordWrap(true);form->addRow(hint);
     auto *reduced=new QCheckBox("减弱菜单动画",dialog);reduced->setChecked(m_reducedMotion);form->addRow(reduced);
     connect(reduced,&QCheckBox::toggled,this,[this](bool on){m_reducedMotion=on;apply(false);});
-    auto *buttons=new QDialogButtonBox(QDialogButtonBox::Close,dialog);form->addRow(buttons);
+    auto *buttons=new QDialogButtonBox(QDialogButtonBox::Close,dialog);outerForm->addRow(buttons);
     connect(buttons,&QDialogButtonBox::rejected,dialog,&QDialog::close);
     connect(dialog,&QDialog::finished,this,[this]{if(m_previewRefresh.isActive())flushPreview();if(m_configSave.isActive())saveConfiguration();});
     dialog->show();dialog->raise();dialog->activateWindow();

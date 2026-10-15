@@ -20,6 +20,8 @@
 #include <QPointer>
 #include <QSlider>
 #include <QCheckBox>
+#include <QTabWidget>
+#include <QSpinBox>
 #include <QSaveFile>
 #include <QEventLoop>
 #include <QProcess>
@@ -285,6 +287,15 @@ int main(int argc,char **argv) {
         auto dialogs=panel.findChildren<QDialog *>();
         check(!dialogs.isEmpty() && dialogs.first()->isVisible(),"appearance settings dialog opens");
         auto *appearanceDialog=dialogs.first();
+        auto *settingsTabs=appearanceDialog->findChild<QTabWidget *>("liquidPanelSettingsTabs");
+        check(settingsTabs && settingsTabs->count()==2 && settingsTabs->tabText(1)=="窗口动画"
+                  && !appearanceDialog->findChild<QCheckBox *>("liquidWindowMagicLamp"),
+              "appearance and desktop animations have separate tabs with lazy effects loading");
+        settingsTabs->setCurrentIndex(1);app.processEvents();
+        auto *effectDuration=appearanceDialog->findChild<QSpinBox *>("liquidWindowMagicDuration");
+        check(effectDuration && effectDuration->property("liquidControlButtons").toBool(),
+              "lazily created animation duration gets shared liquid spin arrows");
+        settingsTabs->setCurrentIndex(0);app.processEvents();
         auto *centered=appearanceDialog->findChild<QCheckBox *>("liquidPanelCentered");
         auto *centeredLength=appearanceDialog->findChild<QSlider *>("liquidPanelCenteredLength");
         check(centered && centered->isEnabled() && centered->isChecked()
