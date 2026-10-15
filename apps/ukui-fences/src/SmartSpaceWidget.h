@@ -304,6 +304,7 @@ private:
     QTimer m_glassBackdropRefreshTimer;
     QRegion glassPointerDamage(const QPoint &position) const;
     const QImage &glassMaterial();
+    void cacheGlassBackdrop(const QImage &image);
     PointerEffect *m_glassPointerEffect = nullptr;
     QPoint m_glassPointerPosition;
     bool m_glassPointerActive = false;

@@ -1413,7 +1413,7 @@ void SmartSpaceWidget::applyTheme()
     if (m_themeMode != 3 || m_fenceEmbedded)
         m_glassMaterial = {};
     if (!m_fenceEmbedded && layout()) {
-        const int inset = glassMode ? 12 : 4;
+        const int inset = glassMode ? (m_glassOpticsEnabled ? 16 : 12) : 4;
         layout()->setContentsMargins(inset, inset, inset, inset);
     }
     if (m_glassPointerEffect)
@@ -1749,8 +1749,12 @@ void SmartSpaceWidget::setGlassOpticsEnabled(bool enabled, bool persist)
 {
     if(m_glassOpticsEnabled!=enabled) {
         m_glassOpticsEnabled=enabled;
-        m_glassMaterial={};m_glassSharpBackdrop={};
+        m_glassMaterial={};m_glassBackdrop={};m_glassSharpBackdrop={};
         if(!enabled)m_glassOptics.clear();
+        if (m_themeMode == 3 && !m_fenceEmbedded && layout()) {
+            const int inset = enabled ? 16 : 12;
+            layout()->setContentsMargins(inset, inset, inset, inset);
+        }
         refreshGlassBackdrop();update();
     }
     if(persist)saveSettings();
@@ -2472,28 +2476,28 @@ void SmartSpaceWidget::refreshGlassBackdrop()
 
     m_glassBackdropGeometry = sampleGeometry;
     m_glassBackdropDpr = sampleDpr;
-    m_glassBackdrop = {};
-    m_glassSharpBackdrop = {};
-    m_glassMaterial = {};
-    if (!source.isNull()) {
-        const QImage image = source.toImage().convertToFormat(
-            QImage::Format_ARGB32_Premultiplied);
-        if(m_glassOpticsEnabled)
-            m_glassSharpBackdrop=image.scaled(qMax(1,image.width()/2),qMax(1,image.height()/2),
-                Qt::IgnoreAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_RGB32);
-        const QSize small(qMax(1, image.width() / 8),
-                          qMax(1, image.height() / 8));
-        m_glassBackdrop = image.scaled(
-            small, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-            .scaled(image.size(), Qt::IgnoreAspectRatio,
-                    Qt::SmoothTransformation);
-    }
+    cacheGlassBackdrop(source.toImage());
 
     if (wasVisible) {
         show();
         raise();
     }
     update();
+}
+
+void SmartSpaceWidget::cacheGlassBackdrop(const QImage &raw)
+{
+    m_glassBackdrop = {}; m_glassSharpBackdrop = {}; m_glassMaterial = {};
+    if (raw.isNull()) return;
+    if (m_glassOpticsEnabled) {
+        SmartSpaceOptics::prepareBackdrop(raw, devicePixelRatioF(),
+                                         m_glassBackdrop, m_glassSharpBackdrop);
+    } else {
+        const QImage image = raw.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        m_glassBackdrop = image.scaled(qMax(1, image.width() / 8), qMax(1, image.height() / 8),
+            Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+            .scaled(image.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    }
 }
 
 QPoint SmartSpaceWidget::boundedPosition(const QPoint &position) const

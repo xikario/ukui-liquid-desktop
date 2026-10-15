@@ -2,6 +2,77 @@
 #include <QtMath>
 #include <cmath>
 
+namespace {
+// Three separable box passes approximate a Gaussian. The working image is
+// downsampled; row accumulators keep the vertical pass contiguous in memory.
+// No scanLine()/detach in a per-pixel loop and no unsigned channel subtraction.
+void blur(QImage &image, int radius)
+{
+    if (image.isNull() || radius <= 0) return;
+    const int w = image.width(), h = image.height();
+    radius = qMin(radius, qMax(w, h));
+    const int count = 2 * radius + 1;
+    QImage scratch(image.size(), QImage::Format_RGB32);
+    QVector<int> sums(w * 3);
+    for (int pass = 0; pass < 3; ++pass) {
+        for (int y = 0; y < h; ++y) {
+            const auto *src = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+            auto *dst = reinterpret_cast<QRgb *>(scratch.scanLine(y));
+            int r = 0, g = 0, b = 0;
+            for (int i = -radius; i <= radius; ++i) {
+                const QRgb p = src[qBound(0, i, w - 1)];
+                r += qRed(p); g += qGreen(p); b += qBlue(p);
+            }
+            for (int x = 0; x < w; ++x) {
+                dst[x] = qRgb((r + count / 2) / count, (g + count / 2) / count,
+                              (b + count / 2) / count);
+                const QRgb a = src[qMax(0, x - radius)];
+                const QRgb z = src[qMin(w - 1, x + radius + 1)];
+                r += qRed(z) - qRed(a); g += qGreen(z) - qGreen(a); b += qBlue(z) - qBlue(a);
+            }
+        }
+        sums.fill(0);
+        for (int i = -radius; i <= radius; ++i) {
+            const auto *src = reinterpret_cast<const QRgb *>(scratch.constScanLine(qBound(0, i, h - 1)));
+            for (int x = 0; x < w; ++x) {
+                sums[x * 3] += qRed(src[x]); sums[x * 3 + 1] += qGreen(src[x]); sums[x * 3 + 2] += qBlue(src[x]);
+            }
+        }
+        for (int y = 0; y < h; ++y) {
+            auto *dst = reinterpret_cast<QRgb *>(image.scanLine(y));
+            const auto *a = reinterpret_cast<const QRgb *>(scratch.constScanLine(qMax(0, y - radius)));
+            const auto *z = reinterpret_cast<const QRgb *>(scratch.constScanLine(qMin(h - 1, y + radius + 1)));
+            for (int x = 0; x < w; ++x) {
+                int *sum = sums.data() + x * 3;
+                dst[x] = qRgb((sum[0] + count / 2) / count, (sum[1] + count / 2) / count,
+                              (sum[2] + count / 2) / count);
+                sum[0] += qRed(z[x]) - qRed(a[x]); sum[1] += qGreen(z[x]) - qGreen(a[x]);
+                sum[2] += qBlue(z[x]) - qBlue(a[x]);
+            }
+        }
+    }
+}
+}
+
+void SmartSpaceOptics::prepareBackdrop(const QImage &wallpaper, qreal dpr,
+                                      QImage &frost, QImage &edge)
+{
+    frost = {}; edge = {};
+    if (wallpaper.isNull()) return;
+    const QImage opaque = wallpaper.convertToFormat(QImage::Format_RGB32);
+    edge = opaque.scaled(qMax(1, opaque.width() / 2), qMax(1, opaque.height() / 2),
+                         Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    blur(edge, qMax(1, qRound(2 * dpr)));
+    QImage small = edge.scaled(qMax(1, opaque.width() / 4), qMax(1, opaque.height() / 4),
+                               Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    // Radius follows DPR, so the frost has the same logical depth at 1–2x.
+    blur(small, qMax(1, qRound(11 * dpr)));
+    // Match the original backdrop's raster format. Qt's RGB32 clip fast path
+    // otherwise rounds antialiased corner alpha differently by one level.
+    frost = small.scaled(wallpaper.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+        .convertToFormat(QImage::Format_ARGB32_Premultiplied);
+}
+
 void SmartSpaceOptics::clear()
 {
     QVector<Sample>().swap(m_samples);m_size={};m_dpr=0;
@@ -12,44 +83,52 @@ void SmartSpaceOptics::prepare(QSize size,qreal dpr)
     if(size==m_size && qFuzzyCompare(dpr,m_dpr))return;
     m_samples.clear();m_size=size;m_dpr=dpr;++m_builds;
     if(size.isEmpty())return;
-    const float inset=5*dpr,radius=19*dpr,band=22*dpr;
+    const float inset=5*dpr,radius=19*dpr,band=21*dpr,innerRadius=12*dpr;
     const float hw=size.width()*.5f-inset,hh=size.height()*.5f-inset;
     const float bx=qMax(0.f,hw-radius),by=qMax(0.f,hh-radius);
+    const float ix=qMax(0.f,hw-band-innerRadius),iy=qMax(0.f,hh-band-innerRadius);
     // Allocate for a perimeter, never width*height. No full-size mask/LUT.
     const int reserve=qMin(qint64(size.width())*size.height(),
-        qint64(qCeil(2*(size.width()+size.height())*(band+2*dpr))));
+        qint64(qCeil(2*(size.width()+size.height())*(band+2*dpr)+4*innerRadius*innerRadius)));
     m_samples.reserve(reserve);
-    constexpr float eta=1/1.52f,pi=3.14159265358979323846f;
+    constexpr float pi=3.14159265358979323846f;
     for(int y=0;y<size.height();++y) {
         const float py=y+.5f-size.height()*.5f;
         for(int x=0;x<size.width();++x) {
             const float px=x+.5f-size.width()*.5f;
-            if(std::abs(px)<hw-radius-band && std::abs(py)<hh-radius-band)continue;
+            if(std::abs(px)<ix && std::abs(py)<iy)continue;
             const float qx=std::abs(px)-bx,qy=std::abs(py)-by;
             const float mx=qMax(qx,0.f),my=qMax(qy,0.f);
             const float outside=std::sqrt(mx*mx+my*my);
-            const float depth=radius-outside-qMin(qMax(qx,qy),0.f);
-            if(depth<-.75f || depth>band)continue;
-            float gx=0,gy=0;
-            if(outside>1e-5f){gx=mx/outside*(px<0?-1:1);gy=my/outside*(py<0?-1:1);}
-            else if(qx>qy)gx=px<0?-1:1;
-            else gy=py<0?-1:1;
-            const float t=qBound(0.f,depth/band,1.f),u=1-t;
-            const float nz=std::sqrt(qMax(.03f,1-u*u));
-            const float nx=gx*u,ny=gy*u;
-            const float factor=eta*nz-std::sqrt(qMax(0.f,1-eta*eta*(1-nz*nz)));
-            const float edge=u*u*(3-2*u);
-            const float rimFade=qBound(0.f,(depth-float(dpr))/(2.5f*float(dpr)),1.f);
-            const float lightDot=qMax(0.f,-.65f*nx-.65f*ny+.39f*nz);
-            const float caustic=qMax(0.f,.65f*nx+.65f*ny);
-            const int light=qRound(90*std::pow(lightDot,5)*edge
-                +30*std::pow(caustic,3)*std::sin(t*pi));
+            const float outer=outside+qMin(qMax(qx,qy),0.f)-radius;
+            if(outer>.75f)continue;
+            const float ax=std::abs(px)-ix,ay=std::abs(py)-iy;
+            const float imx=qMax(ax,0.f),imy=qMax(ay,0.f);
+            const float distance=std::sqrt(imx*imx+imy*imy);
+            const float inner=distance+qMin(qMax(ax,ay),0.f)-innerRadius;
+            if(inner<=0)continue;
+            // Two rounded envelopes keep the inner plateau curved even when
+            // the optical band is wider than the outer corner radius.
+            const float u=qBound(0.f,inner/qMax(1.f,inner-outer),1.f);
+            const float gx=imx/qMax(1e-4f,distance)*(px<0?-1:1);
+            const float gy=imy/qMax(1e-4f,distance)*(py<0?-1:1);
+            const float corner=1+.35f*2*imx*imy/qMax(1e-4f,distance*distance);
+            const float pull=(.52f*std::pow(u,1.15f)+.48f*u*u*u)*48*dpr*corner;
+            const float tangent=(1-u)*u*2.5f*dpr*(px*py>0?1:-1);
+            const float direction=-.68f*gx-.68f*gy;
+            const float lit=qMax(0.f,direction),opposite=qMax(0.f,-direction);
+            const float trough=u<.36f?-26*std::sin(u/.36f*pi):0;
+            const float cushion=u>=.32f && u<.92f
+                ?std::sin((u-.32f)/.60f*pi)*(18+32*lit+22*opposite)*corner:0;
+            const float rimT=qBound(0.f,1+outer/(2.2f*float(dpr)),1.f);
+            const int light=qRound(trough+cushion+rimT*rimT*(78+56*lit+24*opposite));
             m_samples.append({y*size.width()+x,
-                qint16(qRound(nx*factor*20*dpr*16)),qint16(qRound(ny*factor*20*dpr*16)),
+                qint16(qRound((-gx*pull-gy*tangent)*16)),qint16(qRound((-gy*pull+gx*tangent)*16)),
                 // Dispersion is in eighths of a device pixel. Subpixel taps
                 // retain a quiet color fringe at every scale.
-                qint8(qRound(gx*.65f*dpr*u*u*8)),qint8(qRound(gy*.65f*dpr*u*u*8)),
-                quint8(qBound(0,qRound(edge*165*rimFade),165)),quint8(qBound(0,light,100))});
+                qint8(qBound(-127,qRound(gx*2.6f*dpr*u*u*8),127)),
+                qint8(qBound(-127,qRound(gy*2.6f*dpr*u*u*8),127)),
+                quint8(qRound(qMin(1.f,std::pow(u,.62f)*1.12f)*242)),qint8(qBound(-128,light,127))});
         }
     }
 }
@@ -87,7 +166,7 @@ void SmartSpaceOptics::apply(QImage &material,const QImage &source)
         auto channel=[&](int base,int clear,int tint){
             base=base*255/a;
             // A neutral veil keeps a readable dark rim under bright images.
-            clear=(clear*180+tint*75)/255;
+            clear=(clear*220+tint*35)/255;
             const int result=qBound(0,(base*(255-s.mix)+clear*s.mix)/255+s.light,255);
             return (result*a+127)/255;
         };
