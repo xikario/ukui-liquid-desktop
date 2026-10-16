@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(CenterProbe LANGUAGES CXX)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_CXX_STANDARD 17)
+find_package(Qt5 REQUIRED COMPONENTS Widgets)
+add_library(centerprobe MODULE probe.cpp)
+target_link_libraries(centerprobe Qt5::Widgets)
+set_target_properties(centerprobe PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/styles")

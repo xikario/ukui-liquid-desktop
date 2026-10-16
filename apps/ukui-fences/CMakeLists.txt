@@ -254,6 +254,7 @@ if(BUILD_TESTING)
                     ${CMAKE_SOURCE_DIR}/tests/run_smart_space_ui_smoke.sh
                     $<TARGET_FILE:ukui-fences>)
         set_tests_properties(smart_space_ui_smoke PROPERTIES
+            SKIP_RETURN_CODE 77
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             TIMEOUT 120
             LABELS "integration;ui")

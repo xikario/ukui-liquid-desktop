@@ -231,8 +231,15 @@ struct PointerEffectTestAccess {
         fixture.art=QUrl::fromLocalFile(cover).toString();
         auto bus=QDBusConnection::sessionBus();check(bus.registerObject("/org/mpris/MediaPlayer2",&fixture,QDBusConnection::ExportAllSlots|QDBusConnection::ExportAllProperties|QDBusConnection::ExportAdaptors)
             && bus.registerService("org.mpris.MediaPlayer2.strawberry"),"real MPRIS fixture starts");
-        canvas.setMusicWidgetVisible(true);auto *music=canvas.findChild<MusicDesklet *>();settle(450);
-        check(music && music->notesAnimating(),"production music notes animate");if(!music)return 1;
+        canvas.setMusicWidgetVisible(true);auto *music=canvas.findChild<MusicDesklet *>();
+        if(!music)return 1;
+        // MPRIS discovery is fully asynchronous (ListNames, owner and PID
+        // queries, a background process probe, status read and the property
+        // refresh). A fixed 450 ms sleep is not enough on slower hosts, so
+        // bounded-poll the visible result of that chain instead.
+        for(int waited=0;waited<5000 && !music->notesAnimating();waited+=50)
+            settle(50);
+        check(music->notesAnimating(),"production music notes animate");
         music->move(100,100);settle(150);
         // Freeze MPRIS progress while checking fixed note phases against a
         // full redraw; elapsed song time would otherwise alter static labels.

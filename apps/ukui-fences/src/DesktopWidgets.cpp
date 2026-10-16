@@ -48,7 +48,12 @@ LiquidDesklet::LiquidDesklet(DesktopCanvas *canvas, const QString &key, const QS
     : QWidget(canvas), m_canvas(canvas), m_key(key), m_title(title), m_optics(new LiquidOpticsRenderer),
       m_preparation(new LiquidMaterial::Preparation(this)) {
     setObjectName(key+"Desklet"); setWindowTitle(title); setAccessibleName(title);
-    setAttribute(Qt::WA_TranslucentBackground); setAutoFillBackground(false); setMouseTracking(true);
+    // Native ARGB canvas children can disappear on OEM UKUI/X11 compositors.
+    // Keep the default visual and paint into the canvas backing store instead.
+    setAttribute(Qt::WA_TranslucentBackground, false);
+    setAttribute(Qt::WA_NoSystemBackground, false);
+    setAttribute(Qt::WA_OpaquePaintEvent, false);
+    setAutoFillBackground(false); setMouseTracking(true);
     setMinimumSize(initial); setMaximumSize(800,700);
     QSettings settings; settings.beginGroup("desklets/"+key);
     const QRect saved=settings.value("geometry").toRect();

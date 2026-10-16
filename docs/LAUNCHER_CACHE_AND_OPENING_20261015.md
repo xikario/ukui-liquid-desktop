@@ -52,4 +52,4 @@ XBEL 与最近应用配置缓存解析结果，以路径、设备、inode、大�
 
 - 验证记录：`apps/ukui-kaishicaidan-v2/build-v2/artifacts/optimization-20261015/`（含 CTest、GPU、CPU JSON、截图、运行及部署记录）。
 - 安装备份：`apps/ukui-kaishicaidan-v2/releases/20261015-170735-before-opening-cache/`。
-- 当前为本机试用，未提交、未推送。工作区原有应用启动辅助代码及相关测试改动保留。
+- 上述为 10 月 15 日的本机试用与部署记录。10 月 16 日保留这些优化，与 X86 review-v2 修复包组合验证后合入主线，见[合入记录](X86_INTEGRATION_20261016.md)。应用启动辅助代码及相关测试改动保留。

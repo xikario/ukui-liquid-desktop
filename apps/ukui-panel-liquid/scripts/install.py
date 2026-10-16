@@ -180,6 +180,9 @@ def install(root, home, system_desktop=Path('/etc/xdg/autostart/ukui-panel.deskt
 
 
 def main():
+    import argparse
+    # Validate argv before any installation side effects.
+    argparse.ArgumentParser(description=__doc__).parse_args()
     print(json.dumps(install(Path(__file__).resolve().parents[1], Path.home()), indent=2))
 
 

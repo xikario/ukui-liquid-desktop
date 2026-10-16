@@ -24,7 +24,7 @@ sudo apt install build-essential cmake qtbase5-dev libx11-dev libxtst-dev libgl1
 | 实验性视频壁纸 | 系统 Python 3 与 PyGObject（python3-gi、GLib/Gio）、libmpv、FFmpeg/ffprobe，以及可互操作的 VAAPI/OpenGL 驱动 |
 | 可选模糊兼容 | Python 3、libX11 运行库、X11 与用户 systemd 会话（使用标准库 ctypes） |
 | 可选 FTG340 策略 | 匹配驱动、systemd/udev、Python 3.8+；与主应用构建无关 |
-| UI/图像测试 | xvfb、xauth、dbus-x11、xdotool、x11-utils；部分脚本需 Pillow，OEM 冒烟另需 bubblewrap |
+| UI/图像测试 | xvfb、xauth、dbus-x11、xdotool、x11-utils、xclip（智能空间剪贴板冒烟；缺失时该用例按 77 跳过）；部分脚本需 Pillow，OEM 冒烟另需 bubblewrap |
 
 SVG 图标显示还取决于系统 Qt 图像插件。农历使用系统 ICU，不需编译本仓库的自有 ICU。未安装某个可选提取工具不妨碍基础桌面运行，但相应格式或功能会受限。
 

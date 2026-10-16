@@ -137,14 +137,20 @@ FenceWidget::FenceWidget(const QString &title,
     , m_id(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8))
     , m_title(title)
 {
-    setAttribute(Qt::WA_TranslucentBackground);
+    // Same rule as LiquidDesklet: canvas children keep the 24-bit visual or
+    // this UKUI/X11 compositor drops the whole window (invisible fences).
+    setAttribute(Qt::WA_TranslucentBackground, false);
+    setAttribute(Qt::WA_NoSystemBackground, false);
+    setAttribute(Qt::WA_OpaquePaintEvent, false);
     setAutoFillBackground(false);
     setAcceptDrops(true);
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     setGeometry(geo);
     m_iconViewport = new QWidget(this);
-    m_iconViewport->setAttribute(Qt::WA_TranslucentBackground);
+    m_iconViewport->setAttribute(Qt::WA_TranslucentBackground, false);
+    m_iconViewport->setAttribute(Qt::WA_NoSystemBackground, false);
+    m_iconViewport->setAttribute(Qt::WA_OpaquePaintEvent, false);
     m_iconViewport->setAutoFillBackground(false);
     m_iconViewport->setMouseTracking(true);
     m_iconViewport->installEventFilter(this);
@@ -380,7 +386,15 @@ void FenceWidget::setCollapsed(bool c)
         layoutIcons();
         QWidget *content = m_embeddedWidget ? m_embeddedWidget : m_iconViewport;
         if (content && content->isVisible()) {
-            m_collapseContent = content->grab();
+            // grab() forces DrawWindowBackground even for an unfilled child,
+            // baking the system Window palette into this transparent layer.
+            // Capture only content; the drawer already paints its glass base.
+            const qreal dpr = content->devicePixelRatioF();
+            m_collapseContent = QPixmap(QSize(qCeil(content->width()*dpr),
+                                             qCeil(content->height()*dpr)));
+            m_collapseContent.setDevicePixelRatio(dpr);
+            m_collapseContent.fill(Qt::transparent);
+            content->render(&m_collapseContent, QPoint(), QRegion(), QWidget::DrawChildren);
             m_collapseContentPos = content->pos();
         }
         m_iconViewport->hide();

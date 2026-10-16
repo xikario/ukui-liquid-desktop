@@ -68,7 +68,7 @@ set(LAUNCHER_SOURCES
     ../ukui-fences/src/LiquidIconRenderer.cpp
     src/glass.qrc
 )
-add_executable(ukui-kaishicaidan-v2 src/main.cpp ${LAUNCHER_SOURCES})
+add_executable(ukui-kaishicaidan-v2 src/main.cpp src/UkuiMenuCompat.h ${LAUNCHER_SOURCES})
 
 target_compile_definitions(ukui-kaishicaidan-v2 PRIVATE
     UKUI_KAISHICAIDAN_V2=1
@@ -153,4 +153,39 @@ if(BUILD_TESTING AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
         set_tests_properties(launcher-pointer-${SCALE} PROPERTIES TIMEOUT 30
             ENVIRONMENT "QT_SCALE_FACTOR=${SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1;KAISHICAIDAN_GLASS_FAST=1")
     endforeach()
+endif()
+
+if(BUILD_TESTING AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    find_program(XDOTOOL_EXECUTABLE xdotool)
+    find_program(XWININFO_EXECUTABLE xwininfo)
+    find_program(GDBUS_EXECUTABLE gdbus)
+    if(Python3_FOUND AND XDOTOOL_EXECUTABLE AND XWININFO_EXECUTABLE AND GDBUS_EXECUTABLE)
+        add_test(NAME launcher-native-menu-routing
+            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
+                ${DBUS_RUN_SESSION_EXECUTABLE} -- ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/button-follow-test.py)
+        set_tests_properties(launcher-native-menu-routing PROPERTIES TIMEOUT 45
+            ENVIRONMENT "UKUI_KAISHICAIDAN_V2_BIN=$<TARGET_FILE:ukui-kaishicaidan-v2>;QT_SCALE_FACTOR=1.5;QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1")
+        foreach(RECORD_MODE enabled disabled)
+            set(RECORD_ARGS)
+            if(RECORD_MODE STREQUAL "disabled")
+                set(RECORD_ARGS "-extension RECORD")
+            endif()
+            add_test(NAME launcher-native-cold-${RECORD_MODE}
+                COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24 ${RECORD_ARGS}"
+                    ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_cold_activation_test.py)
+            set_tests_properties(launcher-native-cold-${RECORD_MODE} PROPERTIES TIMEOUT 40
+                ENVIRONMENT "UKUI_KAISHICAIDAN_V2_BIN=$<TARGET_FILE:ukui-kaishicaidan-v2>;QT_SCALE_FACTOR=1;QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1")
+        endforeach()
+    endif()
+    if(Python3_FOUND)
+        add_test(NAME launcher-desktop-launch
+            COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/desktop_launch_test.py)
+        set_tests_properties(launcher-desktop-launch PROPERTIES TIMEOUT 20
+            ENVIRONMENT "UKUI_KAISHICAIDAN_V2_BIN=$<TARGET_FILE:ukui-kaishicaidan-v2>")
+        add_test(NAME launcher-menu-routing-install
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/menu_routing_install_test.py)
+    endif()
 endif()

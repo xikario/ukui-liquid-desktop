@@ -16,6 +16,7 @@
 #include "DesktopAppLaunch.h"
 #include "StartButton.h"
 #include "KeyInterceptor.h"
+#include "UkuiMenuCompat.h"
 #include "TaskbarDetector.h"
 #include "StartMenuTheme.h"
 
@@ -95,6 +96,9 @@ int main(int argc, char *argv[])
         return 0;
 
     StartMenu menu;
+    UkuiMenuCompat nativeMenu(&menu);
+    bus.registerObject(QStringLiteral("/org/ukui/menu"), &menu,
+                       QDBusConnection::ExportAdaptors);
 
     bus.registerObject(kOurPath, &menu,
                        QDBusConnection::ExportScriptableSlots);
@@ -108,8 +112,10 @@ int main(int argc, char *argv[])
 #endif
 
     KeyInterceptor keyInterceptor(&menu);
+    QObject::connect(&keyInterceptor, &KeyInterceptor::superKeyObserved,
+                     &nativeMenu, &UkuiMenuCompat::observeSuperKey);
     app.installNativeEventFilter(&keyInterceptor);
-    keyInterceptor.grabWinKey();
+    nativeMenu.setKeyMonitorActive(keyInterceptor.grabWinKey());
 
     QObject::connect(&keyInterceptor, &KeyInterceptor::winKeyPressed,
                      &menu, &StartMenu::toggle);

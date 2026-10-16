@@ -24,6 +24,7 @@ public:
                            void *message, long *result) override;
 
 signals:
+    void superKeyObserved(bool down);
     void winKeyPressed();
 
 private:
