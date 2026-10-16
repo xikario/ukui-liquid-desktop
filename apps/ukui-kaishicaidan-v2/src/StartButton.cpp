@@ -149,7 +149,9 @@ void StartButton::applyX11Immunity()
 {
     if (!isX11Platform()) return;
 
-    Display *display = XOpenDisplay(nullptr);
+    Display *display = static_cast<Display *>(m_watchDisplay);
+    const bool temporary = !display;
+    if (!display) display = XOpenDisplay(nullptr);
     if (!display) return;
 
     const Window window = static_cast<Window>(winId());
@@ -177,7 +179,7 @@ void StartButton::applyX11Immunity()
 
     XRaiseWindow(display, window);
     XSync(display, False);
-    XCloseDisplay(display);
+    if (temporary) XCloseDisplay(display);
 
     // Limit re-runs to 3 passes to prevent infinite CPU wakeups
     static int runCount = 0;
@@ -229,10 +231,19 @@ void StartButton::changeEvent(QEvent *e)
 
 void StartButton::enterEvent(QEvent *)
 {
+    m_hovered = true;
+    const auto generation = ++m_hoverGeneration;
+    // One delayed hint per real enter. Never poll or show the hidden menu;
+    // the click/Win path still checks a fresh screen capture before displaying.
+    QTimer::singleShot(60, this, [this, generation] {
+        if (m_hovered && generation == m_hoverGeneration && m_menu) m_menu->prewarmBackdrop();
+    });
 }
 
 void StartButton::leaveEvent(QEvent *)
 {
+    m_hovered = false;
+    ++m_hoverGeneration;
 }
 
 void StartButton::contextMenuEvent(QContextMenuEvent *e)

@@ -61,6 +61,7 @@ void NextKdeGlassView::setBackdrop(const QImage &source)
     m_controls.clear();
     m_controlRenderCount=0;
     m_image={};
+    m_controlOptics.setWallpaper({});
     m_usedGpu=false;
     m_lastRenderMs=0;
     if (source.isNull()) return;
@@ -171,12 +172,22 @@ void NextKdeGlassView::setBackdropFast(const QImage &source)
 {
     ++m_backdropRevision;m_requestedBackdrop={};m_backdropReady={};
     m_controls.clear();m_controlRenderCount=0;m_usedGpu=false;
+    m_controlOptics.setWallpaper({});
     QElapsedTimer timer;timer.start();
     m_image=fastBackdrop(source,m_radius);m_lastRenderMs=timer.elapsed();
 }
 
 void NextKdeGlassView::setBackdropAsync(const QImage &source, bool fast, std::function<void()> ready)
 {
+    // A click arriving during identical hover preparation attaches its ready
+    // callback to the same job, rather than decoding/blurring it a second time.
+    const bool requestedFast = fast || qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_NO_GL");
+    if (m_backdropPending && !source.isNull() && requestedFast == m_requestedFast
+        && source.devicePixelRatio() == m_requestedBackdrop.devicePixelRatio()
+        && source == m_requestedBackdrop) {
+        m_backdropReady = std::move(ready);
+        return;
+    }
     ++m_backdropRevision;
     m_requestedBackdrop=source;
     m_requestedFast=fast || qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_NO_GL");
@@ -189,6 +200,7 @@ void NextKdeGlassView::startBackdropPreparation()
 {
     if(m_backdropPending || m_requestedBackdrop.isNull())return;
     m_backdropPending=true;
+    ++m_backdropPreparationCount;
     const QImage source=m_requestedBackdrop;
     const bool fast=m_requestedFast;
     const qreal radius=m_radius;
@@ -216,7 +228,8 @@ void NextKdeGlassView::startBackdropPreparation()
             if(!m_usedGpu){m_requestedFast=true;startBackdropPreparation();return;}
         }
         m_controls.clear();m_controlRenderCount=0;
-        m_controlOptics.setWallpaper(m_image);
+        if (m_usedGpu) m_controlOptics.setWallpaper(m_image);
+        else m_controlOptics.setWallpaper({});
         m_lastRenderMs=timer.elapsed();
         m_requestedBackdrop={};
         auto ready=std::move(m_backdropReady);
@@ -236,12 +249,12 @@ QImage NextKdeGlassView::controlImage(const QRectF &rect, qreal radius, bool pre
         .arg(pixels.x()).arg(pixels.y()).arg(pixels.width()).arg(pixels.height())
         .arg(radius).arg(pressed);
     if(auto *cached=m_controls.object(key)) return *cached;
-    QImage crop=m_image.copy(pixels);
-    crop.setDevicePixelRatio(1);
     QImage result;
     if(m_usedGpu && !qEnvironmentVariableIsSet("KAISHICAIDAN_GLASS_NO_GL"))
         result=m_controlOptics.renderControl(rect.toRect(),radius,pressed);
     if(result.isNull()) {
+        QImage crop=m_image.copy(pixels);
+        crop.setDevicePixelRatio(1);
         result=QImage(pixels.size(),QImage::Format_ARGB32_Premultiplied);
         result.fill(Qt::transparent);
         QPainter p(&result);

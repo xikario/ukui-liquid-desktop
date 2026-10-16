@@ -27,6 +27,7 @@ public:
     qint64 lastRenderMs() const { return m_lastRenderMs; }
     QImage controlImage(const QRectF &logicalRect, qreal radius, bool pressed=false);
     int controlRenderCount() const { return m_controlRenderCount; }
+    int backdropPreparationCount() const { return m_backdropPreparationCount; }
 private:
     void startBackdropPreparation();
     std::unique_ptr<LiquidOpticsRenderer> m_optics;
@@ -42,4 +43,5 @@ private:
     std::function<void()> m_backdropReady;
     quint64 m_backdropRevision = 0;
     bool m_backdropPending = false, m_requestedFast = false;
+    int m_backdropPreparationCount = 0;
 };

@@ -1,5 +1,6 @@
 #include "LiquidDialog.h"
 #include <QImageReader>
+#include <QtMath>
 #include "../../../shared/async-work/BackgroundTask.h"
 #include "LiquidPopup.h"
 #include "../../ukui-fences/src/LiquidIconRenderer.h"
@@ -58,6 +59,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 #include <QFileDialog>
+#include <QtDBus/QDBusMessage>
 #include <QMessageBox>
 #include <QDateTime>
 #include <QRegularExpression>
@@ -150,8 +152,10 @@ unsigned long x11WindowPid(Display *dpy, unsigned long windowId)
 QString normalizedAppToken(QString value)
 {
     value = QFileInfo(value.trimmed()).completeBaseName().toLower();
-    value.remove(QRegularExpression(QStringLiteral("^(org|com|net|io)\\.")));
-    value.replace(QRegularExpression(QStringLiteral("[^a-z0-9]+")), QStringLiteral("-"));
+    static const QRegularExpression prefix(QStringLiteral("^(org|com|net|io)\\."));
+    static const QRegularExpression punctuation(QStringLiteral("[^a-z0-9]+"));
+    value.remove(prefix);
+    value.replace(punctuation, QStringLiteral("-"));
     value = value.trimmed();
     while (value.startsWith(QLatin1Char('-'))) value.remove(0, 1);
     while (value.endsWith(QLatin1Char('-'))) value.chop(1);
@@ -167,8 +171,8 @@ QString executableBaseFromExec(QString exec)
     exec = exec.trimmed();
     if (exec.isEmpty()) return {};
 
-    QStringList parts = exec.split(QRegularExpression(QStringLiteral("\\s+")),
-                                   QString::SkipEmptyParts);
+    static const QRegularExpression whitespace(QStringLiteral("\\s+"));
+    QStringList parts = exec.split(whitespace, QString::SkipEmptyParts);
     while (!parts.isEmpty()) {
         const QString first = parts.first();
         if (first == QStringLiteral("env") || first == QStringLiteral("sh") ||
@@ -237,59 +241,42 @@ QString desktopPathForWindow(Display *dpy, const QList<AppEntry> &apps, unsigned
     return bestScore >= 6 ? bestPath : QString();
 }
 
-QPixmap loadUserAvatarPixmap()
+QImage loadUserAvatarImage()
 {
+    // Runs on a worker. Raw messages avoid QDBusInterface introspection and
+    // bound both calls, including a stalled AccountsService, to 500 ms each.
     const QString user = QString::fromUtf8(qgetenv("USER")).trimmed();
     QStringList candidates;
-
-    if (!user.isEmpty()) {
-        QDBusInterface accounts(QStringLiteral("org.freedesktop.Accounts"),
-                                QStringLiteral("/org/freedesktop/Accounts"),
-                                QStringLiteral("org.freedesktop.Accounts"),
-                                QDBusConnection::systemBus());
-        const QDBusReply<QDBusObjectPath> userPath =
-            accounts.call(QStringLiteral("FindUserByName"), user);
-        if (userPath.isValid() && !userPath.value().path().isEmpty()) {
-            QDBusInterface props(QStringLiteral("org.freedesktop.Accounts"),
-                                 userPath.value().path(),
-                                 QStringLiteral("org.freedesktop.DBus.Properties"),
-                                 QDBusConnection::systemBus());
-            const QDBusReply<QVariant> iconReply =
-                props.call(QStringLiteral("Get"),
-                           QStringLiteral("org.freedesktop.Accounts.User"),
-                           QStringLiteral("IconFile"));
-            if (iconReply.isValid()) {
-                QVariant iconValue = iconReply.value();
-                if (iconValue.canConvert<QDBusVariant>())
-                    iconValue = iconValue.value<QDBusVariant>().variant();
-                const QString iconPath = iconValue.toString().trimmed();
-                if (!iconPath.isEmpty())
-                    candidates << iconPath;
+    const auto bus = QDBusConnection::systemBus();
+    if (!user.isEmpty() && bus.isConnected()) {
+        auto request = QDBusMessage::createMethodCall("org.freedesktop.Accounts",
+            "/org/freedesktop/Accounts", "org.freedesktop.Accounts", "FindUserByName");
+        request << user;
+        const auto reply = bus.call(request, QDBus::Block, 500);
+        if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
+            const auto path = qdbus_cast<QDBusObjectPath>(reply.arguments().first()).path();
+            if (!path.isEmpty()) {
+                request = QDBusMessage::createMethodCall("org.freedesktop.Accounts", path,
+                    "org.freedesktop.DBus.Properties", "Get");
+                request << "org.freedesktop.Accounts.User" << "IconFile";
+                const auto iconReply = bus.call(request, QDBus::Block, 500);
+                if (iconReply.type() == QDBusMessage::ReplyMessage && !iconReply.arguments().isEmpty()) {
+                    const auto value = qdbus_cast<QDBusVariant>(iconReply.arguments().first()).variant();
+                    if (!value.toString().isEmpty()) candidates << value.toString();
+                }
             }
         }
     }
-
-    candidates << QDir::homePath() + "/.face"
-               << QDir::homePath() + "/.face.icon";
-    if (!user.isEmpty())
-        candidates << QStringLiteral("/var/lib/AccountsService/icons/%1").arg(user);
-
-    QDir iconDir(QStringLiteral("/var/lib/AccountsService/icons"));
-    const QFileInfoList accountIcons =
-        iconDir.entryInfoList(QDir::Files | QDir::Readable,
-                              QDir::Time);
-    for (const QFileInfo &icon : accountIcons) {
-        if (!candidates.contains(icon.absoluteFilePath()))
-            candidates << icon.absoluteFilePath();
-    }
-
+    candidates << QDir::homePath() + "/.face" << QDir::homePath() + "/.face.icon";
+    if (!user.isEmpty()) candidates << "/var/lib/AccountsService/icons/" + user;
     for (const QString &path : candidates) {
-        if (!QFileInfo(path).isReadable()) continue;
-        QPixmap pix(path);
-        if (!pix.isNull())
-            return pix;
+        QImageReader reader(path);
+        const QSize size = reader.size();
+        if (size.isValid() && (size.width() > 256 || size.height() > 256))
+            reader.setScaledSize(size.scaled(256, 256, Qt::KeepAspectRatio));
+        const QImage image = reader.read();
+        if (!image.isNull()) return image;
     }
-
     return {};
 }
 
@@ -487,8 +474,8 @@ QString executablePathFromDesktopExec(QString exec)
     exec.replace(QStringLiteral("&quot;"), QStringLiteral("\""));
     exec.remove(QLatin1Char('\''));
     exec.remove(QLatin1Char('"'));
-    QStringList parts = exec.split(QRegularExpression(QStringLiteral("\\s+")),
-                                   QString::SkipEmptyParts);
+    static const QRegularExpression whitespace(QStringLiteral("\\s+"));
+    QStringList parts = exec.split(whitespace, QString::SkipEmptyParts);
     while (!parts.isEmpty()) {
         const QString first = parts.first();
         if (first == QStringLiteral("env") || first.contains(QLatin1Char('='))) {
@@ -900,6 +887,7 @@ public:
         setToolTip(app.name);
 
         m_icon = iconForDesktopIcon(app.name, app.iconName, app.desktopPath);
+        m_iconIdentity = iconIdentity(app);
         setIcon(m_icon);
 
         // 初始化 Hover 动画
@@ -913,11 +901,25 @@ public:
     }
 
     int appIndex() const { return m_index; }
+    const AppEntry &appEntry() const { return m_app; }
+    void setAppEntry(const AppEntry &app, int index) {
+        const bool iconChanged = m_app.name != app.name || m_app.iconName != app.iconName
+            || m_app.desktopPath != app.desktopPath || m_iconIdentity != iconIdentity(app);
+        m_app = app; m_index = index;
+        setToolTip(app.name);
+        if (iconChanged) {
+            m_icon = iconForDesktopIcon(app.name, app.iconName, app.desktopPath);
+            m_iconIdentity = iconIdentity(app);
+            setIcon(m_icon); m_iconSprite = {}; m_pressedIconSprite = {};
+        }
+        update();
+    }
 
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
 
         // Cached Fences plate under the original app icon; keep existing input
         // feedback without adding a separately animated material.
@@ -941,62 +943,71 @@ protected:
         // 根据 Hover 状态产生微小的垂直位移 (0 ~ -3 像素)
         const double offset = -3.0 * m_hoverFactor;
 
-        const int iconW = 38;
-        const int iconH = 38;
-        const int iconX = (width() - iconW) / 2;
-        const double iconY = 12.0 + offset;
-
-        QRectF iconRect(iconX, iconY, iconW, iconH);
-        if (isDown()) iconRect=iconRect.adjusted(1.5,2.5,-1.5,-0.5);
-        drawLauncherIcon(p,m_icon,iconRect,devicePixelRatioF(),liquid);
-
-        p.setPen(m_palette->textSecondary);
-        QFont labelFont = font();
-        labelFont.setPixelSize(m_isRecent ? 10 : 11);
-        p.setFont(labelFont);
-
-        const auto readableText = [this,&p](QRect rect, int flags, const QString &text) {
-            // Only brighten readability under the label, not the entire glass.
-            const auto *menu=qobject_cast<StartMenu *>(window());
-            const qreal lum=menu ? menu->glassLuminanceAt(
-                QRectF(mapTo(window(),rect.topLeft()),rect.size())) : 0;
-            const int alpha=qRound(qBound(0.0,(lum-0.30)/0.30,1.0)*125);
-            if (alpha>0) {
-                // Follow glyphs rather than drawing a clipped dark pill under
-                // each label. The original text remains the foreground pass.
-                QPainterPath glyph;
-                const QFontMetrics metrics=p.fontMetrics();
-                const qreal x=rect.left()+(rect.width()-metrics.horizontalAdvance(text))*0.5;
-                glyph.addText(QPointF(x,rect.top()+metrics.ascent()),p.font(),text);
-                p.save();
-                p.setPen(QPen(QColor(0,0,0,alpha),1.6,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
-                p.setBrush(QColor(0,0,0,alpha));
-                p.drawPath(glyph);
-                p.restore();
-            }
-            const QPen foreground=p.pen();
-            p.setPen(QColor(0,0,0,185));
-            p.drawText(rect.translated(0,1),flags,text);
-            p.setPen(foreground);
-            p.drawText(rect,flags,text);
-        };
-        if (m_isRecent) {
-            const QRect labelRect(2, iconY + iconH + 7, width() - 4, 12);
-            const QString elided = p.fontMetrics().elidedText(m_app.name, Qt::ElideRight, width() - 8);
-            readableText(labelRect, Qt::AlignHCenter | Qt::AlignTop, elided);
-
-            p.setPen(m_palette->textMuted);
-            QFont timeFont = font();
-            timeFont.setPixelSize(8);
-            p.setFont(timeFont);
-            const QRect timeRect(2, labelRect.bottom() + 2, width() - 4, 11);
-            QString timeStr = m_app.lastUsed.isValid() ? RecentFiles::timeAgoString(m_app.lastUsed) : QString::fromUtf8("刚刚");
-            readableText(timeRect, Qt::AlignHCenter | Qt::AlignTop, timeStr);
-        } else {
-            const QRect labelRect(0, iconY + iconH + 6, width(), 16);
-            const QString elided = p.fontMetrics().elidedText(m_app.name, Qt::ElideRight, width() - 8);
-            readableText(labelRect, Qt::AlignHCenter | Qt::AlignTop, elided);
+        const qreal dpr = devicePixelRatioF();
+        if (m_iconSprite.isNull() || m_spriteLiquid != liquid || !qFuzzyCompare(m_spriteDpr, dpr)
+            || m_spriteIconKey != m_icon.cacheKey()) {
+            m_spriteLiquid = liquid; m_spriteDpr = dpr; m_spriteIconKey = m_icon.cacheKey();
+            m_pressedIconSprite = {};
+            m_iconSprite = QPixmap(QSize(qCeil(56*dpr), qCeil(56*dpr)));
+            m_iconSprite.setDevicePixelRatio(dpr); m_iconSprite.fill(Qt::transparent);
+            QPainter ip(&m_iconSprite); ip.setRenderHint(QPainter::Antialiasing);
+            drawLauncherIcon(ip, m_icon, QRectF(9,12,38,38), dpr, liquid);
+            setProperty("iconSpriteBuilds", property("iconSpriteBuilds").toInt()+1);
         }
+        if (isDown() && m_pressedIconSprite.isNull()) {
+            m_pressedIconSprite = QPixmap(m_iconSprite.size());
+            m_pressedIconSprite.setDevicePixelRatio(dpr); m_pressedIconSprite.fill(Qt::transparent);
+            QPainter ip(&m_pressedIconSprite); ip.setRenderHint(QPainter::Antialiasing);
+            drawLauncherIcon(ip, m_icon, QRectF(9,12,38,38).adjusted(1.5,2.5,-1.5,-0.5), dpr, liquid);
+        }
+        p.drawPixmap(QPointF((width()-56)*0.5, offset), isDown() ? m_pressedIconSprite : m_iconSprite);
+
+        // Cache expensive outlined glyphs, not their animated position. The
+        // key includes font, DPR, palette, text and the *current* local halo;
+        // moving/scrolling onto a different backdrop cannot reuse stale text.
+        const int labelY = int(12.0 + offset + 38 + (m_isRecent ? 7 : 6));
+        const QString time = m_isRecent ? (m_app.lastUsed.isValid()
+            ? RecentFiles::timeAgoString(m_app.lastUsed) : QString::fromUtf8("刚刚")) : QString();
+        const auto haloAt = [this, menu](const QRect &rect) {
+            const qreal lum = menu ? menu->glassLuminanceAt(
+                QRectF(mapTo(window(), rect.topLeft()), rect.size())) : 0;
+            return qRound(qBound(0.0, (lum-0.30)/0.30, 1.0)*125);
+        };
+        const QRect labelRect(m_isRecent ? 2 : 0, labelY, width()-(m_isRecent ? 4 : 0), m_isRecent ? 12 : 16);
+        const QRect timeRect(2, labelRect.bottom()+2, width()-4, 11);
+        const int halo = haloAt(labelRect), timeHalo = m_isRecent ? haloAt(timeRect) : 0;
+        const QString key = font().toString() + '/' + m_app.name + '/' + time
+            + '/' + m_palette->textSecondary.name(QColor::HexArgb)
+            + '/' + m_palette->textMuted.name(QColor::HexArgb)
+            + QString("/%1/%2/%3/%4").arg(dpr).arg(width()).arg(halo).arg(timeHalo);
+        if (m_labelSprite.isNull() || m_labelKey != key) {
+            m_labelKey = key;
+            m_labelSprite = QPixmap(QSize(qCeil(width()*dpr), qCeil(34*dpr)));
+            m_labelSprite.setDevicePixelRatio(dpr); m_labelSprite.fill(Qt::transparent);
+            QPainter lp(&m_labelSprite); lp.setRenderHint(QPainter::Antialiasing);
+            QFont labelFont = font(); labelFont.setPixelSize(m_isRecent ? 10 : 11); lp.setFont(labelFont);
+            const auto drawLine = [&lp](QRect rect, const QString &text, QColor foreground, int alpha) {
+                if (alpha > 0) {
+                    QPainterPath glyph;
+                    const auto metrics = lp.fontMetrics();
+                    glyph.addText(QPointF(rect.left()+(rect.width()-metrics.horizontalAdvance(text))*0.5,
+                        rect.top()+metrics.ascent()), lp.font(), text);
+                    lp.setPen(QPen(QColor(0,0,0,alpha),1.6,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
+                    lp.setBrush(QColor(0,0,0,alpha)); lp.drawPath(glyph);
+                }
+                lp.setPen(QColor(0,0,0,185));
+                lp.drawText(rect.translated(0,1),Qt::AlignHCenter|Qt::AlignTop,text);
+                lp.setPen(foreground); lp.drawText(rect,Qt::AlignHCenter|Qt::AlignTop,text);
+            };
+            const QString elided = lp.fontMetrics().elidedText(m_app.name,Qt::ElideRight,width()-8);
+            drawLine(labelRect.translated(0,2-labelY),elided,m_palette->textSecondary,halo);
+            if (m_isRecent) {
+                QFont timeFont = font(); timeFont.setPixelSize(8); lp.setFont(timeFont);
+                drawLine(timeRect.translated(0,2-labelY),time,m_palette->textMuted,timeHalo);
+            }
+            setProperty("labelSpriteBuilds", property("labelSpriteBuilds").toInt()+1);
+        }
+        p.drawPixmap(QPoint(0,labelY-2),m_labelSprite);
     }
 
     void enterEvent(QEvent *) override {
@@ -1047,6 +1058,13 @@ protected:
     }
 
 private:
+    static QString iconIdentity(const AppEntry &app) {
+        const QFileInfo info(QFileInfo(app.iconName).isAbsolute() ? app.iconName
+            : QFileInfo(app.desktopPath).absoluteDir().absoluteFilePath(app.iconName));
+        return QIcon::themeName() + '/' + info.absoluteFilePath() + '/'
+            + QString::number(info.size()) + '/' + QString::number(info.lastModified().toMSecsSinceEpoch());
+    }
+    QString m_iconIdentity;
     const SkinPalette *m_palette;
     AppEntry m_app;
     int m_index = -1;
@@ -1055,6 +1073,12 @@ private:
     bool m_draggable = false;
     bool m_reorderable = false;
     QPoint m_dragStartPos;
+
+    QPixmap m_iconSprite, m_pressedIconSprite, m_labelSprite;
+    QString m_labelKey;
+    qreal m_spriteDpr = 0;
+    bool m_spriteLiquid = false;
+    qint64 m_spriteIconKey = 0;
 
     // 动画状态
     QVariantAnimation *m_hoverAnim = nullptr;
@@ -1760,7 +1784,8 @@ void StartMenu::applySearchStyle()
 void StartMenu::applyX11Immunity()
 {
     if (!isX11Platform()) return;
-    Display *display = XOpenDisplay(nullptr);
+    if (!m_pointerDisplay) m_pointerDisplay = XOpenDisplay(nullptr);
+    Display *display = m_pointerDisplay;
     if (!display) return;
 
     const Window window = static_cast<Window>(winId());
@@ -1792,14 +1817,14 @@ void StartMenu::applyX11Immunity()
 
     XRaiseWindow(display, window);
     XSync(display, False);
-    XCloseDisplay(display);
     applyX11BackdropEffect();
 }
 
 void StartMenu::applyX11BackdropEffect()
 {
     if (!isX11Platform()) return;
-    Display *display = XOpenDisplay(nullptr);
+    if (!m_pointerDisplay) m_pointerDisplay = XOpenDisplay(nullptr);
+    Display *display = m_pointerDisplay;
     if (!display) return;
 
     const Window window = static_cast<Window>(winId());
@@ -1809,7 +1834,6 @@ void StartMenu::applyX11BackdropEffect()
     if (blurAtom != None)
         XDeleteProperty(display, window, blurAtom);
     XFlush(display);
-    XCloseDisplay(display);
 }
 
 bool StartMenu::paintGlassControl(QPainter &p,const QWidget *owner,const QRectF &target,
@@ -1850,6 +1874,13 @@ qreal StartMenu::glassLuminanceAt(const QRectF &menuRect) const
 {
     return m_skin == Skin::EcoLiquid && m_nextKdeGlassView
         ? m_nextKdeGlassView->luminanceAt(menuRect) : 0;
+}
+
+void StartMenu::prewarmBackdrop()
+{
+    if (isVisible() || m_showPending || m_settingsOpen || QApplication::activeModalWidget() || QApplication::activePopupWidget()) return;
+    positionAboveStartButton();
+    captureNextKdeBackdrop({});
 }
 
 bool StartMenu::captureNextKdeBackdrop(std::function<void()> ready)
@@ -2016,6 +2047,7 @@ void StartMenu::rebuildAppList()
         if (m_appScanPending) { rebuildAppList(); return; }
     m_pinnedApps = lists.first;
     m_allApps = lists.second;
+    ++m_appDataRevision;
 
     QStringList pinnedPaths;
     for (const AppEntry &app : m_pinnedApps)
@@ -2107,16 +2139,12 @@ void StartMenu::refreshAppWatcher()
     if (!m_appWatcher)
         return;
 
-    const QStringList oldDirs = m_appWatcher->directories();
-    if (!oldDirs.isEmpty())
-        m_appWatcher->removePaths(oldDirs);
-    const QStringList oldFiles = m_appWatcher->files();
-    if (!oldFiles.isEmpty()) m_appWatcher->removePaths(oldFiles);
+    // Preserve content-change watches; parent-directory watches alone do not
+    // report an in-place desktop-file edit. Only change the actual set delta.
     QStringList desktopFiles;
     for (const AppEntry &app : m_allApps)
-        if (QFile::exists(app.desktopPath)) desktopFiles.append(app.desktopPath);
-    if (!desktopFiles.isEmpty()) m_appWatcher->addPaths(desktopFiles);
-
+        if (QFile::exists(app.desktopPath) && !desktopFiles.contains(app.desktopPath))
+            desktopFiles.append(app.desktopPath);
     QStringList existingDirs;
     for (const QString &dir : AppRegistry::applicationDirs()) {
         if (QDir(dir).exists() && !existingDirs.contains(dir))
@@ -2133,8 +2161,15 @@ void StartMenu::refreshAppWatcher()
             existingDirs.append(dir);
     }
 
-    if (!existingDirs.isEmpty())
-        m_appWatcher->addPaths(existingDirs);
+    const auto syncPaths = [this](const QStringList &current, const QStringList &wanted) {
+        QStringList removed, added;
+        for (const auto &path : current) if (!wanted.contains(path)) removed << path;
+        for (const auto &path : wanted) if (!current.contains(path)) added << path;
+        if (!removed.isEmpty()) m_appWatcher->removePaths(removed);
+        if (!added.isEmpty()) m_appWatcher->addPaths(added);
+    };
+    syncPaths(m_appWatcher->directories(), existingDirs);
+    syncPaths(m_appWatcher->files(), desktopFiles);
 }
 
 void StartMenu::setupActiveAppTracking()
@@ -2184,6 +2219,7 @@ void StartMenu::recordActiveWindowApp()
         return;
 
     AppRegistry::recordLaunchedApp(desktopPath);
+    ++m_appDataRevision;
     m_lastRecordedActiveDesktop = desktopPath;
 }
 
@@ -2250,35 +2286,70 @@ void StartMenu::movePinnedApp(int fromIndex, int toIndex)
         m_pinnedScrollArea->verticalScrollBar()->setValue(scrollPosition);
 }
 
+void StartMenu::refreshUsageMetadata()
+{
+    if (m_usageRefreshBusy) { m_usageRefreshPending = true; return; }
+    m_usageRefreshBusy = true; m_usageRefreshPending = false;
+    const auto revision = m_appDataRevision;
+    auto apps = m_allApps;
+    if (!BackgroundTask::run(this, [apps]() mutable {
+        AppRegistry::refreshUsageMetadata(apps); return apps;
+    }, [this, revision](const QList<AppEntry> &updated) {
+        m_usageRefreshBusy = false;
+        if (revision != m_appDataRevision || m_usageRefreshPending) {
+            refreshUsageMetadata(); return;
+        }
+        const auto previous = displayedApps();
+        m_allApps = updated;
+        sortAllApps();
+        if (m_showingAllApps && m_appSortMode == AppSortMode::LastUsed) {
+            if (m_searchEdit->text().isEmpty()) m_filteredApps = m_allApps;
+            else {
+                // Keep the user's live search, not the query at request time.
+                const QString text = m_searchEdit->text().toLower();
+                m_filteredApps.clear();
+                for (const auto &app : m_allApps)
+                    if (app.name.toLower().contains(text) || app.comment.toLower().contains(text)
+                        || app.exec.toLower().contains(text)) m_filteredApps.append(app);
+            }
+            bool reordered = previous.size() != m_filteredApps.size();
+            for (int i=0; !reordered && i<previous.size(); ++i)
+                reordered = previous[i].desktopPath != m_filteredApps[i].desktopPath;
+            if (reordered) {
+                const int scroll = m_pinnedScrollArea->verticalScrollBar()->value();
+                setupPinnedGrid(); m_pinnedScrollArea->verticalScrollBar()->setValue(scroll);
+            }
+        }
+        setupRecentFiles();
+    })) m_usageRefreshBusy = false;
+}
+
 void StartMenu::setupRecentFiles()
 {
-    QLayout *layout = m_recentContainer->layout();
-    QLayoutItem *item;
-    while ((item = layout->takeAt(0)) != nullptr) {
-        delete item->widget();
+    auto *grid = qobject_cast<QGridLayout *>(m_recentContainer->layout());
+    if (!grid) return;
+    QHash<QString, AppIconButton *> reusable;
+    while (auto *item = grid->takeAt(0)) {
+        if (auto *button = dynamic_cast<AppIconButton *>(item->widget()))
+            reusable.insert(button->appEntry().desktopPath, button);
         delete item;
     }
-
-    QGridLayout *grid = qobject_cast<QGridLayout *>(layout);
-    if (!grid) return;
-
-    const QList<AppEntry> recentApps = AppRegistry::recentApps(m_allApps, 12);
-    for (int i = 0; i < recentApps.size(); ++i) {
-        const AppEntry &app = recentApps[i];
-        auto *btn = new AppIconButton(&m_palette, app, i, m_recentContainer,
-                                      true, true, false);
-        connect(btn, &QPushButton::clicked, this, [this, app] {
-            launchAppEntry(app);
-        });
-        btn->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(btn, &QWidget::customContextMenuRequested, this, [this, btn, app](const QPoint &pos) {
-            showAppContextMenu(app, btn->mapToGlobal(pos));
-        });
-        int row = i / 6;
-        int col = i % 6;
-        grid->addWidget(btn, row, col);
-        btn->show();
+    const auto recentApps = AppRegistry::recentApps(m_allApps,12);
+    for (int i=0; i<recentApps.size(); ++i) {
+        const auto &app = recentApps[i];
+        auto *btn = reusable.take(app.desktopPath);
+        if (btn) btn->setAppEntry(app,i);
+        else {
+            btn = new AppIconButton(&m_palette,app,i,m_recentContainer,true,true,false);
+            connect(btn,&QPushButton::clicked,this,[this,btn] { launchAppEntry(btn->appEntry()); });
+            btn->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(btn,&QWidget::customContextMenuRequested,this,[this,btn](const QPoint &pos) {
+                showAppContextMenu(btn->appEntry(),btn->mapToGlobal(pos));
+            });
+        }
+        grid->addWidget(btn,i/6,i%6); btn->show();
     }
+    qDeleteAll(reusable);
 }
 
 void StartMenu::filterApps(const QString &text)
@@ -2337,6 +2408,7 @@ void StartMenu::launchAppEntry(const AppEntry &app)
             *completed=true;
             if(status==QProcess::NormalExit && code==0) {
                 AppRegistry::recordLaunchedApp(app.desktopPath);
+                ++m_appDataRevision;
                 m_lastRecordedActiveDesktop=app.desktopPath;
             } else reportLaunchFailure(app,error.isEmpty()?"应用启动失败。":error);
         });
@@ -2618,8 +2690,16 @@ void StartMenu::drawLeftRail(QPainter &p)
 
 void StartMenu::refreshUserAvatar()
 {
-    m_userAvatar = loadUserAvatarPixmap();
-    update();
+    if (m_avatarPending || (m_avatarRefreshTime.isValid() && m_avatarRefreshTime.elapsed() < 30000)) return;
+    m_avatarPending = true;
+    if (!BackgroundTask::run(this, [] { return loadUserAvatarImage(); }, [this](const QImage &image) {
+        m_avatarPending = false;
+        m_avatarRefreshTime.restart();
+        if (image == m_userAvatarSource) return;
+        m_userAvatarSource = image;
+        m_userAvatar = {};
+        update(QRect(0, 24, StartMenuTheme::kRailWidth, 52));
+    })) m_avatarPending = false;
 }
 
 bool StartMenu::openAccountSettings()
@@ -2663,19 +2743,22 @@ void StartMenu::drawAvatarButton(QPainter &p)
     QPainterPath circle;
     circle.addEllipse(QPointF(cx, cy), r, r);
 
-    if (!m_userAvatar.isNull()) {
-        const QPixmap scaledAvatar =
-            m_userAvatar.scaled(r * 2, r * 2,
-                                Qt::KeepAspectRatioByExpanding,
-                                Qt::SmoothTransformation);
-        const QRect crop((scaledAvatar.width() - r * 2) / 2,
-                         (scaledAvatar.height() - r * 2) / 2,
-                         r * 2, r * 2);
-        p.save();
-        p.setClipPath(circle, Qt::IntersectClip);
-        p.drawPixmap(QRect(cx - r, cy - r, r * 2, r * 2),
-                     scaledAvatar.copy(crop));
-        p.restore();
+    if (!m_userAvatarSource.isNull()) {
+        const qreal dpr = devicePixelRatioF();
+        if (m_userAvatar.isNull() || !qFuzzyCompare(m_userAvatar.devicePixelRatioF(), dpr)) {
+            m_userAvatar = QPixmap(QSize(qCeil(32*dpr), qCeil(32*dpr)));
+            m_userAvatar.setDevicePixelRatio(dpr);
+            m_userAvatar.fill(Qt::transparent);
+            QPainter avatar(&m_userAvatar);
+            avatar.setRenderHint(QPainter::Antialiasing);
+            QPainterPath mask; mask.addEllipse(QRectF(0, 0, 32, 32));
+            avatar.setClipPath(mask);
+            const QImage scaled = m_userAvatarSource.scaled(qCeil(32*dpr), qCeil(32*dpr),
+                Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+            const QRectF crop((scaled.width()-32*dpr)/2, (scaled.height()-32*dpr)/2, 32*dpr, 32*dpr);
+            avatar.drawImage(QRectF(0, 0, 32, 32), scaled, crop);
+        }
+        p.drawPixmap(QPointF(cx - r, cy - r), m_userAvatar);
         p.setPen(QPen(QColor(255, 255, 255, 90), 1));
         p.setBrush(Qt::NoBrush);
         p.drawPath(circle);
@@ -2741,6 +2824,7 @@ void StartMenu::drawRailButtons(QPainter &p)
 {
     const int cx = StartMenuTheme::kRailWidth / 2;
 
+    if (p.clipRegion().intersects(QRect(0, railDocumentsY() - 23, StartMenuTheme::kRailWidth, 48))) {
     // Documents 按钮绘制
     const int docY = railDocumentsY();
     QRect docRect(cx - 18, docY - 18, 36, 36);
@@ -2757,6 +2841,8 @@ void StartMenu::drawRailButtons(QPainter &p)
     p.drawRect(docRect.adjusted(7, 5, -7, -11));
     p.drawLine(docRect.left() + 11, docRect.bottom() - 8, docRect.right() - 11, docRect.bottom() - 8);
 
+    }
+    if (p.clipRegion().intersects(QRect(0, railClipboardY() - 23, StartMenuTheme::kRailWidth, 48))) {
     // Clipboard history
     const int clipY = railClipboardY();
     QRect clipRect(cx - 18, clipY - 18, 36, 36);
@@ -2776,6 +2862,8 @@ void StartMenu::drawRailButtons(QPainter &p)
     p.drawLine(cx - 4, clipY - 1, cx + 4, clipY - 1);
     p.drawLine(cx - 4, clipY + 4, cx + 3, clipY + 4);
 
+    }
+    if (p.clipRegion().intersects(QRect(0, railThemeY() - 23, StartMenuTheme::kRailWidth, 48))) {
     // Quick theme switch: a small liquid droplet
     const int themeY = railThemeY();
     QRect themeRect(cx - 18, themeY - 18, 36, 36);
@@ -2806,6 +2894,8 @@ void StartMenu::drawRailButtons(QPainter &p)
     p.setPen(QPen(QColor(255, 255, 255, 145), 1.1, Qt::SolidLine, Qt::RoundCap));
     p.drawArc(QRectF(cx - 5, themeY - 3, 9, 9), 35 * 16, 105 * 16);
 
+    }
+    if (p.clipRegion().intersects(QRect(0, railSettingsY() - 23, StartMenuTheme::kRailWidth, 48))) {
     // Settings 按钮绘制
     const int setY = railSettingsY();
     QRect setRect(cx - 18, setY - 18, 36, 36);
@@ -2822,6 +2912,8 @@ void StartMenu::drawRailButtons(QPainter &p)
     p.drawEllipse(setRect.adjusted(6, 6, -6, -6));
     p.drawEllipse(setRect.center().x() - 3, setRect.center().y() - 3, 6, 6);
 
+    }
+    if (p.clipRegion().intersects(QRect(0, railPowerY() - 23, StartMenuTheme::kRailWidth, 48))) {
     // Power 按钮绘制（使用圆角笔触描绘精确的开关弧线）
     const int powY = railPowerY();
     QRect powRect(cx - 18, powY - 18, 36, 36);
@@ -2842,7 +2934,8 @@ void StartMenu::drawRailButtons(QPainter &p)
     
     p.drawArc(powRect.adjusted(9, 9, -9, -9), 120 * 16, 300 * 16);
     p.drawLine(cx, powY - 8, cx, powY + 1);
-    p.restore();
+    p.restore();    }
+
 }
 
 void StartMenu::handleRailClick(const QPoint &pos)
@@ -3437,13 +3530,8 @@ void StartMenu::showMenu()
         return;
     }
     if(m_showPending)return;
-    // Desktop file/directory watchers own the installed-app refresh. Opening
-    // only reloads the small usage record, not every application on disk.
-    AppRegistry::refreshUsageMetadata(m_allApps);
-    sortAllApps();
-    if (m_showingAllApps && m_appSortMode == AppSortMode::LastUsed)
-        setupPinnedGrid();
-    setupRecentFiles();
+    // Usage parsing and account/image I/O never run on the opening path.
+    refreshUsageMetadata();
     refreshUserAvatar();
     positionAboveStartButton();
     // Only capture on explicit opening, while still hidden. Unchanged pixels

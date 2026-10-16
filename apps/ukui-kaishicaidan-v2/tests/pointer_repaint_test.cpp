@@ -333,6 +333,8 @@ public:
     }
 };
 
+#include "launcher_performance_test.h"
+
 int main(int argc, char **argv)
 {
     QTemporaryDir root;
@@ -372,5 +374,7 @@ int main(int argc, char **argv)
         if (i < 4) AppRegistry::recordLaunchedApp(path);
     }
     AppRegistry::savePinned(pinned);
-    return StartMenuPointerTest::run();
+    const int pointer = StartMenuPointerTest::run();
+    const int performance = StartMenuPerformanceTest::run();
+    return pointer || performance;
 }

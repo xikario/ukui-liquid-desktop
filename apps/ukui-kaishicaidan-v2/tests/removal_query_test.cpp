@@ -162,6 +162,31 @@ exit 1
         while(menu.m_lastRecordedActiveDesktop!=b.desktopPath && deadline.elapsed()<4000)settle(10);
         check(QFileInfo::exists(root+"/launched") && menu.m_lastRecordedActiveDesktop==b.desktopPath,
             "production launch dispatches quoted Exec through GLib DesktopAppInfo and records only success");
+        // Release startup output only after the launch helper has exited and
+        // its QProcess has been destroyed, just as real GUI apps may log later.
+        for (const QString &stream : {QString("stdout"), QString("stderr")}) {
+            const QString release = root + "/launch-release-" + stream;
+            const QString survived = root + "/launch-survived-" + stream;
+            const QString writer = bin + "/startup-writer-" + stream;
+            const QString redirect = stream == "stderr" ? " >&2" : QString();
+            write(writer, ("#!/bin/sh\nwhile [ ! -f '" + release
+                + "' ]; do sleep 0.01; done\nprintf 'startup output\\n'" + redirect
+                + "\nprintf survived > '" + survived + "'\n").toUtf8());
+            QFile::setPermissions(writer, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+            AppEntry noisy = b;
+            noisy.desktopPath = applications + "/startup-" + stream + ".desktop";
+            entry(noisy.desktopPath, "\"" + writer + "\" %U");
+            menu.launchAppEntry(noisy); deadline.restart();
+            while (menu.m_lastRecordedActiveDesktop != noisy.desktopPath && deadline.elapsed() < 4000)
+                settle(10);
+            check(menu.m_lastRecordedActiveDesktop == noisy.desktopPath,
+                "startup-output fixture is dispatched before releasing its output");
+            settle(30);
+            write(release, "release"); deadline.restart();
+            while (!QFileInfo::exists(survived) && deadline.elapsed() < 2000) settle(10);
+            check(QFileInfo::exists(survived),
+                qPrintable("application survives delayed " + stream + " after helper destruction"));
+        }
         auto launchAndAnswer=[&](const AppEntry &app,const QString &title,bool yes,std::function<void()> repair={}) {
             bool handled=false;QTimer answer;answer.setInterval(10);
             QObject::connect(&answer,&QTimer::timeout,[&] {

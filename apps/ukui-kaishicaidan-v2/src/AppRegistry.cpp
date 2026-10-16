@@ -15,6 +15,9 @@
 #include <QHash>
 #include <QSet>
 #include <QRegularExpression>
+#include <QMutex>
+#include <QMutexLocker>
+#include <sys/stat.h>
 
 namespace {
 
@@ -75,7 +78,8 @@ QString cleanupExec(QString exec)
     exec.remove('"');
     exec = exec.trimmed();
 
-    QStringList parts = exec.split(QRegularExpression(QStringLiteral("\\s+")),
+    static const QRegularExpression whitespace(QStringLiteral("\\s+"));
+    QStringList parts = exec.split(whitespace,
                                    QString::SkipEmptyParts);
     while (!parts.isEmpty()) {
         const QString first = parts.first();
@@ -99,7 +103,8 @@ QString cleanupExec(QString exec)
 QString normalizedName(QString name)
 {
     name = name.trimmed().toLower();
-    name.remove(QRegularExpression(QStringLiteral("\\.(desktop|exe|app)$")));
+    static const QRegularExpression suffix(QStringLiteral("\\.(desktop|exe|app)$"));
+    name.remove(suffix);
     return name;
 }
 
@@ -115,6 +120,76 @@ QDateTime parseXbelTime(const QString &value)
     if (!dt.isValid())
         dt = QDateTime::fromString(value, Qt::ISODateWithMs);
     return dt;
+}
+
+struct UsageRecord {
+    QString path, exec, name;
+    QDateTime when;
+    int count = 0;
+};
+
+QByteArray usageFileIdentity(const QString &path)
+{
+    struct stat st {};
+    if (::stat(QFile::encodeName(path).constData(), &st) != 0) return "missing";
+    // Include nanoseconds and inode: atomic replacements and same-size edits
+    // within a single second must invalidate the parsed snapshot too.
+    return QByteArray::number(qulonglong(st.st_dev)) + ':' + QByteArray::number(qulonglong(st.st_ino))
+        + ':' + QByteArray::number(qulonglong(st.st_size)) + ':' + QByteArray::number(qulonglong(st.st_mtim.tv_sec))
+        + ':' + QByteArray::number(qulonglong(st.st_mtim.tv_nsec)) + ':' + QByteArray::number(qulonglong(st.st_ctim.tv_sec))
+        + ':' + QByteArray::number(qulonglong(st.st_ctim.tv_nsec));
+}
+
+QVector<UsageRecord> usageRecords()
+{
+    static QMutex mutex;
+    static QByteArray lastIdentity;
+    static QVector<UsageRecord> cached;
+    const QString recent = recentAppsPath();
+    const QString xbelPath = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+        + "/recently-used.xbel";
+    QMutexLocker lock(&mutex);
+    const QByteArray identity = recent.toUtf8() + '\0' + usageFileIdentity(recent)
+        + '\0' + xbelPath.toUtf8() + '\0' + usageFileIdentity(xbelPath);
+    if (identity == lastIdentity) return cached;
+    QVector<UsageRecord> records;
+    bool readable = true;
+    QFile recentFile(recent);
+    if (recentFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QDateTime fallback = QFileInfo(recent).lastModified();
+        QTextStream in(&recentFile);
+        while (!in.atEnd()) {
+            const QString line = in.readLine().trimmed();
+            if (line.isEmpty()) continue;
+            UsageRecord record; record.path = line; record.when = fallback; record.count = 1;
+            const int tab = line.indexOf('\t');
+            if (tab > 0) {
+                record.when = QDateTime::fromString(line.left(tab), Qt::ISODate);
+                record.path = line.mid(tab + 1).trimmed();
+            }
+            records.append(record);
+        }
+    } else if (QFileInfo::exists(recent)) readable = false;
+    QFile xbel(xbelPath);
+    if (xbel.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QXmlStreamReader xml(&xbel);
+        while (!xml.atEnd() && !xml.hasError()) {
+            xml.readNext();
+            if (!xml.isStartElement() || xml.name() != QStringLiteral("application")) continue;
+            const auto attrs = xml.attributes();
+            UsageRecord record;
+            record.exec = cleanupExec(attrs.value(QStringLiteral("exec")).toString());
+            record.name = normalizedName(attrs.value(QStringLiteral("name")).toString());
+            record.when = parseXbelTime(attrs.value(QStringLiteral("modified")).toString());
+            record.count = attrs.value(QStringLiteral("count")).toInt();
+            records.append(record);
+        }
+        readable = readable && !xml.hasError();
+    } else if (QFileInfo::exists(xbelPath)) readable = false;
+    cached = records;
+    // Retry failed reads; never permanently cache a permission/partial-write error.
+    lastIdentity = readable ? identity : QByteArray();
+    return records;
 }
 
 void applyRecentMetadata(QList<AppEntry> &apps)
@@ -139,54 +214,21 @@ void applyRecentMetadata(QList<AppEntry> &apps)
         apps[idx].launchCount += std::max(1, count);
     };
 
-    QFile recentFile(recentAppsPath());
-    if (recentFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&recentFile);
-        while (!in.atEnd()) {
-            const QString line = in.readLine().trimmed();
-            if (line.isEmpty()) continue;
-
-            QString path = line;
-            QDateTime when = QFileInfo(recentAppsPath()).lastModified();
-            const int tab = line.indexOf('\t');
-            if (tab > 0) {
-                when = QDateTime::fromString(line.left(tab), Qt::ISODate);
-                path = line.mid(tab + 1).trimmed();
-            }
-
-            if (pathIndex.contains(path))
-                touch(pathIndex.value(path), when, 1);
-        }
-    }
-
-    QFile xbel(QDir::homePath() + "/.local/share/recently-used.xbel");
-    if (!xbel.open(QIODevice::ReadOnly | QIODevice::Text))
-        return;
-
-    QXmlStreamReader xml(&xbel);
-    while (!xml.atEnd() && !xml.hasError()) {
-        xml.readNext();
-        if (!xml.isStartElement() || xml.name() != QStringLiteral("application"))
-            continue;
-
-        const QXmlStreamAttributes attrs = xml.attributes();
-        const QString exec = cleanupExec(attrs.value(QStringLiteral("exec")).toString());
-        const QString name = normalizedName(attrs.value(QStringLiteral("name")).toString());
-        const QDateTime when = parseXbelTime(attrs.value(QStringLiteral("modified")).toString());
-        const int count = attrs.value(QStringLiteral("count")).toInt();
-
+    for (const UsageRecord &record : usageRecords()) {
         QSet<int> matches;
-        if (!exec.isEmpty()) {
-            const auto indexes = execIndex.values(exec);
+        if (!record.path.isEmpty() && pathIndex.contains(record.path))
+            matches.insert(pathIndex.value(record.path));
+        if (!record.exec.isEmpty()) {
+            const auto indexes = execIndex.values(record.exec);
             for (int idx : indexes) matches.insert(idx);
         }
-        if (!name.isEmpty()) {
-            const auto indexes = nameIndex.values(name);
+        if (!record.name.isEmpty()) {
+            const auto indexes = nameIndex.values(record.name);
             for (int idx : indexes) matches.insert(idx);
         }
 
         for (int idx : matches)
-            touch(idx, when, count);
+            touch(idx, record.when, record.count);
     }
 }
 

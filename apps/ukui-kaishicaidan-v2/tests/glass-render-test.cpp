@@ -212,6 +212,8 @@ int main(int argc,char **argv) {
         int stale=0,ready=0;
         QEventLoop loop;QTimer::singleShot(5000,&loop,&QEventLoop::quit);
         async.setBackdropAsync(old,cpu,[&]{++stale;});
+        async.setBackdropAsync(old,cpu,[&]{++stale;}); // same pending source joins one preparation
+        check(async.backdropPreparationCount()==1,"same pending backdrop shares one preparation job");
         async.setBackdropAsync(latest,cpu,[&]{++ready;loop.quit();});
         check(ready==0,"async backdrop never computes material inline");
         auto *deleted=new NextKdeGlassView;

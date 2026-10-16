@@ -39,6 +39,7 @@ private:
     QTimer m_repositionTimer;
     StartMenu *m_menu = nullptr;
     bool m_hovered = false;
+    quint64 m_hoverGeneration = 0;
     QTimer *m_immunityTimer = nullptr;
     QMenu *m_contextMenu = nullptr;
 };

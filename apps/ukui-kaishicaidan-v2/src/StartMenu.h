@@ -50,6 +50,7 @@ public:
     qreal glassLuminanceAt(const QRectF &menuRect) const;
     bool paintGlassControl(QPainter &p,const QWidget *owner,const QRectF &rect,
                            qreal radius,qreal hover,bool pressed=false);
+    void prewarmBackdrop();
 
     void applySkin(Skin skin);
     void applyFont(const QString &family, int size);
@@ -90,6 +91,7 @@ protected:
 private:
     friend class StartMenuRemovalQueryTest;
     friend class StartMenuPointerTest;
+    friend class StartMenuPerformanceTest;
     void queueGlassPointer(const QPointF &position, QWidget *control = nullptr);
     void advanceGlassPointer();
     QRegion glassReflectionDamage(const QPointF &position) const;
@@ -97,6 +99,7 @@ private:
     void setupUi();
     void setupPinnedGrid();
     void setupRecentFiles();
+    void refreshUsageMetadata();
     void rebuildAppList();
     void setupAppWatcher();
     void refreshAppWatcher();
@@ -232,6 +235,8 @@ private:
     QTimer *m_appRebuildTimer = nullptr;
     bool m_appScanBusy = false;
     bool m_appScanPending = false;
+    quint64 m_appDataRevision = 0;
+    bool m_usageRefreshBusy = false, m_usageRefreshPending = false;
 
     // Data (use global types from AppRegistry / RecentFiles)
     QList<AppEntry> m_pinnedApps;
@@ -247,6 +252,9 @@ private:
     };
     QList<ClipboardHistoryItem> m_clipboardHistory;
     QPixmap m_userAvatar;
+    QImage m_userAvatarSource;
+    bool m_avatarPending = false;
+    QElapsedTimer m_avatarRefreshTime;
     NextKdeGlassView *m_nextKdeGlassView = nullptr;
     QTimer *m_glassLightTimer = nullptr;
     QPointF m_glassLightPos = QPointF(-500, -500);
