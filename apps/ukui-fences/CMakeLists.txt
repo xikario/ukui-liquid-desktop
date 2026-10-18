@@ -75,6 +75,7 @@ add_executable(ukui-fences
     src/SmartSpaceWidget.cpp
     src/MenuStyle.h
     resources.qrc
+    ../../shared/desktop-launch/DesktopLaunchCompat.cpp
 )
 
 target_compile_definitions(ukui-fences PRIVATE
@@ -101,6 +102,16 @@ target_link_libraries(ukui-fences PRIVATE
 )
 
 if(BUILD_TESTING)
+    add_executable(desktop-open-test tests/desktop_open_test.cpp ../../shared/desktop-launch/DesktopLaunchCompat.cpp)
+    target_link_libraries(desktop-open-test PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets)
+    find_program(DBUS_RUN_SESSION_EXECUTABLE dbus-run-session)
+    if(DBUS_RUN_SESSION_EXECUTABLE)
+        add_test(NAME desktop_open_lifecycle COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:desktop-open-test>)
+    else()
+        add_test(NAME desktop_open_lifecycle COMMAND desktop-open-test)
+        set_tests_properties(desktop_open_lifecycle PROPERTIES ENVIRONMENT "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/ukui-desktop-open-test")
+    endif()
+    set_tests_properties(desktop_open_lifecycle PROPERTIES TIMEOUT 15)
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
         add_test(NAME smart_space_indexer

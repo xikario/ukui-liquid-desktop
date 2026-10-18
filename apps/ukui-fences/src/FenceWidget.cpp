@@ -624,8 +624,16 @@ void FenceWidget::renameFirstSelectedIcon()
 
 void FenceWidget::openSelectedIcons()
 {
-    for (auto *icon : m_selectedIcons)
-        if (icon) icon->item().open();
+    const auto reported = std::make_shared<bool>(false);
+    for (auto *icon : m_selectedIcons) {
+        if (!icon) continue;
+        icon->item().openAsync(this, [this, reported](bool ok, const QString &error) {
+            if (!ok && !*reported) {
+                *reported = true;
+                LiquidDialog::warning(this, "无法打开项目", error);
+            }
+        });
+    }
 }
 
 void FenceWidget::syncCutVisualState(const QSet<QString> &cutPaths)
@@ -653,8 +661,13 @@ void FenceWidget::insertItem(const DesktopItem &item, int index)
     else
         icon->setIconAppearance(IconVisualStyle::Native,IconSurface::Fence,QColor("#7faee8"),.4);
     icon->setVisualScale(m_iconScale);
-    connect(icon, &DesktopIcon::activated,
-            [](const DesktopItem &it) { it.open(); });
+    connect(icon, &DesktopIcon::activated, this,
+            [this](const DesktopItem &it) {
+        it.openAsync(this, [this](bool ok, const QString &error) {
+            if (!ok)
+                LiquidDialog::warning(this, "无法打开项目", error);
+        });
+    });
     connect(icon, &DesktopIcon::undoRequested,
             this, [this] { emit undoRequested(); });
     connect(icon, &DesktopIcon::clicked,

@@ -72,6 +72,13 @@ static int runDesktopRefreshTest(const QString &root)
     check(loose && loose->isSelected() && loose->pos() == loosePos && fenced && fenced->pos() == fencePos,
         "unchanged menu refresh preserves selection and manual positions");
     check(wallpaperChanges == 0, "unchanged refresh retains wallpaper materials");
+    auto backdropColor = [](DesktopCanvas &desktop) {
+        const QImage image = desktop.wallpaperBackdrop(
+            QRect(desktop.mapToGlobal(QPoint(10, 10)), QSize(20, 20)), 1);
+        return image.isNull() ? QColor() : image.pixelColor(10, 10);
+    };
+    check(backdropColor(canvas) == QColor("#b07a38"),
+        "unchanged menu refresh retains actual wallpaper pixels");
     if (!loose || !fenced) return 1;
 
     // A brief flash confirms refresh without replacing or hiding the icon.
@@ -132,5 +139,42 @@ static int runDesktopRefreshTest(const QString &root)
     const QImage backdrop = canvas.wallpaperBackdrop(QRect(canvas.mapToGlobal(QPoint(10, 10)), QSize(20, 20)), 1);
     check(wallpaperChanges > 0 && !backdrop.isNull() && backdrop.pixelColor(10, 10).blue() > 150,
         "refresh applies actual same-path wallpaper changes");
+
+    const int changesBeforeRemoval = wallpaperChanges;
+    check(QFile::remove(wallPath), "remove selected wallpaper source");
+    QApplication::sendEvent(&canvas, &f5); settle(700);
+    check(backdropColor(canvas) == QColor("#285acc")
+        && wallpaperChanges == changesBeforeRemoval,
+        "refresh keeps wallpaper and glass when its source was removed");
+    {
+        DesktopCanvas restarted; restarted.showAndActivate();
+        QElapsedTimer ready; ready.start();
+        while (backdropColor(restarted) != QColor("#285acc") && ready.elapsed() < 4000) settle(20);
+        check(backdropColor(restarted) == QColor("#285acc"),
+            "restart restores managed wallpaper after original source removal");
+    }
+    check(write(wallPath, "incomplete image"), "replace source with incomplete image");
+    QApplication::sendEvent(&canvas, &f5); settle(700);
+    check(backdropColor(canvas) == QColor("#285acc"),
+        "incomplete source cannot replace the last valid wallpaper");
+    wall.fill(QColor("#3cbe64")); check(wall.save(wallPath), "restore valid source image");
+    QApplication::sendEvent(&canvas, &f5);
+    timer.restart();
+    while (backdropColor(canvas) != QColor("#3cbe64") && timer.elapsed() < 4000) settle(20);
+    check(backdropColor(canvas) == QColor("#3cbe64"),
+        "restored source supersedes the managed fallback");
+    check(QFile::remove(savedWallpaperPath(wallPath)) && QFile::remove(wallPath),
+        "remove original and private copy to exercise memory-only recovery");
+    QApplication::sendEvent(&canvas, &f5); settle(700);
+    check(backdropColor(canvas) == QColor("#3cbe64"),
+        "failed reload preserves the displayed image even without a private copy");
+    QFile layout(root + "/config/kyfences/layout.json");
+    check(layout.open(QIODevice::ReadOnly), "read layout for source isolation check");
+    QJsonObject otherSource = QJsonDocument::fromJson(layout.readAll()).object(); layout.close();
+    otherSource["wallpaperPath"] = root + "/unrelated-missing.png";
+    check(write(layout.fileName(), QJsonDocument(otherSource).toJson()), "select a different missing source");
+    canvas.loadLayout(); canvas.refreshAll(); settle(700);
+    check(backdropColor(canvas) != QColor("#3cbe64"),
+        "another missing wallpaper never reuses the previous source's copy");
     return failures ? 1 : 0;
 }

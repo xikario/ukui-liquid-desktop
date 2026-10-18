@@ -67,6 +67,7 @@ set(LAUNCHER_SOURCES
     # Reuse Fences' cached icon/plate renderer, without a second implementation.
     ../ukui-fences/src/LiquidIconRenderer.cpp
     src/glass.qrc
+    ../../shared/desktop-launch/DesktopLaunchCompat.cpp
 )
 add_executable(ukui-kaishicaidan-v2 src/main.cpp src/UkuiMenuCompat.h ${LAUNCHER_SOURCES})
 

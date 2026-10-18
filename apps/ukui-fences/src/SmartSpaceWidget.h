@@ -207,7 +207,7 @@ private:
     void appendFolderLevel(const QString &parentPath, int level);
     void folderActivated(QListWidgetItem *item, int level);
     void openFileItem(QListWidgetItem *item);
-    void openPath(const QString &path) const;
+    void openPath(const QString &path);
     void showEntryMenu(QListWidget *list, const QPoint &position);
 
     void showSettingsDialog();

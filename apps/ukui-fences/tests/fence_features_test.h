@@ -2,6 +2,8 @@
 #include <QMouseEvent>
 #include <QPropertyAnimation>
 #include <QElapsedTimer>
+#include <QEventLoop>
+#include <QTimer>
 
 static int runFenceFeaturesTest(const QString &isolated)
 {
@@ -153,6 +155,45 @@ static int runFenceFeaturesTest(const QString &isolated)
         canvas.setWallpaperMagnetEnabled(true);
         check(canvas.wallpaperMagnetEnabled() && shaped->geometry()==geometry,
               "reenabling magnet applies to future drags without rearranging desktop");
+    }
+    {
+        const QString bin = isolated + "/open-bin";
+        QDir().mkpath(bin);
+        const auto executable = [&bin](const QString &name, const QByteArray &body) {
+            QFile file(bin + "/" + name);
+            if (!file.open(QIODevice::WriteOnly) || file.write(body) != body.size())
+                return false;
+            file.close();
+            return file.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+        };
+        check(executable("gio", "#!/bin/sh\nsleep 0.6\nexit 1\n")
+                  && executable("xdg-open", "#!/bin/sh\necho no association >&2\nexit 1\n"),
+              "create slow failing opener fixtures");
+        const QByteArray oldPath = qgetenv("PATH");
+        qputenv("PATH", (bin + QLatin1Char(':') + QString::fromLocal8Bit(oldPath)).toLocal8Bit());
+        const QString filePath = isolated + "/unassociated.fixture";
+        QFile payload(filePath);
+        payload.open(QIODevice::WriteOnly);
+        payload.write("fixture");
+        payload.close();
+        bool callbackCalled = false, callbackSuccess = true, eventLoopResponsive = false;
+        QString openError;
+        QEventLoop loop;
+        DesktopItem::fromPath(filePath).openAsync(&loop,
+            [&](bool success, const QString &error) {
+                callbackCalled = true;
+                callbackSuccess = success;
+                openError = error;
+                loop.quit();
+            });
+        QTimer::singleShot(40, &loop, [&] { eventLoopResponsive = true; });
+        QTimer::singleShot(4000, &loop, &QEventLoop::quit);
+        loop.exec();
+        qputenv("PATH", oldPath);
+        check(eventLoopResponsive,
+              "slow file opener does not block the desktop event loop");
+        check(callbackCalled && !callbackSuccess && !openError.isEmpty(),
+              "asynchronous file open reports the final association failure");
     }
     return failures ? 1 : 0;
 }

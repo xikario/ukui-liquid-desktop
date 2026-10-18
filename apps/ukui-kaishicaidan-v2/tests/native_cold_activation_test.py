@@ -43,7 +43,10 @@ def child():
         wait_for(visible, 'first native WinKeyResponse cold activation shows menu')
         call(*own, 'org.ukui.kaishicaidan.v2.hideMenu')
         wait_for(lambda: not visible(), 'hide after cold activation')
-        time.sleep(.3)
+        # This is an independent native-only request, beyond the documented
+        # 500 ms cross-connection deduplication window. Delayed duplicates
+        # inside that window are checked by button-follow-test.py.
+        time.sleep(.6)
         call('org.ukui.menu', '/org/ukui/menu', 'org.ukui.menu.WinKeyResponse')
         wait_for(visible, 'native-only request still works without recorded gesture')
     finally:

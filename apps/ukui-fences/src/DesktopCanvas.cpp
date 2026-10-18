@@ -1377,7 +1377,7 @@ void DesktopCanvas::loadWallpaper()
     BackgroundTask::run(this, [=] {
         QImage image=VideoWallpaperCache::poster(startupVideo);
         if(!image.isNull())return qMakePair(image, false);
-        if (mode != WallpaperMode::System && !path.isEmpty()) image = readWallpaperImage(path, nullptr, target);
+        if (mode != WallpaperMode::System && !path.isEmpty()) image = readPersistentWallpaperImage(path, target);
         const bool custom = !image.isNull();
         if (!custom) image = loadSystemWallpaperImage(target);
         return qMakePair(image, custom);
@@ -1386,6 +1386,15 @@ void DesktopCanvas::loadWallpaper()
         m_wallpaperLoading = false;
         if(m_videoTrial && m_videoTrial->active())return;
         if (m_wallpaperReloadPending || path != m_wallpaperPath || mode != m_wallpaperMode) { loadWallpaper(); return; }
+        // A failed reload must retain the current image even if saving its
+        // private copy failed, for example when the user's disk is full.
+        if (!loaded.second && mode != WallpaperMode::System && !path.isEmpty()
+            && path == m_appliedWallpaperPath && m_wallpaperUsingCustom
+            && !m_wallpaperSourceImage.isNull()) {
+            finishInitialWallpaper();
+            return;
+        }
+        m_appliedWallpaperPath = loaded.second ? path : QString();
         const WallpaperMode renderMode = loaded.second ? mode : WallpaperMode::Fill;
         if (!m_initialWallpaperReady || m_wallpaperSourceImage != loaded.first
             || m_wallpaperUsingCustom != loaded.second || m_appliedWallpaperMode != renderMode) {
@@ -1728,8 +1737,13 @@ void DesktopCanvas::connectLooseIcon(DesktopIcon *icon)
     icon->setFontColor(m_fontColor);
     icon->setFontBold(m_fontBold);
     icon->setFontItalic(m_fontItalic);
-    connect(icon, &DesktopIcon::activated,
-            [](const DesktopItem &it) { it.open(); });
+    connect(icon, &DesktopIcon::activated, this,
+            [this](const DesktopItem &it) {
+        it.openAsync(this, [this](bool ok, const QString &error) {
+            if (!ok)
+                LiquidDialog::warning(this, "无法打开项目", error);
+        });
+    });
     connect(icon, &DesktopIcon::undoRequested,
             this, &DesktopCanvas::undoLastOperation);
     connect(icon, &DesktopIcon::clicked,
@@ -2408,6 +2422,9 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
         if (mode != WallpaperMode::System && !chosenPath->isEmpty()) {
             source = readWallpaperPixmap(*chosenPath,nullptr,
                 mode==WallpaperMode::Tile || mode==WallpaperMode::Center ? QSize() : wallpaperDecodeSize());
+            if (source.isNull())
+                source = readWallpaperPixmap(savedWallpaperPath(*chosenPath), nullptr,
+                    mode==WallpaperMode::Tile || mode==WallpaperMode::Center ? QSize() : wallpaperDecodeSize());
             customMode = !source.isNull();
         }
         if (!customMode)
@@ -2423,7 +2440,8 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
         } else if (QFileInfo::exists(*chosenPath)) {
             pathLabel->setText(*chosenPath);
         } else {
-            pathLabel->setText("图片不存在，将回退系统壁纸：\n" + *chosenPath);
+            pathLabel->setText((customMode ? QStringLiteral("原图片不存在，使用已保存的副本：\n")
+                : QStringLiteral("图片不存在且没有保存副本，将使用系统壁纸：\n")) + *chosenPath);
         }
     };
 
@@ -2474,7 +2492,7 @@ QWidget *DesktopCanvas::createWallpaperSettingsPage(QWidget *parent)
 
     auto *hint = new QLabel(
         "提示：Fences 壁纸只影响 Fences 桌面层，不会修改系统桌面壁纸。"
-        "图片只在保存、刷新或窗口尺寸变化时重新生成缓存，不常驻监听文件。",
+        "已应用图片会保存独立副本，原文件移动或删除后仍可恢复；刷新时优先读取原文件的更新。",
         &dlg);
     hint->setWordWrap(true);
     hint->setStyleSheet("color: #64748b;");
@@ -4745,8 +4763,16 @@ void DesktopCanvas::renameFirstSelectedIcon()
 
 void DesktopCanvas::openSelectedIcons()
 {
-    for (auto *icon : m_selectedIcons)
-        if (icon) icon->item().open();
+    const auto reported = std::make_shared<bool>(false);
+    for (auto *icon : m_selectedIcons) {
+        if (!icon) continue;
+        icon->item().openAsync(this, [this, reported](bool ok, const QString &error) {
+            if (!ok && !*reported) {
+                *reported = true;
+                LiquidDialog::warning(this, "无法打开项目", error);
+            }
+        });
+    }
 }
 
 void DesktopCanvas::applyIconScale(qreal scale)

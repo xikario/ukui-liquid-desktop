@@ -36,11 +36,14 @@ static int runSmartWallpaperTest(const QString &root)
         const QImage image = smart->grab().toImage();
         const qreal dpr = image.devicePixelRatio();
         const QColor color = image.pixelColor(qRound(350 * dpr), qRound((smart->height() - 12) * dpr));
-        qInfo() << "Smart Space material sample:" << color;
         return color;
     };
     auto isRed = [](QColor c) { return c.red() > c.blue() + 60; };
     auto isBlue = [](QColor c) { return c.blue() > c.red() + 60; };
+    auto waitFor = [](const std::function<bool()> &ready) {
+        QElapsedTimer timer; timer.start();
+        while (!ready() && timer.elapsed() < 5000) settle(40);
+    };
     check(systemWallpaper(redPath), "isolated system wallpaper configured");
     layoutWallpaper({}, 5);
     {
@@ -59,10 +62,13 @@ static int runSmartWallpaperTest(const QString &root)
             const QImage image = music ? music->material() : QImage();
             return image.isNull() ? QColor() : image.pixelColor(image.width()/2,image.height()/2);
         };
+        // Wallpaper decoding and shared glass generation are asynchronous;
+        // a fixed 500 ms sleep can sample an unmapped or unfinished surface.
+        waitFor([&] { return isRed(sample(smart)) && isRed(musicSample()); });
         check(isRed(sample(smart)), "initial material uses wallpaper A");
         check(isRed(musicSample()), "initial music material uses wallpaper A");
         check(systemWallpaper(bluePath), "switch system wallpaper to B");
-        settle(700);
+        waitFor([&] { return isBlue(sample(smart)) && isBlue(musicSample()); });
         check(isBlue(sample(smart)), "system wallpaper event refreshes visible material without skin toggle");
         check(isBlue(musicSample()), "system wallpaper event refreshes music without playback or manual refresh");
 

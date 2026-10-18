@@ -256,8 +256,9 @@ void addOpenWithMenu(QMenu &menu, const DesktopItem &item)
         for (const auto &entry : found) {
             auto *action = openWith->addAction(entry.second);
             QObject::connect(action, &QAction::triggered, openWith, [file = entry.first, path] {
-                if (!QProcess::startDetached("gio", {"launch", file, path}))
-                    launchDesktopFileWithPaths(file, {path});
+                QString error;
+                if (!launchDesktopFileCompat(file, &error, {path}))
+                    LiquidDialog::warning(nullptr, "无法打开文件", error);
             });
         }
         if (found.isEmpty()) openWith->addAction("无可用应用")->setEnabled(false);

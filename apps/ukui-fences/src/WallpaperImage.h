@@ -6,6 +6,12 @@
 #include <QScreen>
 #include <QFileInfo>
 #include <QDateTime>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QSaveFile>
+#include <QStandardPaths>
+#include <QDebug>
 
 inline QSize wallpaperDecodeSize()
 {
@@ -34,6 +40,50 @@ inline QImage readWallpaperImage(const QString &path, QString *error, const QSiz
     }
     QImage image=reader.read();
     if(image.isNull()) { if(error) *error=reader.errorString(); return {}; }
+    return image;
+}
+
+// Keep an atomic private copy, while retaining the original path so refresh
+// still picks up edits. Moving/removing the source must not lose the wallpaper.
+inline QString savedWallpaperPath(const QString &source)
+{
+    const QByteArray key = QCryptographicHash::hash(
+        QFileInfo(source).absoluteFilePath().toUtf8(), QCryptographicHash::Sha256).toHex();
+    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+        + QStringLiteral("/ukui-fences/wallpapers/") + QString::fromLatin1(key) + QStringLiteral(".image");
+}
+
+inline bool saveWallpaperCopy(const QString &source, const QString &destination)
+{
+    QFile input(source), previous(destination);
+    if (!input.open(QIODevice::ReadOnly)) return false;
+    bool identical = previous.open(QIODevice::ReadOnly) && input.size() == previous.size();
+    while (identical && !input.atEnd()) {
+        const QByteArray block = input.read(64 * 1024);
+        if (block.isEmpty() && input.error() != QFileDevice::NoError) return false;
+        identical = block == previous.read(block.size());
+    }
+    if (identical && previous.error() == QFileDevice::NoError) return true;
+    previous.close();
+    if (!input.seek(0) || !QDir().mkpath(QFileInfo(destination).absolutePath())) return false;
+    QSaveFile output(destination);
+    if (!output.open(QIODevice::WriteOnly)) return false;
+    while (!input.atEnd()) {
+        const QByteArray block = input.read(64 * 1024);
+        if ((block.isEmpty() && input.error() != QFileDevice::NoError)
+            || output.write(block) != block.size()) return false;
+    }
+    return output.commit();
+}
+
+inline QImage readPersistentWallpaperImage(const QString &path, const QSize &target)
+{
+    if (path.isEmpty()) return {};
+    const QString saved = savedWallpaperPath(path);
+    QImage image = readWallpaperImage(path, nullptr, target);
+    if (image.isNull()) return readWallpaperImage(saved, nullptr, target);
+    if (!saveWallpaperCopy(path, saved))
+        qWarning() << "Unable to save a private wallpaper copy:" << path;
     return image;
 }
 

@@ -9,12 +9,14 @@
 #include <QMimeDatabase>
 #include <QMimeType>
 #include <QLocale>
-#include <QDesktopServices>
 #include <QSettings>
 #include <QProcess>
+#include <QTemporaryFile>
 #include <QStandardPaths>
 #include <QStringList>
-#include <QUrl>
+#include <functional>
+#include <memory>
+#include "../../../shared/desktop-launch/DesktopLaunchCompat.h"
 
 inline QIcon resolveFileIcon(const QString &filePath, bool isDir)
 {
@@ -42,6 +44,7 @@ inline QIcon resolveFileIcon(const QString &filePath, bool isDir)
 
 struct DesktopItem
 {
+    using OpenCallback = std::function<void(bool, const QString &)>;
     QString filePath;
     QString displayName;
     QIcon   icon;
@@ -182,41 +185,120 @@ struct DesktopItem
         return item;
     }
 
-    // ── 打开 ─────────────────────────────────────────────────
-    void open() const
+    // Interactive launchers must not wait on slow mounts in the UI thread.
+    void openAsync(QObject *context, OpenCallback callback) const
     {
+        if (!context) {
+            if (callback)
+                callback(false, QStringLiteral("打开请求已失效。"));
+            return;
+        }
         if (isSystemIcon ||
             filePath.startsWith(QLatin1String("computer://")) ||
             filePath.startsWith(QLatin1String("trash://"))) {
             const QString peony = QStandardPaths::findExecutable(
                 QLatin1String("peony"));
-            if (!peony.isEmpty() &&
-                QProcess::startDetached(peony, QStringList() << filePath))
-                return;
-            if (QProcess::startDetached(QLatin1String("gio"),
-                    QStringList() << QLatin1String("open") << filePath))
-                return;
-            QProcess::startDetached(QLatin1String("xdg-open"),
-                                    QStringList() << filePath);
+            bool launched = !peony.isEmpty() &&
+                QProcess::startDetached(peony, QStringList() << filePath);
+            if (!launched)
+                launched = QProcess::startDetached(QLatin1String("gio"),
+                    QStringList() << QLatin1String("open") << filePath);
+            if (!launched)
+                launched = QProcess::startDetached(QLatin1String("xdg-open"),
+                    QStringList() << filePath);
+            if (callback)
+                callback(launched, launched ? QString() :
+                    QStringLiteral("无法启动文件管理器打开这个位置。"));
             return;
         }
-
         if (isDesktopEntry) {
-            QProcess::startDetached(QLatin1String("gio"),
-                QStringList() << QLatin1String("launch") << filePath);
+            QString error;
+            const bool launched = launchDesktopFileCompat(filePath, &error);
+            if (callback)
+                callback(launched, launched ? QString() :
+                    (error.isEmpty() ? QStringLiteral("无法启动这个桌面快捷方式。") : error));
             return;
         }
 
-        if (QProcess::startDetached(QLatin1String("gio"),
-                QStringList() << QLatin1String("open") << filePath))
-            return;
-
-        if (QProcess::startDetached(QLatin1String("xdg-open"),
-                QStringList() << filePath))
-            return;
-
-        if (QDesktopServices::openUrl(QUrl::fromLocalFile(filePath)))
-            return;
-
+        struct State {
+            QProcess *process = nullptr;
+            QTemporaryFile diagnostics;
+            QString path;
+            QString error;
+            bool fallback = false;
+            bool completed = false;
+        };
+        const auto state = std::make_shared<State>();
+        state->path = filePath;
+        state->process = new QProcess(context);
+        // Opened applications can inherit the opener's descriptors. A pipe
+        // disappears when this short-lived QProcess is deleted; a regular
+        // temporary file remains safe for inherited writers after unlinking.
+        state->process->setStandardOutputFile(QProcess::nullDevice());
+        state->process->setStandardErrorFile(state->diagnostics.open()
+            ? state->diagnostics.fileName() : QProcess::nullDevice());
+        const auto readError = [state] {
+            if (!state->diagnostics.isOpen() || !state->diagnostics.seek(0)) return QString();
+            return QString::fromLocal8Bit(state->diagnostics.read(4096)).trimmed();
+        };
+        const auto startOpener = [state](const QStringList &command) {
+            // xdg-open may exec the editor itself. Keep a separate monitor so
+            // destroying the desktop only terminates this shell, never that
+            // editor. Paths are positional arguments, never shell source.
+            QStringList arguments{QStringLiteral("-c"),
+                QStringLiteral("\"$@\"; result=$?; exit \"$result\""),
+                QStringLiteral("ukui-file-opener")};
+            arguments.append(command);
+            state->process->start(QStringLiteral("/bin/sh"), arguments);
+        };
+        const auto finish = [state, callback](bool success, const QString &error) {
+            if (state->completed)
+                return;
+            state->completed = true;
+            // The callback may destroy its recipient (and the process).
+            state->process->deleteLater();
+            if (callback)
+                callback(success, error);
+        };
+        const auto startFallback = [state, startOpener] {
+            if (state->completed)
+                return;
+            state->fallback = true;
+            startOpener({QStringLiteral("xdg-open"), state->path});
+        };
+        QObject::connect(state->process,
+                         QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                         context,
+                         [state, finish, startFallback, readError](int code, QProcess::ExitStatus status) {
+            if (!state->fallback) {
+                if (status == QProcess::NormalExit && code == 0) {
+                    finish(true, QString());
+                    return;
+                }
+                state->error = readError();
+                startFallback();
+                return;
+            }
+            if (status == QProcess::NormalExit && code == 0) {
+                finish(true, QString());
+                return;
+            }
+            const QString detail = readError();
+            finish(false, detail.isEmpty() ?
+                (state->error.isEmpty() ? QStringLiteral("打开程序返回失败。") : state->error)
+                : detail);
+        });
+        QObject::connect(state->process, &QProcess::errorOccurred, context,
+                         [state, startFallback, finish](QProcess::ProcessError error) {
+            if (state->completed || error != QProcess::FailedToStart)
+                return;
+            state->error = state->process->errorString();
+            if (!state->fallback)
+                startFallback();
+            else
+                finish(false, state->error.isEmpty() ?
+                    QStringLiteral("没有找到可以打开此文件的应用程序。") : state->error);
+        });
+        startOpener({QStringLiteral("gio"), QStringLiteral("open"), filePath});
     }
 };

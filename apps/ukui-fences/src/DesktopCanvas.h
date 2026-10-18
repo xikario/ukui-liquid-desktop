@@ -365,6 +365,7 @@ private:
     qreal               m_wallpaperCacheDpr = 0.0;
     WallpaperMode       m_wallpaperMode = WallpaperMode::System;
     QString             m_wallpaperPath;
+    QString             m_appliedWallpaperPath;
     bool                m_wallpaperUsingCustom = false;
     QImage              m_wallpaperSourceImage;
     WallpaperMode       m_appliedWallpaperMode = WallpaperMode::System;

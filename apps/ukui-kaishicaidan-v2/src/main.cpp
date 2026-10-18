@@ -118,7 +118,7 @@ int main(int argc, char *argv[])
     nativeMenu.setKeyMonitorActive(keyInterceptor.grabWinKey());
 
     QObject::connect(&keyInterceptor, &KeyInterceptor::winKeyPressed,
-                     &menu, &StartMenu::toggle);
+                     &nativeMenu, &UkuiMenuCompat::recordedWinKey);
 
     StartButton startButton(&menu);
     QTimer::singleShot(200, &startButton, &StartButton::positionOnTaskbar);

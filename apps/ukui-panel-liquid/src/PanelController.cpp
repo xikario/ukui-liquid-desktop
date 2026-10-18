@@ -2,6 +2,7 @@
 #include "../../../shared/async-work/BackgroundTask.h"
 #include "PanelController.h"
 #include "PanelBehavior.h"
+#include "PanelLayoutCompat.h"
 #include "LiquidMaterialPreparation.h"
 #include "LiquidPopup.h"
 #include <QApplication>
@@ -51,49 +52,26 @@ void addPanelLayoutSettings(QFormLayout *form, QWidget *dialog, QWidget *panel,
     auto *hint=new QLabel("居中整个任务栏；取消后铺满屏幕边缘。图标较多时，系统会保留容纳图标所需的最小长度。",dialog);
     hint->setWordWrap(true);form->addRow(hint);
 
-    // OEM exposes these Qt slots: let it own geometry, struts, persistence and
-    // screen changes. Never move the dock ourselves or access private fields.
-    const auto *meta=panel->metaObject();
-    const int alignmentIndex=meta->indexOfMethod("setAlignment(UKUIPanel::Alignment,bool)");
-    const int lengthIndex=meta->indexOfMethod("setLength(int,bool,bool)");
-    const QString prefix=QStringLiteral("UKUIPanel ");
-    const QString panelName=panel->objectName().startsWith(prefix)?panel->objectName().mid(prefix.size()):QString();
-    if(alignmentIndex<0 || lengthIndex<0 || panelName.isEmpty() || panelName.contains('/')) {
-        centered->setEnabled(false);row->setEnabled(false);
-        hint->setText("当前系统任务栏未提供兼容的布局接口，暂不能在这里调整居中。");
-        return;
-    }
-    QSettings native(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)+"/ukui/panel.conf",QSettings::IniFormat);
-    native.beginGroup(panelName);
-    const QString position=native.value("position","Bottom").toString();
-    const bool vertical=position=="Left" || position=="Right";
-    QScreen *screen=QGuiApplication::screenAt(panel->mapToGlobal(panel->rect().center()));
-    if(!screen)screen=QGuiApplication::primaryScreen();
-    const int extent=screen?(vertical?screen->geometry().height():screen->geometry().width()):1;
-    const int configured=native.value("width",100).toInt();
-    const int percent=native.value("width-percent",true).toBool()?configured:qRound(100.*configured/qMax(1,extent));
-    const bool isCentered=native.value("alignment",0).toInt()==0 && percent<100;
-    const QString savedKey="layout/"+panelName+"/centeredLength";
+    auto *compat=panel->findChild<PanelLayoutCompat *>(QString(),Qt::FindDirectChildrenOnly);
+    if(!compat) { centered->setEnabled(false);row->setEnabled(false);return; }
+    centered->setChecked(compat->centered());
     QSettings saved(preferences,QSettings::IniFormat);
-    length->setValue(qBound(30,isCentered?percent:saved.value(savedKey,68).toInt(),95));
+    const QString panelName=panel->objectName().mid(QStringLiteral("UKUIPanel ").size());
+    const int remembered=saved.value("layout/"+panelName+"/centeredLength",68).toInt();
+    length->setValue(qBound(30,compat->centered()?compat->length():remembered,95));
     number->setText(QString::number(length->value())+"%");
-    centered->setChecked(isCentered);row->setEnabled(isCentered);
-    const QPointer<QWidget> guard(panel);
-    const QMetaMethod align=meta->method(alignmentIndex),resize=meta->method(lengthIndex);
-    auto apply=[guard,align,resize,centered,length,hint,preferences,savedKey]{
-        if(!guard)return;
-        const int center=0;
-        const int value=centered->isChecked()?length->value():100;
-        const bool aligned=align.invoke(guard,Qt::DirectConnection,
-            QGenericArgument("UKUIPanel::Alignment",&center),Q_ARG(bool,false));
-        const bool resized=aligned && resize.invoke(guard,Qt::DirectConnection,
-            Q_ARG(int,value),Q_ARG(bool,true),Q_ARG(bool,true));
-        if(!resized) {
-            hint->setText("系统任务栏未能应用布局，请重新打开设置后重试。");
-            return;
-        }
-        QSettings settings(preferences,QSettings::IniFormat);
-        settings.setValue(savedKey,length->value());
+    row->setEnabled(compat->supported() && centered->isChecked());
+    centered->setEnabled(compat->supported());
+    hint->setText(compat->explanation());
+    QObject::connect(compat,&PanelLayoutCompat::changed,dialog,[=]{
+        centered->setEnabled(compat->supported());
+        row->setEnabled(compat->supported() && centered->isChecked());
+        hint->setText(compat->explanation());
+    });
+    const QPointer<PanelLayoutCompat> guard(compat);
+    auto apply=[guard,centered,length,hint]{
+        if(guard && !guard->setCentered(centered->isChecked(),length->value()))
+            hint->setText("任务栏未能应用或保存布局，请检查支持范围及配置文件权限。");
     };
     QObject::connect(centered,&QCheckBox::toggled,dialog,[row,apply](bool on){row->setEnabled(on);apply();});
     // Dragging previews only the number; commit once on release to avoid
@@ -185,6 +163,7 @@ void PanelController::attach(QWidget *w) {
     if (!w || !w->inherits("UKUIPanel") || w->property("liquidPanelAttached").toBool()) return;
     w->setProperty("liquidPanelAttached",true);
     w->setProperty("liquidPanelEnabled",m_enabled);
+    new PanelLayoutCompat(w,configFile(),w);
     m_cache.insert(w,{});
     m_preparations.insert(w,new LiquidMaterial::Preparation(this));
     m_originalMasks.insert(w,w->mask());

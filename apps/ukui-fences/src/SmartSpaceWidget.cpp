@@ -5069,11 +5069,15 @@ void SmartSpaceWidget::openFileItem(QListWidgetItem *item)
         openPath(item->data(PathRole).toString());
 }
 
-void SmartSpaceWidget::openPath(const QString &path) const
+void SmartSpaceWidget::openPath(const QString &path)
 {
     const DesktopItem entry = DesktopItem::fromPath(path);
-    if (entry.isValid())
-        entry.open();
+    if (!entry.isValid())
+        return;
+    entry.openAsync(this, [this](bool ok, const QString &error) {
+        if (!ok)
+            LiquidDialog::warning(this, "无法打开项目", error);
+    });
 }
 
 void SmartSpaceWidget::showEntryMenu(QListWidget *list, const QPoint &position)

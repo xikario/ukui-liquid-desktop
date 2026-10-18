@@ -139,9 +139,10 @@ void StartButton::positionOnTaskbar()
 
     move(x, y);
     if(!isVisible())show();
-    qDebug() << "[StartButton] overlay geometry:" << geometry()
-             << "taskbar:" << info.geometry
-             << "startButtonCenter:" << info.startButtonCenter;
+    if (qEnvironmentVariableIsSet("UKUI_KAISHICAIDAN_DEBUG"))
+        qDebug() << "[StartButton] overlay geometry:" << geometry()
+                 << "taskbar:" << info.geometry
+                 << "startButtonCenter:" << info.startButtonCenter;
     applyX11Immunity();
 }
 
@@ -262,7 +263,7 @@ void StartButton::showContextMenu(const QPoint &pos)
         m_contextMenu = nullptr;
     }
 
-    m_contextMenu = new QMenu();
+    m_contextMenu = new QMenu(this);
     m_contextMenu->setAttribute(Qt::WA_DeleteOnClose);
     StartMenuTheme::applySharedMenuStyle(m_contextMenu);
 
