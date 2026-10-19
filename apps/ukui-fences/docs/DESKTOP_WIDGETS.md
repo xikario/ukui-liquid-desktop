@@ -1,6 +1,6 @@
 # 桌面小组件：时钟、活动、音乐与日历
 
-本文说明四类 LiquidDesklet 卡片；另见 [系统监视](SYSTEM_MONITOR.md) 和 [智能空间](SMART_SPACE.md)。它们都由 Fences 承载，无需安装 Quickshell 或替换系统桌面。
+本文说明四类 LiquidDesklet 卡片；另见 [系统监视](SYSTEM_MONITOR.md) ；原智能空间现为[独立AI空间](https://github.com/xikario/ai-space)。这四类卡片及系统监视由 Fences 承载，无需安装 Quickshell 或替换系统桌面。
 
 设计参考 NextKde DeskCenter，来源提交和许可见 [NextKde 小组件来源](../vendor/nextkde-desklets/README.md) 和 [第三方声明](../../../THIRD_PARTY_NOTICES.md)。
 

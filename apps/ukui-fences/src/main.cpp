@@ -17,6 +17,7 @@
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QDBusMessage>
 #include "DesktopCanvas.h"
+#include "AiSpaceClient.h"
 #include "StartupWallpaperCover.h"
 #include "MenuStyle.h"
 #include "DesktopLayerWatch.h"
@@ -98,7 +99,7 @@ void setupTrayIcon(DesktopCanvas &canvas, const QIcon &icon)
                      &canvas, &DesktopCanvas::showSystemMonitorWidget);
 
     auto *actSmartSpace = menu->addAction(
-        QIcon::fromTheme("folder-saved-search"), "显示智能空间");
+        QIcon::fromTheme("folder-saved-search"), "打开AI空间");
     QObject::connect(actSmartSpace, &QAction::triggered,
                      &canvas, &DesktopCanvas::showSmartSpaceWidget);
 
@@ -144,6 +145,7 @@ int main(int argc, char *argv[])
     app.setWindowIcon(icon);
 
     const QStringList args = app.arguments();
+    if(args.contains("--smart-space"))return AiSpaceClient::openStandalone()?0:1;
     const QString existingMethod = args.contains("--quit") ? QStringLiteral("quitApp")
         : args.contains("--settings") ? QStringLiteral("showUnifiedSettings")
         : args.contains("--hide") ? QStringLiteral("hideFences")

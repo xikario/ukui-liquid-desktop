@@ -38,7 +38,9 @@ static int runMusicTest(const QString &root){
         check(!player->connected() && !play->isEnabled() && !player->progressActive(),"offline card disables playback without running a progress timer");
         check(!card->notesAnimating(),"offline music card has no animation timer");
         check(bus.registerObject(object,&fixture,QDBusConnection::ExportAllSlots|QDBusConnection::ExportAllProperties),"mock MPRIS object registered");
-        check(bus.registerService(name),"mock Strawberry owner registered");settle(300);
+        check(bus.registerService(name),"mock Strawberry owner registered");
+        waitMusic([&]{return player->connected() && !player->cover().isNull()
+            && player->length()==180000000 && seek->isEnabled();});
         check(player->connected() && player->title()=="测试歌曲" && player->artist()=="测试歌手","late player startup populates track metadata through real D-Bus");
         check(!player->cover().isNull() && player->length()==180000000 && seek->isEnabled(),"cover duration and seek capabilities load");
         settle(120);const int builds=card->materialBuilds();

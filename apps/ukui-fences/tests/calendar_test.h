@@ -12,8 +12,14 @@ static int runCalendarTest(const QString &root){
     const QString today=QDate::currentDate().toString(Qt::ISODate);
     check(sql(QString("INSERT INTO Schedule VALUES('one','%1','%1','17','30','系统待办测试','不重复',0,0,'','');").arg(today)),"native schedule fixture inserted");
     {
-        DesktopCanvas canvas;canvas.show();canvas.setCalendarWidgetVisible(true);settle(600);
-        auto *calendar=canvas.findChild<CalendarDesklet *>();check(calendar && calendar->scheduleCount()==1,"calendar displays existing system schedules");if(!calendar)return 1;
+        DesktopCanvas canvas;bool wallpaperReady=false;
+        QObject::connect(&canvas,&DesktopCanvas::initialWallpaperReady,&canvas,[&]{wallpaperReady=true;});
+        canvas.show();canvas.setCalendarWidgetVisible(true);
+        for(int waited=0;waited<5000 && !wallpaperReady;waited+=20)settle(20);
+        settle(100);
+        auto *calendar=canvas.findChild<CalendarDesklet *>();
+        for(int waited=0;calendar && waited<3000 && calendar->scheduleCount()!=1;waited+=50)settle(50);
+        check(calendar && calendar->scheduleCount()==1,"calendar displays existing system schedules");if(!calendar)return 1;
         auto *list=calendar->findChild<QListWidget *>("calendarAgenda");check(list && list->count()==1 && list->item(0)->text().contains("系统待办测试"),"agenda shows native task title and time");
         canvas.setClockWidgetVisible(true);canvas.setActivityWidgetVisible(true);canvas.setMusicWidgetVisible(true);settle(100);
         check(canvas.findChildren<QPushButton *>("deskletClose").isEmpty(),"all new desklets have no close X button");
@@ -27,14 +33,16 @@ static int runCalendarTest(const QString &root){
         QApplication::sendEvent(calendar,&menuEvent);
         check(foundSync,"calendar context menu exposes enabled holiday synchronization action");
         const int builds=calendar->materialBuilds();
-        check(sql(QString("INSERT INTO Schedule VALUES('two','%1','%1','18','0','新增待办','不重复',0,0,'','');").arg(today)),"external system calendar update written");settle(600);
+        check(sql(QString("INSERT INTO Schedule VALUES('two','%1','%1','18','0','新增待办','不重复',0,0,'','');").arg(today)),"external system calendar update written");
+        for(int waited=0;waited<3000 && calendar->scheduleCount()!=2;waited+=50)settle(50);
         check(calendar->scheduleCount()==2 && calendar->materialBuilds()==builds,"database watcher updates tasks without rebuilding glass");
         QFile::copy(database,database+".replacement");
         check(sql("DELETE FROM Schedule WHERE id='two';"),"native deletion fixture applied");
         // Reload is debounced and read by an async helper process; poll instead of a fixed sleep.
         for(int waited=0;waited<3000 && calendar->scheduleCount()!=1;waited+=50)settle(50);
         check(calendar->scheduleCount()==1,"native calendar deletion is reflected");
-        QFile::remove(database);QFile::rename(database+".replacement",database);settle(600);
+        QFile::remove(database);QFile::rename(database+".replacement",database);
+        for(int waited=0;waited<3000 && calendar->scheduleCount()!=2;waited+=50)settle(50);
         check(calendar->scheduleCount()==2,"atomic database replacement reattaches the file watch");
         calendar->selectDate(QDate::currentDate().addDays(1));check(!list->item(0)->data(Qt::UserRole).isValid(),"date selection filters native schedules");
         calendar->findChild<QPushButton *>("calendarAll")->click();check(list->count()==2,"all tasks view restores the native agenda");

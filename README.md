@@ -1,6 +1,6 @@
 # UKUI Liquid Desktop
 
-面向银河麒麟 / UKUI X11 的 Qt 5 液态桌面组件集合：开始菜单、桌面分区与六类小组件、系统任务栏主题。各应用可以分别构建和启用，构建源码不会自动改变当前桌面。
+面向银河麒麟 / UKUI X11 的 Qt 5 液态桌面组件集合：开始菜单、桌面分区与五类小组件、系统任务栏主题。各应用可以分别构建和启用，构建源码不会自动改变当前桌面。
 
 **当前版本：v0.7.0 · 液态材质、视频壁纸与办公桌面升级（2026-10-08）**。Fences 及其关于页版本为 0.7.0；开始菜单和面板保留各自的组件版本号。
 
@@ -10,15 +10,15 @@
 
 | 产品 | 可以做什么 | 使用说明 |
 | --- | --- | --- |
-| **Fences 桌面** | 桌面文件分组、分区折叠、图标整理、文件操作与撤回、六类桌面小组件、统一设置 | [Fences 首页](apps/ukui-fences/README.md) · [桌面右键与设置](apps/ukui-fences/docs/DESKTOP_MENU.md) |
+| **Fences 桌面** | 桌面文件分组、分区折叠、图标整理、文件操作与撤回、五类桌面小组件、统一设置 | [Fences 首页](apps/ukui-fences/README.md) · [桌面右键与设置](apps/ukui-fences/docs/DESKTOP_MENU.md) |
 | **开始菜单 V2** | 开始按钮和 Win 键打开菜单、固定应用、搜索、最近文件、主题及安装来源查询 | [开始菜单首页](apps/ukui-kaishicaidan-v2/README.md) |
 | **任务栏液态主题** | 为现有系统任务栏添加液态底板、菜单与提示，调整清晰度、强度和壁纸跟随 | [任务栏首页](apps/ukui-panel-liquid/README.md) |
 
-Fences 的小组件都运行在同一个 Fences 进程中；无需另装六个独立应用。桌面空白处右键 → **桌面小组件** 控制显示，**Fences 设置 → 桌面小组件** 分别设置当前显示和随 Fences 启动。
+Fences 的五类小组件运行在同一个 Fences 进程中。原智能空间已拆为独立的 [AI空间](https://github.com/xikario/ai-space)，有自己的配置、索引、进程与登录启动项。桌面空白处右键 → **桌面小组件** 控制显示，**Fences 设置 → 桌面小组件** 分别设置当前显示和随 Fences 启动。
 
 | 小组件 | 主要功能 | 操作指南 |
 | --- | --- | --- |
-| 智能空间 | 本地文件索引、正文检索、文件夹浏览、按需预览与本地知识库 | [智能空间](apps/ukui-fences/docs/SMART_SPACE.md) · [知识库与 CLI](apps/ukui-fences/docs/SMART_SPACE_KNOWLEDGE.md) |
+
 | 系统监视 | CPU、内存、磁盘、进程趋势；可选 API 诊断；结构化详情、复制和导出 | [系统监视与诊断](apps/ukui-fences/docs/SYSTEM_MONITOR.md) |
 | 时钟与倒计时 | 时间、日期、倒计时预设、暂停继续与到点通知 | [时钟指南](apps/ukui-fences/docs/DESKTOP_WIDGETS.md#时钟与倒计时) |
 | 活动统计 | 开机时长与应用前台停留时间，可暂停记录 | [活动统计指南](apps/ukui-fences/docs/DESKTOP_WIDGETS.md#活动统计) |
@@ -26,6 +26,8 @@ Fences 的小组件都运行在同一个 Fences 进程中；无需另装六个�
 | 日历与系统待办 | 月历、农历、调休、只读展示系统日历事项 | [日历指南](apps/ukui-fences/docs/DESKTOP_WIDGETS.md#日历与系统待办) |
 
 音乐支持手动打开一次客户端后自动识别启动信息；多个已启用客户端同时运行时优先接入正在播放的，其次暂停的；同状态选择最后启动的。播放状态变化或客户端退出后自动重新选择。系统监视诊断提供只读建议与命令复制，不执行模型返回的命令。
+
+原仓库保留「打开AI空间」及旧 D-Bus / `--smart-space` 转发入口；不再内置索引器和 OCR。迁移与验证见 [拆分说明](docs/AI_SPACE_EXTRACTION_20261019.md)。
 
 ## 构建、安装与恢复
 
@@ -58,7 +60,7 @@ cmake --build apps/ukui-panel-liquid/build -j2
 
 ## 数据与视觉效果边界
 
-- 智能空间界面使用本地索引和知识库，不提供远程模型重排或多空间管理；显式配置的 Provider 可调用本机程序或远程服务。外部 Agent Skill 需另行安装。
+- AI空间的本地索引、知识库、Provider 与外部 Agent 边界由[独立项目](https://github.com/xikario/ai-space)维护；Fences 不再运行这些任务。
 - 系统监视的本地采样不需 API；主动发起智能诊断时，采样数据会发送到所配置的服务。密钥由用户提供，优先保存在系统 Secret Service 密钥环。
 - 音乐通过会话 MPRIS 接口控制用户自己的播放器；网络封面按元数据下载。日历只读系统待办，活动统计不记录窗口标题或输入内容。
 - 开始菜单打开时取背景快照；任务栏和桌面小组件以缓存壁纸绘制。可选窗口透视由合成器显示下层，不对其他窗口做实时折射。

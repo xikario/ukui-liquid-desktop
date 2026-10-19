@@ -3,6 +3,7 @@ project(ukui-fences VERSION 0.7.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CTest)
+set(AI_SPACE_TEST_BINARY "" CACHE FILEPATH "Optional standalone AI Space binary for extraction integration tests")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -72,7 +73,7 @@ add_executable(ukui-fences
     src/FileClipboard.cpp
     src/SystemMonitor.cpp
     src/MonitorDiagnosisDialog.cpp
-    src/SmartSpaceWidget.cpp
+    src/AiSpaceClient.cpp
     src/MenuStyle.h
     resources.qrc
     ../../shared/desktop-launch/DesktopLaunchCompat.cpp
@@ -82,8 +83,7 @@ target_compile_definitions(ukui-fences PRIVATE
     UKUI_FENCES_VIDEO_TRIAL_PATH="${CMAKE_SOURCE_DIR}/scripts/video_wallpaper_trial.py"
     UKUI_FENCES_CREDENTIAL_STORE_PATH="${CMAKE_SOURCE_DIR}/scripts/credential_store.py"
     UKUI_FENCES_CALENDAR_READER_PATH="${CMAKE_SOURCE_DIR}/scripts/calendar_snapshot.py"
-    UKUI_FENCES_SMART_INDEXER_PATH="${CMAKE_SOURCE_DIR}/scripts/smart_space_indexer.py"
-    UKUI_FENCES_KNOWLEDGE_WORKER_PATH="${CMAKE_SOURCE_DIR}/scripts/smart_space_knowledge.py")
+)
 
 target_include_directories(ukui-fences PRIVATE
     src/
@@ -114,22 +114,10 @@ if(BUILD_TESTING)
     set_tests_properties(desktop_open_lifecycle PROPERTIES TIMEOUT 15)
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
-        add_test(NAME smart_space_indexer
-            COMMAND ${Python3_EXECUTABLE} -m unittest -v
-                    tests/test_smart_space_indexer.py)
-        set_tests_properties(smart_space_indexer PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            TIMEOUT 180)
         add_test(NAME calendar_holiday_sync COMMAND ${Python3_EXECUTABLE} -m unittest -v tests/test_holiday_sync.py)
         add_test(NAME video_wallpaper_geometry COMMAND ${Python3_EXECUTABLE} -m unittest -v tests/test_video_wallpaper_trial.py)
         set_tests_properties(video_wallpaper_geometry PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 10)
         set_tests_properties(calendar_holiday_sync PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 30)
-        add_test(NAME smart_space_knowledge
-            COMMAND ${Python3_EXECUTABLE} -m unittest -v
-                    tests/test_smart_space_knowledge.py)
-        set_tests_properties(smart_space_knowledge PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            TIMEOUT 180)
     endif()
 
     find_program(XVFB_RUN_EXECUTABLE xvfb-run)
@@ -153,26 +141,6 @@ if(BUILD_TESTING)
         endforeach()
         set_tests_properties(fence_glass_cpu PROPERTIES ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1")
         set_tests_properties(fence_glass_gpu PROPERTIES SKIP_RETURN_CODE 77)
-        add_test(NAME smart_space_wallpaper_sync
-            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
-                    ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test>
-                    --wallpaper-only)
-        set_tests_properties(smart_space_wallpaper_sync PROPERTIES
-            TIMEOUT 45 LABELS "integration;ui;glass;wallpaper")
-        foreach(OPTICS_SCALE 1 1.25 1.5 2)
-            add_test(NAME smart_space_optics_${OPTICS_SCALE}
-                COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24 -dpi 96"
-                    ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --smart-optics-only)
-            set_tests_properties(smart_space_optics_${OPTICS_SCALE} PROPERTIES TIMEOUT 35
-                ENVIRONMENT "QT_SCALE_FACTOR=${OPTICS_SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_FENCES_GLASS_NO_GL=1;UKUI_FENCES_OPTICS_ARTIFACTS=${CMAKE_BINARY_DIR}/artifacts/smart-shared-glass-20261015/scale-${OPTICS_SCALE}"
-                LABELS "integration;ui;glass")
-        endforeach()
-        add_test(NAME smart_space_shared_glass_gpu
-            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24 -dpi 96"
-                ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --smart-optics-only)
-        set_tests_properties(smart_space_shared_glass_gpu PROPERTIES TIMEOUT 45 SKIP_RETURN_CODE 77
-            ENVIRONMENT "QT_SCALE_FACTOR=1;QT_SCREEN_SCALE_FACTORS=1;UKUI_FENCES_SMART_REQUIRE_GL=1;UKUI_FENCES_OPTICS_ARTIFACTS=${CMAKE_BINARY_DIR}/artifacts/smart-shared-glass-20261015/gpu"
-            LABELS "integration;ui;glass;gpu")
         add_test(NAME desktop_selection_drag
             COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
                     ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test>
@@ -244,7 +212,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:fence-glass-test> --clipboard-only)
         set_tests_properties(desktop_clipboard_async PROPERTIES TIMEOUT 30 LABELS "integration;files")
         foreach(SCALE 1 1.5 2)
-            foreach(KIND appearance icon-appearance icon-damage smart-interaction smart-space-position settings-center fence-settings menu-shortcut)
+            foreach(KIND appearance icon-appearance icon-damage settings-center fence-settings menu-shortcut)
                 add_test(NAME desktop_${KIND}_${SCALE}
                     COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
                         ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --${KIND}-only)
@@ -259,58 +227,6 @@ if(BUILD_TESTING)
                     $<TARGET_FILE:ukui-fences>)
         set_tests_properties(desktop_screen_change PROPERTIES
             TIMEOUT 30 LABELS "integration;ui;screen")
-        add_test(NAME smart_space_ui_smoke
-            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
-                    ${DBUS_RUN_SESSION_EXECUTABLE} --
-                    ${CMAKE_SOURCE_DIR}/tests/run_smart_space_ui_smoke.sh
-                    $<TARGET_FILE:ukui-fences>)
-        set_tests_properties(smart_space_ui_smoke PROPERTIES
-            SKIP_RETURN_CODE 77
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            TIMEOUT 120
-            LABELS "integration;ui")
-        add_test(NAME smart_space_policy_smoke
-            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
-                    ${DBUS_RUN_SESSION_EXECUTABLE} --
-                    ${CMAKE_SOURCE_DIR}/tests/run_smart_space_policy_smoke.sh
-                    $<TARGET_FILE:ukui-fences>)
-        set_tests_properties(smart_space_policy_smoke PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            TIMEOUT 60
-            LABELS "integration;ui;policy")
-        add_test(NAME smart_space_new_features_smoke
-            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
-                    ${DBUS_RUN_SESSION_EXECUTABLE} --
-                    ${CMAKE_SOURCE_DIR}/tests/run_smart_space_new_features_smoke.sh
-                    $<TARGET_FILE:ukui-fences>)
-        set_tests_properties(smart_space_new_features_smoke PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            TIMEOUT 90
-            LABELS "integration;ui;theme")
-        add_test(NAME smart_space_glass_smoke
-            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
-                    ${DBUS_RUN_SESSION_EXECUTABLE} --
-                    ${CMAKE_SOURCE_DIR}/tests/run_smart_space_glass_smoke.sh
-                    $<TARGET_FILE:ukui-fences>)
-        set_tests_properties(smart_space_glass_smoke PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            TIMEOUT 60
-            LABELS "integration;ui;theme;glass")
-        add_test(NAME smart_space_resource_benchmark
-            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
-                    ${DBUS_RUN_SESSION_EXECUTABLE} --
-                    ${CMAKE_SOURCE_DIR}/tests/run_smart_space_resource_benchmark.sh
-                    $<TARGET_FILE:ukui-fences>)
-        set_tests_properties(smart_space_resource_benchmark PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            TIMEOUT 180
-            LABELS "integration;resource")
-        add_test(NAME smart_space_dbus_dialogs
-            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
-                    ${DBUS_RUN_SESSION_EXECUTABLE} --
-                    ${CMAKE_SOURCE_DIR}/tests/run_smart_space_dbus_dialog_smoke.sh
-                    $<TARGET_FILE:ukui-fences>)
-        set_tests_properties(smart_space_dbus_dialogs PROPERTIES TIMEOUT 30 LABELS "integration;dbus")
         find_program(GNOME_KEYRING_EXECUTABLE gnome-keyring-daemon)
         if(GNOME_KEYRING_EXECUTABLE AND Python3_Interpreter_FOUND)
             add_test(NAME credential_store
@@ -326,9 +242,7 @@ endif()
 install(TARGETS ukui-fences RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS packaging/ukui-fences-launcher DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS scripts/video_wallpaper_trial.py DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME ukui-fences-video-trial)
-install(PROGRAMS scripts/smart_space_indexer.py
-                 scripts/credential_store.py
-                 scripts/smart_space_knowledge.py
+install(PROGRAMS scripts/credential_store.py
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/ukui-fences)
 install(FILES packaging/ukui-fences.desktop packaging/ukui-fences-settings.desktop packaging/ukui-fences-monitor.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
@@ -344,8 +258,7 @@ install(DIRECTORY assets/fence-icons/
         FILES_MATCHING PATTERN "*.svg")
 install(FILES packaging/ukui-fences-autostart.desktop
         DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/xdg/autostart)
-install(FILES README.md docs/SMART_SPACE.md docs/SMART_SPACE_TEST_REPORT.md
-              docs/SMART_SPACE_KNOWLEDGE.md docs/FENCE_LIQUID_GLASS.md docs/DESKTOP_MENU.md docs/DESKTOP_WIDGETS.md
+install(FILES README.md docs/FENCE_LIQUID_GLASS.md docs/DESKTOP_MENU.md docs/DESKTOP_WIDGETS.md
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
 install(FILES vendor/nextkde-glass/LICENSE vendor/nextkde-glass/README.md
         DESTINATION ${CMAKE_INSTALL_DOCDIR}/nextkde-glass)
@@ -364,11 +277,6 @@ if(TARGET fence-glass-test)
             ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --startup-wallpaper-only)
     set_tests_properties(desktop_startup_wallpaper PROPERTIES TIMEOUT 30
         ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1" LABELS "integration;ui;wallpaper")
-    add_test(NAME smart_space_startup_async
-        COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
-            ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --smart-space-startup-only)
-    set_tests_properties(smart_space_startup_async PROPERTIES TIMEOUT 30
-        ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1" LABELS "integration;ui;async")
     target_link_libraries(fence-glass-test PRIVATE ukui-liquid-popup)
     target_include_directories(fence-glass-test PRIVATE "${UKUI_LIQUID_POPUP_ROOT}/tests")
 endif()
@@ -431,6 +339,16 @@ endif()
 
 install(FILES scripts/chinese_calendar.py scripts/holiday_sync.py scripts/china_holidays_2026.json DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES vendor/holiday-cn/LICENSE vendor/holiday-cn/README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/ukui-fences/holiday-cn)
+
+if(BUILD_TESTING AND AI_SPACE_TEST_BINARY AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
+    add_executable(ai-space-client-test tests/ai_space_client_test.cpp src/AiSpaceClient.cpp)
+    target_include_directories(ai-space-client-test PRIVATE src)
+    target_link_libraries(ai-space-client-test PRIVATE Qt5::Core Qt5::DBus)
+    add_test(NAME ai_space_bridge COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
+        ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:ai-space-client-test>
+        ${AI_SPACE_TEST_BINARY} $<TARGET_FILE:ukui-fences>)
+    set_tests_properties(ai_space_bridge PROPERTIES TIMEOUT 60)
+endif()
 
 if(TARGET fence-glass-test)
     foreach(MONITOR_SCALE 1 1.5 2)

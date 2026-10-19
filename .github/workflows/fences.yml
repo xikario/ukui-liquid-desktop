@@ -24,7 +24,7 @@ jobs:
           cmake --build build/fences -j2
       - name: Python, menu, file operation and HiDPI regressions
         working-directory: build/fences
-        run: ctest --output-on-failure -R '^smart_space_(indexer|knowledge)$|^liquid-popup|^liquid-material|^desktop_(appearance|icon-appearance|icon-damage|smart-interaction|folder_drop_undo|clipboard|review_async|monitor_placement|startup_wallpaper)|^fence_glass_cpu$|^calendar_holiday_sync$'
+        run: ctest --output-on-failure -R '^liquid-popup|^liquid-material|^desktop_(appearance|icon-appearance|icon-damage|folder_drop_undo|clipboard|review_async|monitor_placement|startup_wallpaper)|^fence_glass_cpu$|^calendar_holiday_sync$'
       - name: Appearance lifecycle regression
         working-directory: build/fences
         run: ctest --output-on-failure --repeat until-fail:10 -R '^desktop_appearance_1$'
@@ -33,7 +33,7 @@ jobs:
         run: ctest --output-on-failure -R '^desktop_(monitor_diagnosis|music|settings-center)_'
       - name: Window lifecycle, pointer effects and startup positioning
         working-directory: build/fences
-        run: ctest --output-on-failure -R '^liquid-(dialog|controls|buttons|image-picker)|^desktop_selection_drag|^desktop_(pointer_effect|fence-settings|menu-shortcut|smart-space-position|desklets)_'
+        run: ctest --output-on-failure -R '^liquid-(dialog|controls|buttons|image-picker)|^desktop_selection_drag|^desktop_(pointer_effect|fence-settings|menu-shortcut|desklets)_'
       - uses: actions/upload-artifact@v4
         if: always()
         with:

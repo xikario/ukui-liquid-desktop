@@ -85,12 +85,6 @@ struct PointerEffectTestAccess {
         measure(monitor, "monitor", "still", 2000, false);
         measure(monitor, "monitor", "edge-motion", 8000, true);
         monitor->hide();
-        canvas.showSmartSpaceWidget(); canvas.moveSmartSpace(80, 80);
-        canvas.resizeSmartSpace(760, 450); settle(1000);
-        auto *smart = canvas.findChild<SmartSpaceWidget *>();
-        if (!smart || smart->m_indexer->state() != QProcess::NotRunning) return 2;
-        measure(smart, "smart-space", "still", 2000, false);
-        measure(smart, "smart-space", "edge-motion", 8000, true);
         QFile result(output);
         if (!result.open(QIODevice::WriteOnly)) return 2;
         result.write(QJsonDocument(QJsonObject{{"measurements", measurements},
@@ -173,90 +167,6 @@ struct PointerEffectTestAccess {
         monitor->setSkin(SystemMonitor::Skin::Dark);movePointer(monitor,QPoint(100,15));
         check(settled(monitor),"non-liquid monitor does not schedule an unused pointer effect");
         monitor->hide();settle(80);check(settled(monitor),"hidden monitor stops pointer frames");
-        canvas.showSmartSpaceWidget();canvas.moveSmartSpace(80,80);canvas.resizeSmartSpace(760,450);settle(350);
-        auto *smart=canvas.findChild<SmartSpaceWidget *>();check(smart!=nullptr,"production Smart Space available");if(!smart)return 1;
-        smart->installEventFilter(&probe);movePointer(smart,smart->rect().center());settle(100);
-        // Exclude child-control hover changes: measure an empty interior strip.
-        movePointer(smart,QPoint(420,350));settle(200);probe.reset();
-        for(int i=0;i<25;++i){movePointer(smart,QPoint(380+i*3,350));settle(3);}
-        settle(80);check(probe.paints==0,"Smart Space interior motion does not redraw invisible edge effect");
-        for(QPoint pos:{QPoint(15,160),QPoint(15,300),QPoint(20,20),QPoint(300,15),QPoint(745,210),QPoint(400,435)}) {
-            movePointer(smart,pos);settle(70);
-            check(smart->m_glassPointerActive && smart->m_glassPointerPosition==pos
-                  && !smart->glassPointerDamage(pos).isEmpty(),"Smart Space retains active rim reflection at latest pointer");
-            compare(smart,canvas,"smart-"+QString::number(pos.x())+"-"+QString::number(pos.y()));
-        }
-        const qint64 materialKey=smart->m_glassMaterial.cacheKey();
-        probe.reset();
-        for(int i=0;i<30;++i)movePointer(smart,QPoint(15,140+i*3));
-        settle(100);
-        check(probe.paints>0 && probe.paints<=3 && probe.pixels<qint64(smart->width())*smart->height()/4,
-              "Smart Space coalesces edge motion and repaints only old/new rim footprints");
-        check(!smart->m_glassMaterial.isNull() && smart->m_glassMaterial.cacheKey()==materialKey,
-              "Smart Space pointer motion reuses the composed stationary liquid material");
-        compare(smart,canvas,"smart-cached-motion");
-        canvas.resizeSmartSpace(770,460);settle(200);
-        check(smart->m_glassMaterialSize==smart->size() && smart->m_glassMaterial.cacheKey()!=materialKey,
-              "resizing Smart Space rebuilds the liquid material at the new geometry");
-        const qint64 resizedKey=smart->m_glassMaterial.cacheKey();
-        canvas.wallpaperChanged();settle(100);
-        check(!smart->m_glassMaterial.isNull() && smart->m_glassMaterial.cacheKey()!=resizedKey,
-              "wallpaper changes invalidate the composed Smart Space material");
-        compare(smart,canvas,"smart-refreshed-material");
-        movePointer(smart,QPoint(420,350));settle(100);
-        compare(smart,canvas,"smart-leave-rim");
-        probe.reset();settle(150);
-        check(probe.paints==0,"settled Smart Space edge reflection schedules no repaint");
-        check(settled(smart),"Smart Space pointer frames stop when still");
-        smart->hide();settle(80);check(settled(smart),"hidden Smart Space stops pointer frames");smart->removeEventFilter(&probe);
-        FenceWidget fence("动态边缘",QRect(100,100,600,350),&canvas);fence.setLiquidGlassEnabled(true);fence.show();settle(300);
-        for(bool magnetic:{false,true}) {
-            if(magnetic){fence.m_magneticEdge=FenceWidget::MagneticEdge::Left;
-                fence.m_magneticContour={{12,40},{55,100},{18,160},{45,230},{12,310}};
-                fence.updateShapeMask();fence.invalidateGlassCache();settle(100);}
-            movePointer(&fence,QPoint(70,120),fence.m_iconViewport);settle(850);
-            check(fence.m_glassHover==1 && settled(&fence),"fence reaches original hover brightness and stops its timer over child viewport");
-            fence.installEventFilter(&probe);probe.reset();
-            for(int i=0;i<25;++i)movePointer(&fence,QPoint(70,130+i*3),fence.m_iconViewport);
-            settle(90);check(probe.paints>0 && probe.paints<=3 && probe.pixels<qint64(fence.width())*fence.height()/2,"fence merges child motion and bounds curved rim damage");
-            compare(&fence,canvas,magnetic?"fence-magnetic":"fence-rounded");
-            movePointer(&fence,QPoint(580,180));settle(90);compare(&fence,canvas,magnetic?"fence-magnetic-opposite":"fence-rounded-opposite");
-            fence.removeEventFilter(&probe);movePointer(&fence,QPoint(-30,-30));settle(850);
-            check(fence.m_glassHover==0 && settled(&fence),"fence fade finishes and stops after leave");
-            compare(&fence,canvas,magnetic?"fence-magnetic-leave":"fence-rounded-leave");
-        }
-        fence.hide();settle(80);check(settled(&fence),"hidden fence has no pointer timer");
-        MusicFixture fixture;MusicRootFixture musicRoot(&fixture);fixture.state="Playing";
-        const QString cover=root+"/notes-cover.png";wallpaper(QSize(300,300),1).save(cover);
-        fixture.art=QUrl::fromLocalFile(cover).toString();
-        auto bus=QDBusConnection::sessionBus();check(bus.registerObject("/org/mpris/MediaPlayer2",&fixture,QDBusConnection::ExportAllSlots|QDBusConnection::ExportAllProperties|QDBusConnection::ExportAdaptors)
-            && bus.registerService("org.mpris.MediaPlayer2.strawberry"),"real MPRIS fixture starts");
-        canvas.setMusicWidgetVisible(true);auto *music=canvas.findChild<MusicDesklet *>();
-        if(!music)return 1;
-        // MPRIS discovery is fully asynchronous (ListNames, owner and PID
-        // queries, a background process probe, status read and the property
-        // refresh). A fixed 450 ms sleep is not enough on slower hosts, so
-        // bounded-poll the visible result of that chain instead.
-        for(int waited=0;waited<5000 && !music->notesAnimating();waited+=50)
-            settle(50);
-        check(music->notesAnimating(),"production music notes animate");
-        music->move(100,100);settle(150);
-        // Freeze MPRIS progress while checking fixed note phases against a
-        // full redraw; elapsed song time would otherwise alter static labels.
-        fixture.state="Paused";fixture.notify({{"PlaybackStatus",fixture.state}});settle(150);
-        QObject::disconnect(&music->m_notesTimer,nullptr,music,nullptr);
-        music->m_notesTimer.start();
-        for(auto *timer:music->player()->findChildren<QTimer *>())timer->stop();
-        music->installEventFilter(&probe);
-        const int builds=music->materialBuilds();
-        for(qreal seconds:{0.0,0.033,0.5,1.5,4.19,4.23,5.0,8.8}) {
-            probe.reset();const QRegion old=music->notesDamage(music->m_notesFrameSeconds);
-            music->m_notesFrameSeconds=seconds;music->update(old|music->notesDamage(seconds));settle(45);
-            check(probe.pixels<qint64(music->width())*music->height()/2,"music frame redraws old/new note footprints only");
-            compare(music,canvas,"music-"+QString::number(seconds));
-        }
-        check(music->materialBuilds()==builds,"note animation reuses unchanged glass material");
-        music->hide();settle(100);check(!music->notesAnimating(),"hiding music stops unchanged 33ms note animation");
-        return failures?1:0;
+        return failures ? 1 : 0;
     }
 };

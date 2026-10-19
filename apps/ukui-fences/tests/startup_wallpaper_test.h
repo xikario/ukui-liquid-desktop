@@ -90,25 +90,11 @@ static int runStartupWallpaperTest(const QString &root)
                 && std::all_of(widgets.begin(), widgets.end(), [](LiquidDesklet *widget) { return !widget->isHidden(); });
         });
         canvas.activateOnSessionStartup();
-        bool observed = false;
         QElapsedTimer timer; timer.start();
-        while (timer.elapsed()<5000 && !observed) {
-            settle(10);
-            if (canvas.smartSpaceVisible()) {
-                check(canvas.clockWidgetVisible() && canvas.activityWidgetVisible()
-                      && canvas.musicWidgetVisible() && canvas.calendarWidgetVisible(),
-                      "all four auto-start widgets exist before Smart Space finishes startup");
-                observed = true;
-            }
-        }
-        check(observed, "session startup restores Smart Space after the small widgets");
+        while (!canvas.isVisible() && timer.elapsed()<5000) settle(20);
+        check(canvas.isVisible(), "desktop starts without waiting for an independent AI Space process");
         check(widgetsReadyBeforeMap, "all four light widgets are restored before the desktop maps");
-        // Keep exercising the default-hidden entry as created during login.
-        settle(500);
-        canvas.revealSmartSpaceFromEdge(); settle(250);
-        check(!canvas.smartSpaceEdgeHidden(), "first reveal works after automatic login collapse");
-        canvas.hideSmartSpaceToEdge(); settle(250);
-        check(canvas.smartSpaceEdgeHidden(), "first retract works after automatic login collapse");
+        check(!canvas.smartSpaceVisible(), "legacy smartSpace autoStart does not launch the extracted application");
     }
     // A missing wallpaper must release the same material gate using the gradient.
     {

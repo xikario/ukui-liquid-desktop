@@ -4,7 +4,7 @@
 
 所有命令默认从**仓库根目录**执行。主桌面组件安装到用户目录，不需要 sudo；构建不会自动安装或重启。已有单实例仍使用旧二进制，升级时先保存工作与设置草稿、正常退出，再重新启动。
 
-## Fences 与六类小组件
+## Fences 与五类小组件
 
 ### 安装和启动
 
@@ -15,7 +15,7 @@ sh apps/ukui-fences/packaging/install-user.sh
 
 脚本默认使用 `apps/ukui-fences/build`，可将其他构建目录作为第一个参数；安装前缀默认 `~/.local`，可用 `UKUI_FENCES_USER_PREFIX` 更改。脚本安装程序、启动器、预览及索引/知识库/日历资源，写入用户应用菜单入口和 `~/.config/autostart/ukui-fences.desktop`。会话 PATH 应包含对应安装前缀的 bin 目录。
 
-六类小组件是否随 Fences 启动由 **Fences 设置 → 桌面小组件**分别控制。显示开关与自启动开关独立；音乐不会主动启动播放器，智能空间打开不自动扫描。配置与布局路径见 [Fences 首页](../apps/ukui-fences/README.md#启动器与配置路径)。
+五类小组件是否随 Fences 启动由 **Fences 设置 → 桌面小组件**分别控制。显示开关与自启动开关独立；音乐不会主动启动播放器。AI空间需从[独立仓库](https://github.com/xikario/ai-space)安装，自行管理登录启动。配置与布局路径见 [Fences 首页](../apps/ukui-fences/README.md#启动器与配置路径)。
 
 ### 升级和回退
 

@@ -66,9 +66,8 @@ LiquidDesklet::LiquidDesklet(DesktopCanvas *canvas, const QString &key, const QS
         QList<QRect> occupied;
         for(auto *child:canvas->findChildren<QWidget *>(QString(),Qt::FindDirectChildrenOnly)) {
             if(child==this || !child->isVisible() || child->isWindow())continue;
-            if(child->inherits("SmartSpaceWidget") && canvas->smartSpaceEdgeHidden())continue;
             if(child->inherits("FenceWidget") || child->inherits("SystemMonitor")
-                || child->inherits("SmartSpaceWidget") || child->inherits("LiquidDesklet")
+                || child->inherits("LiquidDesklet")
                 || child->inherits("DesktopIcon"))occupied.append(child->geometry().adjusted(-12,-12,12,12));
         }
         auto free=[&](QPoint pos){const QRect candidate(pos,size());if(!area.contains(candidate))return false;
@@ -145,8 +144,7 @@ QPoint LiquidDesklet::boundedPosition(const QPoint &position, bool snap) const {
     for(auto *peer:m_canvas->findChildren<QWidget *>(QString(),Qt::FindDirectChildrenOnly)) {
         if(peer==this || !peer->isVisible())continue;
         if(!(peer->inherits("LiquidDesklet") || peer->inherits("FenceWidget")
-             || peer->inherits("SystemMonitor") || peer->inherits("SmartSpaceWidget")))continue;
-        if(peer->inherits("SmartSpaceWidget") && m_canvas->smartSpaceEdgeHidden())continue;
+             || peer->inherits("SystemMonitor")))continue;
         const QRect target(peer->isWindow()?m_canvas->mapFromGlobal(peer->mapToGlobal(QPoint())):peer->pos(),peer->size());
         const int left=target.x(),right=target.x()+target.width();
         const int top=target.y(),bottom=target.y()+target.height();

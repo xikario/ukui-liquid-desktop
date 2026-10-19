@@ -69,11 +69,13 @@ static int runAppearanceTest(const QString &root)
         check(managerIndex>1 && menu->actions().at(managerIndex-1)==terminal && menu->actions().at(managerIndex-2)->text()=="刷新桌面",
               "desktop terminal sits between refresh and file manager");
         auto *widgets = menu->findChild<QMenu *>("desktopWidgetsMenu");
-        check(widgets && widgets->actions().size()==6, "six widget visibility toggles available");
+        check(widgets && widgets->actions().size()==5, "five embedded widget visibility toggles available");
+        auto *ai=menu->findChild<QAction *>("smartSpaceWidgetAction");
+        check(ai && menu->actions().contains(ai) && !ai->isCheckable(),"AI Space is a separate application entry");
         if (widgets) {
             for (auto *action : widgets->actions())
-                check(action->isCheckable() && action->icon().isNull(), "all six widgets reserve the check column");
-            for (const char *name : {"monitorWidgetAction", "smartSpaceWidgetAction"}) {
+                check(action->isCheckable() && action->icon().isNull(), "embedded widgets reserve the check column");
+            for (const char *name : {"monitorWidgetAction"}) {
                 auto *action = widgets->findChild<QAction *>(name);
                 check(action && !action->isChecked(), "disabled widget starts unchecked");
                 if (action) {

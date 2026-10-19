@@ -52,7 +52,6 @@ static QImage wallpaper(QSize logical, qreal dpr)
 
 #include "selection_drag_test.h"
 #include "fence_features_test.h"
-#include "smart_wallpaper_test.h"
 #include "desklet_test.h"
 #include "music_test.h"
 #include "calendar_test.h"
@@ -67,15 +66,11 @@ static QImage wallpaper(QSize logical, qreal dpr)
 #include "folder_drop_undo_test.h"
 #include "fence_reorder_test.h"
 #include "icon_damage_test.h"
-#include "smart_interaction_test.h"
 #include "review_async_test.h"
 #include "monitor_placement_test.h"
 #include "monitor_diagnosis_test.h"
 #include "startup_wallpaper_test.h"
 #include "video_trial_test.h"
-#include "smart_space_startup_test.h"
-#include "smart_space_position_test.h"
-#include "smart_space_optics_test.h"
 #include "menu_shortcut_test.h"
 #include "pointer_effect_test.h"
 
@@ -155,20 +150,12 @@ int main(int argc, char **argv)
         return runStartupWallpaperTest(isolated.path());
     if (app.arguments().contains("--video-trial-only"))
         return runVideoTrialTest(isolated.path());
-    if (app.arguments().contains("--smart-space-startup-only"))
-        return runSmartSpaceStartupTest(isolated.path());
-    if (app.arguments().contains("--smart-space-position-only"))
-        return runSmartSpacePositionTest();
-    if (app.arguments().contains("--smart-optics-only"))
-        return SmartSpaceOpticsTestAccess::run(isolated.path());
     if (app.arguments().contains("--monitor-placement-only"))
         return runMonitorPlacementTest();
     if (app.arguments().contains("--monitor-diagnosis-only"))
         return SystemMonitorTestAccess::run();
     if (app.arguments().contains("--review-async-only"))
         return runReviewAsyncTest(isolated.path());
-    if (app.arguments().contains("--smart-interaction-only"))
-        return runSmartInteractionTest(isolated.path());
     if (app.arguments().contains("--icon-damage-only"))
         return runIconDamageTest(isolated.path());
     if (app.arguments().contains("--fence-reorder-only"))
@@ -205,8 +192,6 @@ int main(int argc, char **argv)
         return runMusicTest(isolated.path());
     if (app.arguments().contains("--desklets-only"))
         return runDeskletTest(isolated.path());
-    if (app.arguments().contains("--wallpaper-only"))
-        return runSmartWallpaperTest(isolated.path());
     if (app.arguments().contains("--selection-only"))
         return runSelectionDragTest(isolated.path());
     if (app.arguments().contains("--features-only"))
@@ -391,8 +376,8 @@ int main(int argc, char **argv)
                     return result;
                 };
                 check(labels(menu) == QStringList({"新建", "粘贴", "撤销上一步", "刷新桌面", "打开终端", "打开文件管理器", "编辑分区布局",
-                    "排列与布局", "桌面小组件", "Fences 设置…"}),
-                    "desktop menu has ten ordered entries");
+                    "排列与布局", "桌面小组件", "打开AI空间…", "Fences 设置…"}),
+                    "desktop menu includes the independent AI Space entry in order");
                 auto *edit=menu->findChild<QAction *>("layoutEditAction");
                 check(edit && !edit->isChecked(),"layout action starts unlocked for activation");
                 if(edit){
@@ -406,7 +391,7 @@ int main(int argc, char **argv)
                 check(!menu->findChild<QAction *>("liquidPopupPreviewAction"),
                       "unused liquid preview is absent from desktop menu");
                 auto *widgets=menu->findChild<QMenu *>("desktopWidgetsMenu");
-                check(widgets && widgets->actions().size()==6 && !menu->findChild<QMenu *>("desktopStartupMenu"),
+                check(widgets && widgets->actions().size()==5 && !menu->findChild<QMenu *>("desktopStartupMenu"),
                       "visibility stays in menu while startup moves to unified settings");
                 auto *layout=menu->findChild<QMenu *>("desktopLayoutMenu");
                 check(labels(layout)==QStringList({"手动排列", "按名称排列", "按类型排列", "按修改时间排列"}),

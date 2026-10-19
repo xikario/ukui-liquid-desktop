@@ -1,6 +1,6 @@
 # ukui-fences 0.7.0 · 桌面分区与小组件
 
-Fences 在 UKUI X11 桌面上提供文件分区、图标整理及六类小组件，统一使用桌面布局和设置中心。原 Peony 桌面保留作为底层，不需要替换系统文件管理器。项目使用 Qt 5 Widgets / C++17，按 GPL-3.0-or-later 发布。
+Fences 在 UKUI X11 桌面上提供文件分区、图标整理及五类小组件，统一使用桌面布局和设置中心。原 Peony 桌面保留作为底层，不需要替换系统文件管理器。项目使用 Qt 5 Widgets / C++17，按 GPL-3.0-or-later 发布。
 
 [项目主页](../../README.md) · [构建](../../docs/BUILD.md) · [安装与恢复](../../docs/INSTALL_AND_RESTORE.md) · [v0.7.0](../../docs/versions/v0.7.0.md)
 
@@ -49,22 +49,21 @@ cmake --build apps/ukui-fences/build -j2
 
 **壁纸类型与视频**：在“壁纸与配色”选择“静态图片”或“视频壁纸（实验性）”，选择文件仅修改草稿，显示三帧低速循环预览，确认视频后自动保存，重开设置直接复用（隐藏或关闭后停止动画），统一点击“应用”后生效。视频按本地短 H.264 MP4 的原始帧率和分辨率硬件播放，确认播放成功后保存并随 Fences 启动恢复；低于当前屏幕分辨率时会提示清晰度风险，可继续应用或取消。选择静态图片并应用可停止视频，下次切回视频仍保留上次文件选择。多个普通窗口合并后视频可见面积低于 10% 时暂停，达到 15% 时恢复；隐藏或锁屏也会暂停，失败回到原图片。分辨率变化会同步视频裁剪并恢复 Fences 在桌面层的位置。玻璃背景使用首帧缓存；当前支持不超过 60 秒、已知帧率不超过 120 fps 的片段。详见 [保存与 1080P 切换修复](../../docs/VIDEO_WALLPAPER_DRAFT_DISPLAY_20261004.md) 、[历史性能验证](../../docs/VIDEO_WALLPAPER_SPACE_20261003.md) 和 [温度、风扇对照与最终策略](../../docs/VIDEO_THERMAL_PREVIEW_20261004.md) 及 [启动、可见面积暂停和持久预览](../../docs/VIDEO_STARTUP_VISIBILITY_PREVIEW_20261004.md)。
 
-刷新不会通过销毁全部图标模拟重载；未变的壁纸继续复用材质缓存，同路径替换图片仍可更新。启动先准备壁纸和分区材质，再显示画布；智能空间现有索引在后台加载，打开组件不自动扫描文件。
+刷新不会通过销毁全部图标模拟重载；未变的壁纸继续复用材质缓存，同路径替换图片仍可更新。启动先准备壁纸和分区材质，再显示画布。原智能空间已移到独立的 [AI空间](https://github.com/xikario/ai-space)，Fences 不再加载其索引。
 
-## 六类桌面小组件
+## 五类桌面小组件
 
 | 组件 | 功能与操作指南 |
 | --- | --- |
-| 智能空间 | [本地文件检索、索引更新、预览与配置](docs/SMART_SPACE.md)；[SQLite 知识库与脚本](docs/SMART_SPACE_KNOWLEDGE.md) |
 | 系统监视 | [CPU/内存/磁盘/进程采样，API 配置、诊断详情与导出](docs/SYSTEM_MONITOR.md) |
 | 时钟与倒计时 | [时间、倒计时预设、暂停继续和到点通知](docs/DESKTOP_WIDGETS.md#时钟与倒计时) |
 | 活动统计 | [开机时长、前台应用停留排行、暂停记录](docs/DESKTOP_WIDGETS.md#活动统计) |
 | 音乐播放器 | [MPRIS 多客户端配置、运行进程识别、自动切换及播放控制](docs/MUSIC_PLAYER.md) |
 | 日历与系统待办 | [月历、农历与调休、只读系统待办](docs/DESKTOP_WIDGETS.md#日历与系统待办) |
 
-六类组件与桌面共用一个进程。**当前显示**与**随 Fences 启动**是两个独立选项；在设置中心统一管理。隐藏音乐卡片不会停止播放器，隐藏活动卡片仍可记录；请用“暂停记录”停止统计。倒计时组件未启动时不会发出通知。
+五类组件与桌面共用一个进程。**当前显示**与**随 Fences 启动**是两个独立选项；在设置中心统一管理。隐藏音乐卡片不会停止播放器，隐藏活动卡片仍可记录；请用“暂停记录”停止统计。倒计时组件未启动时不会发出通知。
 
-智能空间可在“更多”菜单切换 **分区同款玻璃（预览）**，也可在自身设置 → 外观 → 液态玻璃质感中选择原样式。预览复用分区的 `FenceGlassRenderer`、壁纸预处理和全局材质收尾，不再叠加独立的厚暗槽或黑色遮罩；移动、缩放停稳后更新缓存，输入、滚动和悬停复用底图，视频继续引用静态首帧。默认保留原样式，已有预览选项会沿用。实现与验证见 [共享分区玻璃](../../docs/SMART_SPACE_SHARED_FENCE_GLASS_20261015.md)。
+原智能空间现为独立的 **[AI空间](https://github.com/xikario/ai-space)**。Fences 的右键和设置页保留打开应用/设置的入口，五类内置组件的显示、自动启动不包含 AI空间。旧索引由独立版首次启动复制，原文件保留，详见 [拆分与迁移](../../docs/AI_SPACE_EXTRACTION_20261019.md)。
 
 ## 统一设置中心
 
@@ -72,7 +71,7 @@ cmake --build apps/ukui-fences/build -j2
 
 - **液态外观 / 壁纸与配色 / 图标与文字**：分区材质、壁纸、主题、图标底座和字体。
 - **分区与布局**：网格、锁定、编辑状态、布局备份，以及各分区的完整设置入口。
-- **桌面小组件**及专项页面：显示、自启动、智能空间、系统监视、音乐等配置。
+- **桌面小组件**及专项页面：五类组件显示、自启动、系统监视、音乐等配置；AI空间页面仅提供独立应用入口。
 - **文件同步 / 帮助与维护**：新文件收纳、使用说明、关于及维护入口。
 
 外观开关即时生效；有“应用”按钮的表单需点击后保存。切换页面保留草稿，关闭时提示放弃未应用的修改。浏览隐藏组件的专项页不会自动启动采样或索引，需要明确启用组件。
@@ -97,7 +96,7 @@ cmake --build apps/ukui-fences/build -j2
 | `~/.local/bin/ukui-fences-launcher --settings` | 打开统一设置 |
 | `~/.local/bin/ukui-fences-launcher --edit` | 切换已有实例的布局编辑；首次启动进入编辑 |
 | `~/.local/bin/ukui-fences-launcher --system-monitor` | 显示系统监视 |
-| `~/.local/bin/ukui-fences-launcher --smart-space` | 显示智能空间 |
+| `~/.local/bin/ukui-fences-launcher --smart-space` | 打开独立AI空间 |
 | `~/.local/bin/ukui-fences-launcher --hide` | 隐藏 Fences 桌面，保留进程 |
 | `~/.local/bin/ukui-fences-launcher --autostart` | 按已保存的组件启动选项恢复 |
 | `~/.local/bin/ukui-fences-launcher --quit` | 正常退出；没有实例时不创建桌面 |
@@ -108,15 +107,13 @@ cmake --build apps/ukui-fences/build -j2
 | --- | --- |
 | 组件与外观配置 | `~/.config/kylin/ukui-fences.ini` |
 | 分区与散落图标布局 | `~/.config/kyfences/layout.json` |
-| 智能空间快照 | Qt 用户缓存目录下 `smart-space/index.json` 及配套流式快照 |
-| 本地知识库 | `~/.local/share/ukui-fences/knowledge/`，可在设置中改位置 |
 | 活动统计 | `~/.local/share/ukui-fences/widgets/activity.json` |
 
 XDG 环境变量可改变默认用户目录。API 密钥优先使用系统 Secret Service 密钥环；布局导出不等于密钥、索引或文件备份。
 
 ## 依赖与限制
 
-构建依赖 Qt 5 Core/Gui/Widgets/DBus/Network、X11、OpenGL、Zlib 和 C++17；完整说明见 [构建文档](../../docs/BUILD.md)。文件操作依赖 GIO，启动器使用 `gdbus`；智能空间和日历脚本需要 Python 3。PDF/OCR 按需使用 Poppler 与 Tesseract；API 诊断使用 curl 和密钥环；音乐桌面入口使用 gtk-launch，客户端需提供 MPRIS；农历使用系统 ICU。
+构建依赖 Qt 5 Core/Gui/Widgets/DBus/Network、X11、OpenGL、Zlib 和 C++17；完整说明见 [构建文档](../../docs/BUILD.md)。文件操作依赖 GIO，启动器使用 `gdbus`；日历和视频辅助脚本需要 Python 3；API 诊断使用 curl 和密钥环；音乐桌面入口使用 gtk-launch，客户端需提供 MPRIS；农历使用系统 ICU。
 
 视频壁纸额外依赖系统 Python 3 GI（GLib/Gio）、libmpv、FFmpeg/ffprobe，以及可互操作的 VAAPI/OpenGL 驱动；播放器固定使用系统 Python 的隔离模式，不受 PATH 中用户 Python、虚拟环境或 PYTHONHOME/PYTHONPATH 影响。硬件播放失败会恢复图片壁纸，不自动转成软件解码。
 
@@ -124,7 +121,7 @@ XDG 环境变量可改变默认用户目录。API 密钥优先使用系统 Secre
 
 视频启动与缓存已补充核验：无缓存首帧时不显示纯色过渡层，视频帧准备好后才显示；临时过渡层在画布完成绘制后释放。主动隐藏后恢复从首帧播放，普通窗口遮挡恢复继续原位置。新预览缓存最多 640×360，确认后的三帧保持稳定，缓存保留当前与上一视频。详见 [评审修复与实际启动、遮挡测试](../../docs/VIDEO_REVIEW_STARTUP_FIXES_20261006.md)。
 
-视频按小组件的实际绘制轮廓避让：音乐、时钟、日历、活动统计的透明圆角及智能空间星形入口周围继续显示视频，玻璃内部仍复用首帧。轮廓在材质或几何变化时更新，不随播放逐帧计算，点击区域保持原样。详见 [小组件背景残影修复与验证](../../docs/WIDGET_VIDEO_BACKGROUND_FIXES_20261006.md)。
+视频按小组件的实际绘制轮廓避让：音乐、时钟、日历、活动统计的透明圆角周围继续显示视频，玻璃内部仍复用首帧。轮廓在材质或几何变化时更新，不随播放逐帧计算，点击区域保持原样。详见 [小组件背景残影修复与验证](../../docs/WIDGET_VIDEO_BACKGROUND_FIXES_20261006.md)。
 
 这是 X11 实现。主表面基于壁纸缓存而非实时后窗折射，GPU 不可用时降级。相关设计参考、shader 来源和许可证见 [第三方声明](../../THIRD_PARTY_NOTICES.md)。测试入口及历史限制见 [构建与验证](../../docs/BUILD.md) 和 [验证记录](../../docs/VALIDATION.md)。
 

@@ -22,7 +22,7 @@
 #include "DesktopIcon.h"
 #include "FileClipboard.h"
 #include "SystemMonitor.h"
-#include "SmartSpaceWidget.h"
+#include "AiSpaceClient.h"
 #include "MenuStyle.h"
 
 #include <QApplication>
@@ -686,9 +686,13 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
     m_cutRefreshTimer = new QTimer(this);
     m_cutRefreshTimer->setInterval(1000);
 
-    m_smartSpaceRelayoutTimer = new QTimer(this);
-    m_smartSpaceRelayoutTimer->setSingleShot(true);
-    m_smartSpaceRelayoutTimer->setInterval(35);
+    m_aiSpaceClient = new AiSpaceClient(this);
+    connect(m_aiSpaceClient,&AiSpaceClient::launchFailed,this,[this]{
+        LiquidDialog::information(this,"AI空间", "AI空间已拆分为独立应用。请先安装 ai-space，再从这里打开。\nhttps://github.com/xikario/ai-space");
+    });
+    m_widgetRelayoutTimer = new QTimer(this);
+    m_widgetRelayoutTimer->setSingleShot(true);
+    m_widgetRelayoutTimer->setInterval(35);
 
 
 
@@ -726,13 +730,9 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
         pruneMissingFileIcons();
         syncCutVisualState();
     });
-    connect(m_smartSpaceRelayoutTimer, &QTimer::timeout, this, [this] {
-        // Edge transitions change widget geometry before their visual frame
-        // finishes. Defer icon collision/layout work until that frame is done.
-        if (m_smartSpace && m_smartSpace->edgeTransitionActive()) return;
+    connect(m_widgetRelayoutTimer, &QTimer::timeout, this, [this] {
+        // Coalesce desklet geometry changes before laying out loose icons.
         layoutLooseIcons();
-        if (m_smartSpace && !m_smartSpace->isWindow())
-            m_smartSpace->raise();
     });
     connect(QApplication::clipboard(), &QClipboard::dataChanged,
             this, &DesktopCanvas::syncCutVisualState);
@@ -791,12 +791,6 @@ DesktopCanvas::DesktopCanvas(QWidget *parent)
             const QString path = QSettings().value("wallpaper/videoPath").toString();
             if (!path.isEmpty() && !startVideoWallpaperTrial(path))
                 emit videoWallpaperTrialChanged();
-        });
-        // Allow the restored widgets to paint before constructing Smart Space.
-        QTimer::singleShot(250, this, [this] {
-            traceStartup("smart-space-start");
-            if (SmartSpaceWidget::autoStartEnabled()) setSmartSpaceVisible(true);
-            traceStartup("smart-space-ready");
         });
     });
     // Start only after restoration hooks exist. Layout/icon initialization can
@@ -1033,10 +1027,6 @@ void DesktopCanvas::restackDesktopLayer()
 
 void DesktopCanvas::applyX11DesktopHints()
 {
-    if (m_smartSpace && m_smartSpace->edgeTransitionActive()) {
-        QTimer::singleShot(220, this, &DesktopCanvas::applyX11DesktopHints);
-        return;
-    }
     // 双桌面层：Peony 始终映射在最底层作保底，Fences 也是桌面类型，
     // 但创建得更晚并在桌面层内置顶。这样 Win+D 仍显示 Fences，
     // Fences 隐藏或崩溃时则立即露出 Peony。
@@ -1254,15 +1244,7 @@ void DesktopCanvas::syncScreenGeometry()
         if (m_monitor->pos() != bounded)
             m_monitor->move(bounded);
     }
-    if (m_smartSpace && !m_smartSpace->isWindow()) {
-        const QPoint bounded(
-            qBound(0, m_smartSpace->x(),
-                   qMax(0, width() - m_smartSpace->width())),
-            qBound(0, m_smartSpace->y(),
-                   qMax(0, height() - m_smartSpace->height())));
-        if (m_smartSpace->pos() != bounded)
-            m_smartSpace->move(bounded);
-    }
+
     // RandR mode switches let Peony recreate/raise its desktop after ours.
     // Reassert only the desktop-layer order, with bounded settling retries;
     // never override an explicit switch to the system desktop.
@@ -2001,9 +1983,9 @@ QString DesktopCanvas::settingsHelpHtml() const
             "<h3>布局编辑</h3>"
             "<p>右键 → 编辑分区布局，开启后移动、缩放分区和桌面小组件，支持边缘吸附和图标避让。"
             "完成后选择“退出布局编辑”。分区右键可重命名、锁定；“分区设置…”统一调整颜色、透明度、标题图标和字体。</p>"
-            "<h3>六类桌面小组件</h3>"
-            "<p>右键 → 桌面小组件，可切换智能空间、系统监视、时钟与倒计时、活动统计、"
-            "音乐播放器、日历与系统待办。对号表示已启用；智能空间可收起成贴边星标。</p>"
+            "<h3>五类桌面小组件与独立AI空间</h3>"
+            "<p>右键 → 桌面小组件，可切换系统监视、时钟与倒计时、活动统计、"
+            "音乐播放器、日历与系统待办。小组件对号表示已启用；AI空间由独立应用管理。</p>"
             "<p>活动统计记录前台应用停留时间；音乐组件通过 MPRIS 自动接入已配置、最近启动的播放器。"
             "日历支持农历、节假日、年月滚轮和待办折叠；内置中国调休数据为 2026 年，日历右键可同步最新农历和已发布的节假日；系统待办只读。</p>"
             "<h3>自启动与外观</h3>"
@@ -2027,7 +2009,7 @@ QString DesktopCanvas::settingsAboutHtml() const
     return QStringLiteral(
                 "<h3>ukui-fences · UKUI Liquid Desktop</h3>"
                 "<p>核心版本：%1 · Qt 5 / UKUI X11</p>"
-                "<p>桌面分区、智能空间、系统监视，以及时钟/倒计时、活动统计、音乐播放器、"
+                "<p>桌面分区、系统监视，以及时钟/倒计时、活动统计、音乐播放器、"
                 "日历与系统待办，共享液态材质与弹出菜单模块。</p>"
                 "<p>部分液态玻璃代码沿用并适配 NextKde 相关代码，直接 shader 来源为 NextKde-kylinos；"
                 "时钟、活动和日历参考 NextKde DeskCenter 设计，以 Qt 5 重新实现。感谢上游作者与贡献者。</p>"
@@ -2069,8 +2051,7 @@ QRect DesktopCanvas::snappedWidgetResize(QWidget *widget, const QRect &start,
     for (auto *peer : findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly)) {
         if (peer == widget || !peer->isVisible()) continue;
         if (!(peer->inherits("LiquidDesklet") || peer->inherits("FenceWidget")
-              || peer->inherits("SystemMonitor") || peer->inherits("SmartSpaceWidget"))) continue;
-        if (peer->inherits("SmartSpaceWidget") && smartSpaceEdgeHidden()) continue;
+              || peer->inherits("SystemMonitor"))) continue;
         peers.append(QRect(peer->isWindow() ? mapFromGlobal(peer->mapToGlobal(QPoint()))
                                            : peer->pos(), peer->size()));
     }
@@ -2868,13 +2849,7 @@ QString DesktopCanvas::desktopWidgetsStatus() const
 
 QString DesktopCanvas::smartSpaceAnimationStatus() const
 {
-    QJsonObject result;
-    if (m_smartSpace) {
-        result.insert("active", m_smartSpace->edgeTransitionActive());
-        for (const auto *key : {"edgePaintFrames", "edgeMaxPaintGapMs", "edgeElapsedMs", "edgeCachedBackground"})
-            result.insert(key, QJsonValue::fromVariant(m_smartSpace->property(key)));
-    }
-    return QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact));
+    return QString::fromUtf8(QJsonDocument(m_aiSpaceClient->state()).toJson(QJsonDocument::Compact));
 }
 
 void DesktopCanvas::showDesklet()
@@ -2900,10 +2875,6 @@ void DesktopCanvas::showDesklet()
     m_monitor->raise();
     connect(m_monitor, &SystemMonitor::closeRequested,
             this, [this] { showDesklet(); });
-    connect(m_monitor, &SystemMonitor::appearanceChanged, this, [this] {
-        if (m_smartSpace)
-            m_smartSpace->refreshInheritedTheme();
-    });
     update();
 }
 
@@ -2949,244 +2920,31 @@ void DesktopCanvas::showSystemMonitorWidget()
     setSystemMonitorVisible(true);
 }
 
-void DesktopCanvas::showSmartSpace()
-{
-    if (m_smartSpace) {
-        SmartSpaceWidget *closingWidget = m_smartSpace;
-        m_smartSpace = nullptr;
-        closingWidget->deleteLater();
-        m_smartSpaceRelayoutTimer->start();
-        QTimer::singleShot(200, this, [] { releaseUnusedHeap(); });
-        update();
-        return;
-    }
-
-    // Match SystemMonitor's proven desktop-child model by default.  The user
-    // may explicitly promote this same widget to an owned tool window through
-    // the pin control; no second copy or wrapper is created.
-    m_smartSpace = new SmartSpaceWidget(false, this);
-    m_smartSpace->setEditMode(m_editMode);
-    connect(m_smartSpace, &SmartSpaceWidget::closeRequested,
-            this, [this] { showSmartSpace(); });
-    connect(m_smartSpace, &SmartSpaceWidget::alwaysOnTopChanged,
-            this, &DesktopCanvas::applySmartSpaceWindowMode);
-    connect(m_smartSpace, &SmartSpaceWidget::geometryChanged,
-            m_smartSpaceRelayoutTimer,
-            qOverload<>(&QTimer::start));
-    SmartSpaceWidget *createdWidget = m_smartSpace;
-    connect(createdWidget, &QObject::destroyed, this, [this, createdWidget] {
-        if (m_smartSpace == createdWidget)
-            m_smartSpace = nullptr;
-    });
-    applySmartSpaceWindowMode(m_smartSpace->alwaysOnTop());
-    m_smartSpace->show();
-    m_smartSpace->raise();
-    m_smartSpaceRelayoutTimer->start();
-    update();
-}
-
-void DesktopCanvas::applySmartSpaceWindowMode(bool alwaysOnTop)
-{
-    if (!m_smartSpace)
-        return;
-
-    const bool wasVisible = m_smartSpace->isVisible();
-    const QSize widgetSize = m_smartSpace->size();
-    const QPoint globalPosition = m_smartSpace->isWindow()
-        ? m_smartSpace->pos()
-        : m_smartSpace->mapToGlobal(QPoint(0, 0));
-
-    if (alwaysOnTop) {
-        // A binary QRegion mask has hard one-pixel steps on a native X11
-        // window.  Recreating the pinned tool window with an ARGB surface lets
-        // SmartSpaceWidget's antialiased QPainterPath provide smooth corners.
-        m_smartSpace->setParent(
-            this,
-            Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
-        m_smartSpace->recreateNativeSurface(true);
-        m_smartSpace->setAttribute(Qt::WA_ShowWithoutActivating, true);
-        m_smartSpace->resize(widgetSize);
-        m_smartSpace->move(globalPosition);
-    } else {
-        m_smartSpace->setAttribute(Qt::WA_ShowWithoutActivating, false);
-        m_smartSpace->setParent(this, Qt::Widget);
-        // Desktop children deliberately use the stable binary-mask path: on
-        // UKUI/X11 an ARGB native child can disappear after Show Desktop.
-        m_smartSpace->recreateNativeSurface(false);
-        m_smartSpace->resize(widgetSize);
-        m_smartSpace->move(mapFromGlobal(globalPosition));
-    }
-
-    if (wasVisible) {
-        m_smartSpace->show();
-        m_smartSpace->raise();
-    }
-}
-
-void DesktopCanvas::setSmartSpaceVisible(bool visible)
-{
-    if (visible == (m_smartSpace != nullptr)) {
-        if (visible) {
-            m_smartSpace->show();
-            m_smartSpace->raise();
-        }
-        return;
-    }
-    showSmartSpace();
-}
-
-void DesktopCanvas::showSmartSpaceWidget()
-{
-    showAndActivate();
-    setSmartSpaceVisible(true);
-}
-
-void DesktopCanvas::setSmartSpaceAlwaysOnTop(bool enabled)
-{
-    setSmartSpaceVisible(true);
-    if (!m_smartSpace)
-        return;
-    if (m_smartSpace->alwaysOnTop() == enabled)
-        applySmartSpaceWindowMode(enabled);
-    else
-        m_smartSpace->setAlwaysOnTop(enabled);
-}
-
-bool DesktopCanvas::smartSpaceAlwaysOnTop() const
-{
-    return m_smartSpace && m_smartSpace->alwaysOnTop();
-}
-
-void DesktopCanvas::hideSmartSpaceToEdge()
-{
-    setSmartSpaceVisible(true);
-    if (m_smartSpace)
-        m_smartSpace->hideToNearestEdge();
-}
-
-void DesktopCanvas::revealSmartSpaceFromEdge()
-{
-    if (m_smartSpace)
-        m_smartSpace->revealFromEdge();
-}
-
-bool DesktopCanvas::smartSpaceEdgeHidden() const
-{
-    return m_smartSpace && m_smartSpace->edgeHidden();
-}
-
-void DesktopCanvas::setSmartSpaceGlassOptics(bool enabled)
-{
-    if(!m_smartSpace)setSmartSpaceVisible(true);
-    if(!m_smartSpace)return;
-    if(enabled)m_smartSpace->setSimpleTheme(3,false);
-    m_smartSpace->setGlassOpticsEnabled(enabled);
-}
-
-bool DesktopCanvas::smartSpaceGlassOptics() const
-{
-    return m_smartSpace && m_smartSpace->glassOpticsEnabled();
-}
-
-int DesktopCanvas::smartSpaceX() const
-{
-    return m_smartSpace ? m_smartSpace->x() : -1;
-}
-
-int DesktopCanvas::smartSpaceY() const
-{
-    return m_smartSpace ? m_smartSpace->y() : -1;
-}
-
-int DesktopCanvas::smartSpaceWidth() const
-{
-    return m_smartSpace ? m_smartSpace->width() : 0;
-}
-
-int DesktopCanvas::smartSpaceHeight() const
-{
-    return m_smartSpace ? m_smartSpace->height() : 0;
-}
-
-void DesktopCanvas::moveSmartSpace(int x, int y)
-{
-    setSmartSpaceVisible(true);
-    if (!m_smartSpace)
-        return;
-    const int maxX = qMax(0, width() - m_smartSpace->width());
-    const int maxY = qMax(0, height() - m_smartSpace->height());
-    m_smartSpace->move(qBound(0, x, maxX), qBound(0, y, maxY));
-    m_smartSpace->raise();
-}
-
-void DesktopCanvas::resizeSmartSpace(int width, int height)
-{
-    setSmartSpaceVisible(true);
-    if (!m_smartSpace)
-        return;
-    m_smartSpace->resize(qBound(620, width, 2400),
-                         qBound(360, height, 1600));
-    m_smartSpace->raise();
-}
-
-void DesktopCanvas::setSmartSpaceDensity(int density)
-{
-    setSmartSpaceVisible(true);
-    if (m_smartSpace)
-        m_smartSpace->setResultDensity(density);
-}
-
-void DesktopCanvas::showSmartSpaceSettings()
-{
-    QTimer::singleShot(0, this, [this] { showSettingsPage("smart"); });
-}
-
-void DesktopCanvas::startSmartSpaceFullIndex()
-{
-    setSmartSpaceVisible(true);
-    if (m_smartSpace) {
-        SmartSpaceWidget *widget = m_smartSpace;
-        QTimer::singleShot(0, widget, [widget] { widget->startFastFullIndex(); });
-    }
-}
-
-bool DesktopCanvas::smartSpaceIndexBusy() const
-{
-    return m_smartSpace && m_smartSpace->indexBusy();
-}
-
-void DesktopCanvas::hideSmartSpaceFolder(const QString &path)
-{
-    setSmartSpaceVisible(true);
-    if (m_smartSpace)
-        m_smartSpace->hideFolder(path);
-}
-
-void DesktopCanvas::excludeSmartSpaceFolder(const QString &path)
-{
-    setSmartSpaceVisible(true);
-    if (m_smartSpace) {
-        SmartSpaceWidget *widget = m_smartSpace;
-        QTimer::singleShot(0, widget, [widget, path] { widget->excludeFolder(path); });
-    }
-}
-
-bool DesktopCanvas::smartSpaceOverlapsDesktopIcons() const
-{
-    const QRect reserved = smartSpaceReservedGeometry();
-    if (!reserved.isValid())
-        return false;
-    for (DesktopIcon *icon : m_looseIcons) {
-        if (icon && icon->isVisible() && icon->geometry().intersects(reserved))
-            return true;
-    }
-    return false;
-}
-
-void DesktopCanvas::toggleSmartSpace()
-{
-    showSmartSpace();
-}
+void DesktopCanvas::showSmartSpace() { m_aiSpaceClient->call("toggleWindow"); }
+void DesktopCanvas::setSmartSpaceVisible(bool visible) { m_aiSpaceClient->call(visible?"showWindow":"hideWindow"); }
+void DesktopCanvas::showSmartSpaceWidget() { m_aiSpaceClient->call("showWindow"); }
+void DesktopCanvas::setSmartSpaceAlwaysOnTop(bool v) { m_aiSpaceClient->call("setAlwaysOnTop",{v}); }
+bool DesktopCanvas::smartSpaceAlwaysOnTop() const { return m_aiSpaceClient->state().value("alwaysOnTop").toBool(); }
+void DesktopCanvas::hideSmartSpaceToEdge() { m_aiSpaceClient->call("hideToEdge"); }
+void DesktopCanvas::revealSmartSpaceFromEdge() { m_aiSpaceClient->call("revealFromEdge"); }
+bool DesktopCanvas::smartSpaceEdgeHidden() const { return m_aiSpaceClient->state().value("edgeHidden").toBool(); }
+void DesktopCanvas::setSmartSpaceGlassOptics(bool v) { m_aiSpaceClient->call("setGlassOptics",{v}); }
+bool DesktopCanvas::smartSpaceGlassOptics() const { return m_aiSpaceClient->state().value("glassOptics").toBool(); }
+int DesktopCanvas::smartSpaceX() const { return m_aiSpaceClient->state().value("x").toInt(-1); }
+int DesktopCanvas::smartSpaceY() const { return m_aiSpaceClient->state().value("y").toInt(-1); }
+int DesktopCanvas::smartSpaceWidth() const { return m_aiSpaceClient->state().value("width").toInt(); }
+int DesktopCanvas::smartSpaceHeight() const { return m_aiSpaceClient->state().value("height").toInt(); }
+void DesktopCanvas::moveSmartSpace(int x,int y) { m_aiSpaceClient->call("moveWindow",{x,y}); }
+void DesktopCanvas::resizeSmartSpace(int w,int h) { m_aiSpaceClient->call("resizeWindow",{w,h}); }
+void DesktopCanvas::setSmartSpaceDensity(int v) { m_aiSpaceClient->call("setDensity",{v}); }
+void DesktopCanvas::showSmartSpaceSettings() { m_aiSpaceClient->call("showSettings"); }
+void DesktopCanvas::startSmartSpaceFullIndex() { m_aiSpaceClient->call("startFullIndex"); }
+bool DesktopCanvas::smartSpaceIndexBusy() const { return m_aiSpaceClient->state().value("indexBusy").toBool(); }
+void DesktopCanvas::hideSmartSpaceFolder(const QString &p) { m_aiSpaceClient->call("hideFolder",{p}); }
+void DesktopCanvas::excludeSmartSpaceFolder(const QString &p) { m_aiSpaceClient->call("excludeFolder",{p}); }
+bool DesktopCanvas::smartSpaceOverlapsDesktopIcons() const { return false; }
+bool DesktopCanvas::smartSpaceVisible() const { return m_aiSpaceClient->state().value("visible").toBool(); }
+void DesktopCanvas::toggleSmartSpace() { showSmartSpace(); }
 
 // ── 桌面图标刷新 ─────────────────────────────────────────
 
@@ -3724,17 +3482,7 @@ QRect DesktopCanvas::desktopIconArea() const
     return area;
 }
 
-QRect DesktopCanvas::smartSpaceReservedGeometry() const
-{
-    if (!m_smartSpace || !m_smartSpace->isVisible())
-        return QRect();
-
-    const QPoint topLeft = m_smartSpace->isWindow()
-        ? mapFromGlobal(m_smartSpace->frameGeometry().topLeft())
-        : m_smartSpace->geometry().topLeft();
-    return QRect(topLeft, m_smartSpace->size())
-        .adjusted(-8, -8, 8, 8).intersected(rect());
-}
+QRect DesktopCanvas::smartSpaceReservedGeometry() const { return {}; }
 
 QList<QRect> DesktopCanvas::desktopWidgetReservedGeometries() const
 {
@@ -4587,7 +4335,6 @@ void DesktopCanvas::setGlobalEditMode(bool edit)
     m_editMode = edit;
     for (auto *f : m_fences) f->setEditMode(edit);
     if (m_monitor) m_monitor->setEditMode(edit);
-    if (m_smartSpace) m_smartSpace->setEditMode(edit);
     if (m_clockWidget) m_clockWidget->setEditMode(edit);
     if (m_activityWidget) m_activityWidget->setEditMode(edit);
     if (m_musicWidget) m_musicWidget->setEditMode(edit);
@@ -5088,7 +4835,7 @@ bool DesktopCanvas::eventFilter(QObject *watched, QEvent *event)
         case QEvent::Show:
         case QEvent::Hide:
             // Use the existing layout debounce, also covering the widget's ×.
-            m_smartSpaceRelayoutTimer->start();
+            m_widgetRelayoutTimer->start();
             break;
         default: break;
         }
@@ -5201,12 +4948,10 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     connect(actDesklet, &QAction::triggered,
             [this](bool visible) { setSystemMonitorVisible(visible); });
 
-    auto *actSmartSpace = widgetsMenu->addAction("显示智能空间");
+    auto *actSmartSpace = new QAction("打开AI空间…",&menu);
     actSmartSpace->setObjectName("smartSpaceWidgetAction");
-    actSmartSpace->setCheckable(true);
-    actSmartSpace->setChecked(m_smartSpace != nullptr);
     connect(actSmartSpace, &QAction::triggered,
-            [this](bool visible) { setSmartSpaceVisible(visible); });
+            this, &DesktopCanvas::showSmartSpaceWidget);
 
     auto addDesktopWidget = [this, widgetsMenu](const QString &key, const QString &title,
                                                    bool visible, auto show) {
@@ -5324,7 +5069,7 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     settingsAction->setObjectName("fencesSettingsAction");
     connect(settingsAction, &QAction::triggered, this, &DesktopCanvas::showUnifiedSettings);
 
-    for (QAction *action : {actSmartSpace, actDesklet,
+    for (QAction *action : {actDesklet,
             widgetsMenu->findChild<QAction *>("clockWidgetAction"),
             widgetsMenu->findChild<QAction *>("activityWidgetAction"),
             widgetsMenu->findChild<QAction *>("musicWidgetAction"),
@@ -5342,6 +5087,7 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     menu.addMenu(sortModeMenu);
     menu.addSeparator();
     menu.addMenu(widgetsMenu);
+    menu.addAction(actSmartSpace);
     menu.addSeparator();
     menu.addAction(settingsAction);
 

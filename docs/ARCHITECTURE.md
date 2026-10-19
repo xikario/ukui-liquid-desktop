@@ -6,7 +6,7 @@
 
 | 模块 | 运行方式 | 主要依赖 |
 | --- | --- | --- |
-| [Fences](../apps/ukui-fences/README.md) | 桌面、智能空间、系统监视及四类 LiquidDesklet 卡片在同一个进程中 | Qt 5、X11、后台索引/日历/API 请求进程 |
+| [Fences](../apps/ukui-fences/README.md) | 桌面、系统监视及四类 LiquidDesklet 卡片在同一个进程中 | Qt 5、X11、后台日历/API 请求进程 |
 | [开始菜单 V2](../apps/ukui-kaishicaidan-v2/README.md) | 独立驻留进程，透明开始按钮覆盖层与 Win 键监听 | Qt 5、X11/XRecord、会话 D-Bus |
 | [任务栏主题](../apps/ukui-panel-liquid/README.md) | Qt 样式插件加载到系统 ukui-panel 进程 | 匹配的系统 Qt、OEM 面板、用户启动包装器 |
 | [模糊兼容服务](../integration/peony/README.md) | 可选用户服务，事件驱动处理指定 X11 窗口属性 | Python Xlib、用户 systemd 会话 |
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | 开始菜单生态液态 | 自有 NextKdeGlassView 适配层调用 shared/liquid-glass；打开时背景快照 | shared/liquid-popup |
 | Fences 分区与系统监视卡片 | 自有 FenceGlassRenderer，使用 DesktopCanvas 壁纸 | shared/liquid-popup |
-| 智能空间 | 自有壁纸柔化缓存与绘制 | shared/liquid-popup |
+| [AI空间](https://github.com/xikario/ai-space) | 独立进程，复制维护的 FenceGlassRenderer 与公共材质快照 | 独立仓库中的 liquid-popup |
 | 时钟、活动、音乐、日历 | LiquidDesklet + shared/liquid-glass | shared/liquid-popup |
 | Fences 设置 / 诊断详情 | shared/liquid-glass 与缓存背景 | 共享菜单及各自控件 |
 | 系统任务栏 | WallpaperBackdrop + shared/liquid-glass | shared/liquid-popup + PanelStyle |
@@ -34,7 +34,7 @@
 | 功能 | 本地数据 | 外部调用边界 |
 | --- | --- | --- |
 | Fences 文件/布局 | 布局与配置写用户目录，文件操作直接作用于用户目标 | GIO、文件管理器、归档工具等 |
-| 智能空间 | 文件只读提取，快照及 SQLite 正文片段写用户缓存/数据目录 | 默认本地；显式 Provider 可运行程序、HTTP 或 D-Bus；外部 Skill 另行安装 |
+| AI空间（独立项目） | 文件只读提取，快照及 SQLite 正文片段写用户缓存/数据目录 | 默认本地；显式 Provider 可运行程序、HTTP 或 D-Bus；外部 Skill 另行安装 |
 | 系统监视 | `/proc` / sysfs / statvfs 采样，配置与可选用户导出 | 主动诊断时采样发送到用户选定 HTTPS 服务；密钥环保存凭据，无内置密钥 |
 | 音乐 | 已启用客户端配置、临时封面缓存，不含曲库 | 会话 MPRIS 播放控制、按元数据下载 HTTP(S) 封面、用户要求时启动/前置播放器 |
 | 日历 | 只读系统 Schedule，用户节假日缓存 | 系统日历管理原事项；手动同步已发布 holiday-cn 数据，不上传待办 |
@@ -44,3 +44,5 @@
 智能空间文件检索、知识库搜索、系统监视 API 诊断是三个不同入口。知识库不执行远程问答；外部 Agent 是否上传选定片段由其自身环境和用户配置决定。
 
 具体路径、字段和使用方式以各产品操作指南为准；历史报告中的文件数量、个人部署路径或性能样本不作为默认配置。
+
+2026-10-19：智能空间引擎、提取脚本与测试迁出本仓库。Fences 的 AiSpaceClient 仅做异步启动、D-Bus 调用及状态缓存，不共享可写数据库，也不随 Fences 启动扫描。详见 [拆分说明](AI_SPACE_EXTRACTION_20261019.md)。

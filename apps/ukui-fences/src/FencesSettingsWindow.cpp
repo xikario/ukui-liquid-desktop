@@ -2,7 +2,6 @@
 #include "FencesSettingsWindow.h"
 #include "DesktopCanvas.h"
 #include "DesktopWidgets.h"
-#include "SmartSpaceWidget.h"
 #include "SystemMonitor.h"
 #include "CalendarDesklet.h"
 #include "MusicDesklet.h"
@@ -58,7 +57,7 @@ namespace {
 struct Page { const char *id; const char *name; };
 const Page pages[] = {{"appearance","液态外观"},{"wallpaper","壁纸与配色"},
     {"icons","图标与文字"},{"layout","分区与布局"},{"widgets","桌面小组件"},
-    {"smart","    智能空间"},{"monitor","    系统监视"},{"clock","    时钟与倒计时"},
+    {"smart","    AI空间"},{"monitor","    系统监视"},{"clock","    时钟与倒计时"},
     {"activity","    活动统计"},{"music","    音乐播放器"},{"calendar","    日历与待办"},
     {"sync","文件同步"},{"help","帮助与维护"}};
 QPushButton *button(QVBoxLayout *layout, const QString &text, const std::function<void()> &fn,
@@ -313,7 +312,7 @@ void FencesSettingsWindow::refreshStates() {
                 id=="clock"?m_canvas->clockWidgetVisible():id=="activity"?m_canvas->activityWidgetVisible():
                 id=="music"?m_canvas->musicWidgetVisible():m_canvas->calendarWidgetVisible();check->setChecked(on);
         } else if(!startup.isEmpty()) {
-            const bool on=startup=="smart"?SmartSpaceWidget::autoStartEnabled():startup=="monitor"?SystemMonitor::autoStartEnabled():LiquidDesklet::autoStartEnabled(startup);
+            const bool on=startup=="monitor"?SystemMonitor::autoStartEnabled():LiquidDesklet::autoStartEnabled(startup);
             check->setChecked(on);check->setText(on?"随 Fences 启动：已开启":"随 Fences 启动：未开启");
         } else if(check->objectName()=="fenceLiquidGlass")check->setChecked(m_canvas->fenceLiquidGlassEnabled());
         else if(check->objectName()=="reduceMotion")check->setChecked(m_canvas->reduceMotion());
@@ -431,26 +430,30 @@ QWidget *FencesSettingsWindow::buildPage(const QString &id) {
         button(c,"重置布局…",[this]{m_canvas->resetLayoutSettings();});
     } else if(id=="widgets") {
         hint(layout,"当前显示与随 Fences 启动分别设置。打开专项设置不会自动启动隐藏组件。");
-        for(const QString key:{"smart","monitor","clock","activity","music","calendar"}) {
+        for(const QString key:{"monitor","clock","activity","music","calendar"}) {
             QString title;for(const auto &p:pages)if(key==p.id)title=QString::fromUtf8(p.name).trimmed();
             auto *c=card(layout,title);auto *visible=new QCheckBox("当前显示",page);visible->setProperty("visibilityKey",key);c->addWidget(visible);
             connect(visible,&QCheckBox::toggled,page,[this,key](bool on){
-                if(key=="smart")m_canvas->setSmartSpaceVisible(on);else if(key=="monitor")m_canvas->setSystemMonitorVisible(on);
+                if(key=="monitor")m_canvas->setSystemMonitorVisible(on);
                 else if(key=="clock")m_canvas->setClockWidgetVisible(on);else if(key=="activity")m_canvas->setActivityWidgetVisible(on);
                 else if(key=="music")m_canvas->setMusicWidgetVisible(on);else m_canvas->setCalendarWidgetVisible(on);
             });
             auto *startup=new QCheckBox(page);startup->setProperty("startupKey",key);c->addWidget(startup);
             connect(startup,&QCheckBox::toggled,page,[this,key](bool on){
-                if(key=="smart" && m_canvas->m_smartSpace)m_canvas->m_smartSpace->setAutoStart(on);
-                else if(key=="monitor" && m_canvas->m_monitor)m_canvas->m_monitor->setAutoStart(on);
-                else if(key=="smart" || key=="monitor"){QSettings s;s.setValue((key=="smart"?"smartSpace/":"systemMonitor/")+QString("autoStart"),on);s.sync();}
+                if(key=="monitor" && m_canvas->m_monitor)m_canvas->m_monitor->setAutoStart(on);
+                else if(key=="monitor"){QSettings s;s.setValue("systemMonitor/autoStart",on);s.sync();}
                 else LiquidDesklet::setAutoStart(key,on);refreshStates();
             });
             button(c,"专项设置",[this,key]{openPage(key);});
         }
-    } else if(id=="smart" || id=="monitor") {
+    } else if(id=="smart") {
+        auto *c=card(layout,"AI空间 · 独立应用");
+        hint(c,"文件索引、OCR、知识库和液态搜索界面已移至独立的 AI空间进程。它的配置、索引与开机启动由 AI空间管理。");
+        button(c,"打开AI空间",[this]{m_canvas->showSmartSpaceWidget();});
+        button(c,"打开AI空间设置",[this]{m_canvas->showSmartSpaceSettings();});
+        hint(c,"项目与安装说明：https://github.com/xikario/ai-space");
+    } else if(id=="monitor") {
         auto *c=card(layout,"专项配置");QWidget *editor=nullptr;
-        if(id=="smart" && m_canvas->m_smartSpace)editor=m_canvas->m_smartSpace->createSettingsPage(page);
         if(id=="monitor" && m_canvas->m_monitor)editor=m_canvas->m_monitor->createSettingsPage(page);
         if(editor) {
             editor->setStyleSheet(QString());

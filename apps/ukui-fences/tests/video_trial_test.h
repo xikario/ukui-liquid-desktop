@@ -4,7 +4,6 @@
 #include <QScreen>
 #include "VideoWallpaperPreview.h"
 #include "MusicDesklet.h"
-#include "SmartSpaceWidget.h"
 #include "VideoWallpaperRegion.h"
 static int runVideoTrialTest(const QString &root)
 {
@@ -139,22 +138,6 @@ for line in sys.stdin:
     QSettings().setValue("smartSpace/themeMode",3);
     QSettings().setValue("smartSpace/defaultHidden",false);
     QSettings().setValue("smartSpace/alwaysOnTop",false);
-    canvas.showSmartSpaceWidget();canvas.moveSmartSpace(100,200);canvas.resizeSmartSpace(800,500);settle(300);
-    auto *smart=canvas.findChild<SmartSpaceWidget *>();
-    check(smart!=nullptr,"video test creates the real Smart Space surface");
-    if(smart){
-        check(videoAt(smart->pos()) && !videoAt(smart->geometry().center()),
-              "expanded Smart Space leaves transparent margins on live video");
-        smart->hideToNearestEdge();settle(300);
-        check(smart->edgeHidden() && videoAt(smart->pos()+QPoint(1,1)),
-              "collapsed entry no longer freezes its entire rectangular background");
-        check(!videoAt(smart->geometry().center()),"star artwork remains above the video");
-        check(!smart->internalWinId() && smart->mask().isEmpty(),"star keeps its mouse hit area without a native rectangle");
-        smart->revealFromEdge();settle(300);
-        check(videoAt(smart->pos()) && !videoAt(smart->geometry().center()),
-              "reveal retires the animation cutout and restores rounded glass coverage");
-        smart->hide();settle(100);
-    }
     check(!canvas.setVideoWallpaper(root+"/missing.mp4")
           && QSettings().value("wallpaper/videoPath")==media.fileName(),"invalid replacement preserves saved selection");
     // A backend failure also preserves the last working choice for next launch.

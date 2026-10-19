@@ -17,7 +17,6 @@ sudo apt install build-essential cmake qtbase5-dev libx11-dev libxtst-dev libgl1
 | Fences | Qt Core/Gui/Widgets/DBus/Network、Zlib；GIO 文件操作、gdbus 启动器 |
 | 开始菜单 | Qt Core/Gui/Widgets/DBus、Xtst/XRecord；gtk-launch、gsettings，卸载按需用 dpkg-query/apt-get/pkexec |
 | 任务栏插件 | Qt Core/Gui/Widgets，与系统 OEM 面板 Qt 兼容；Python 安装与恢复工具 |
-| 智能空间 | Python 3；PDF 按需用 poppler-utils，OCR 用 tesseract-ocr 及语言包，部分格式需要额外提取工具 |
 | 系统监视诊断 | curl、libsecret-1.so.0 和可用的 Secret Service 密钥环；API 由用户自行配置 |
 | 音乐 | 提供 MPRIS 的客户端；识别出的桌面入口用 gtk-launch（libgtk-3-bin） |
 | 日历 | Python 标准库 SQLite、系统 ICU 运行库及对应 UKUI 日历数据库/服务；节假日同步需要网络 |
@@ -64,9 +63,6 @@ python3 apps/ukui-panel-liquid/tests/install_test.py
 python3 apps/ukui-panel-liquid/tests/session_start_test.py
 python3 integration/peony/test_blur_compat.py
 (cd extras/ukui-desktop-performance && python3 -m unittest discover -v)
-python3 apps/ukui-fences/tests/test_smart_space_knowledge.py
-python3 apps/ukui-fences/scripts/smart_space_knowledge.py --help
-python3 apps/ukui-fences/scripts/smart_space_indexer.py --help
 ```
 
 不要通过运行安装器的 `--help` 猜测行为：并非每个安装脚本都实现无副作用的帮助参数。界面 CLI 也不是 argparse，错误参数可能打开应用，参数以入口源码及产品指南为准。
@@ -101,4 +97,6 @@ env QT_FONT_DPI=96 QT_SCALE_FACTOR=1.5 QT_SCREEN_SCALE_FACTORS=1 xvfb-run -a -s 
 
 无可用 GL 的 Xvfb 中，部分 GPU 用例返回 77（跳过），不能计作 GPU 通过。开始菜单 glass-render-test 需要真实可用 GL，无 GL 时渲染断言会失败；CPU 回退可独立测试。真实显卡光学与首次动画流畅度需对应硬件验证。
 
-部分历史智能空间 UI 脚本保留旧多空间/AI 断言，不能把旧报告当成当前全仓通过结论。各版本实测范围见 [验证记录](VALIDATION.md)。公共菜单单独预览与测试见 [模块说明](../shared/liquid-popup/README.md)。
+智能空间的独立构建与索引测试移至 [ai-space](https://github.com/xikario/ai-space)；本仓库不再注册其旧 UI 测试。各版本实测范围见 [验证记录](VALIDATION.md)。公共菜单单独预览与测试见 [模块说明](../shared/liquid-popup/README.md)。
+
+独立应用兼容转发测试可在配置 Fences 时指定 `-DAI_SPACE_TEST_BINARY=/absolute/path/ai-space`，构建 `ai-space-client-test`，再运行 `ctest --output-on-failure -R ai_space_bridge`。它在独立 Xvfb / D-Bus 中启动真实 AI空间，使用临时 HOME。

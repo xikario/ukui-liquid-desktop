@@ -148,8 +148,8 @@ static int runSettingsCenterTest(const QString &root) {
     startup->setChecked(true);check(LiquidDesklet::autoStartEnabled("clock") && !canvas.clockWidgetVisible(),"startup choice does not immediately show a component");
     visible->setChecked(true);check(canvas.clockWidgetVisible(),"visibility switch reveals component");
     visible->setChecked(false);check(!canvas.clockWidgetVisible() && LiquidDesklet::autoStartEnabled("clock"),"hiding does not erase startup choice");
-    canvas.showSystemMonitorWidget();canvas.showSmartSpaceWidget();settle(400);
-    for(const QString id:{"monitor","smart"}){
+    canvas.showSystemMonitorWidget();settle(400);
+    for(const QString id:{"monitor"}){
         window->openPage(id);settle(100);
         auto *current=window->findChild<QStackedWidget *>("settingsPages")->currentWidget();
         auto forms=current->findChildren<QDialogButtonBox *>();
@@ -162,47 +162,6 @@ static int runSettingsCenterTest(const QString &root) {
             check(interval->value()==qMin(value+1,interval->maximum()),"normal step button updates the existing spinbox");interval->setValue(3);
             forms.first()->button(QDialogButtonBox::Apply)->click();
             check(s.value("systemMonitor/statInterval").toInt()==3,"monitor apply keeps sampling configuration persistence");
-        }
-        if(id=="smart") {
-            check(!canvas.smartSpaceIndexBusy(),"visiting smart settings does not start indexing");
-            auto *tabs=current->findChild<QTabWidget *>();
-            if(tabs)tabs->setCurrentIndex(3);settle(80);
-            bool skinFound=false;
-            for(auto *skin:current->findChildren<QComboBox *>())if(skin->findText("黑夜模式")>=0){
-                skinFound=true;skin->showPopup();settle(80);
-                QWidget *surface=skin->view()->window();
-                const QRect lastRow=skin->view()->visualRect(skin->model()->index(skin->count()-1,0));
-                check(lastRow.bottom()<skin->view()->viewport()->height(),"three-item skin selector shows the complete last row");
-                for(auto *child:surface->findChildren<QWidget *>())
-                    if(QByteArray(child->metaObject()->className())=="QComboBoxPrivateScroller")
-                        check(!child->isVisible(),"skin list has no opaque private top or bottom scroller");
-                const QImage image=surface->grab().toImage();int whiteRows=0;
-                for(int y=0;y<image.height();++y){int white=0;
-                    for(int x=0;x<image.width();++x){const auto c=image.pixelColor(x,y);white+=c.alpha()>220 && c.red()>235 && c.green()>235 && c.blue()>235;}
-                    if(white>image.width()*0.8)++whiteRows;
-                }
-                check(whiteRows<3,"skin dropdown contains no full-width white band");
-                surface->grab().save(QString("artifacts/settings-skin-popup-%1.png").arg(window->devicePixelRatioF()));
-                skin->hidePopup();
-            }
-            check(skinFound,"smart-space skin selector was exercised");
-            for(int i=0;tabs && i<tabs->count();++i){
-                tabs->setCurrentIndex(i);settle(50);
-                check(!tabs->widget(i)->autoFillBackground(),"every smart tab keeps its liquid background");
-                const QImage tab=window->grab(QRect(tabs->mapTo(window,QPoint()),tabs->size())).toImage();int light=0,total=0;
-                for(int y=2;y<tab.height();y+=4)for(int x=2;x<tab.width();x+=4){const auto c=tab.pixelColor(x,y);light+=c.red()>230 && c.green()>230 && c.blue()>230;++total;}
-                check(light<total/5,"smart tab has no large white surface during navigation");
-                QDir().mkpath("artifacts");window->grab().save(QString("artifacts/settings-smart-tab-%1-%2.png").arg(i).arg(window->devicePixelRatioF()));
-            }
-            if(tabs){
-                tabs->setCurrentIndex(4);auto *chunk=tabs->currentWidget()->findChildren<QSpinBox *>().first();
-                const int chunkBefore=chunk->value();chunk->stepUp();
-                check(chunk->value()==chunkBefore+chunk->singleStep(),"spinbox respects configured chunk-size steps");
-                chunk->setValue(chunkBefore);tabs->setCurrentIndex(0);
-            }
-            for(auto *c:current->findChildren<QCheckBox *>())if(c->text().contains("同步目录"))c->setChecked(false);
-            if(!forms.isEmpty())forms.first()->button(QDialogButtonBox::Apply)->click();
-            check(!canvas.smartSpaceIndexBusy(),"applying smart configuration without explicit indexing does not start a job");
         }
         QDir().mkpath("artifacts");window->grab().save(QString("artifacts/settings-%1-%2.png").arg(id).arg(window->devicePixelRatioF()));
     }

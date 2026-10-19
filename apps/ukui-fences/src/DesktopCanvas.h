@@ -25,7 +25,7 @@ class FenceWidget;
 class FenceGlassRenderer;
 class DesktopIcon;
 class SystemMonitor;
-class SmartSpaceWidget;
+class AiSpaceClient;
 class ClockDesklet;
 class MusicDesklet;
 class CalendarDesklet;
@@ -50,8 +50,7 @@ class DesktopCanvas : public QWidget
     Q_CLASSINFO("D-Bus Interface", "org.ukui.fences")
     friend class FenceWidget;
     friend class SystemMonitor;
-    friend class SmartSpaceWidget;
-    friend class SmartSpaceOpticsTestAccess;
+    friend class AiSpaceClient;
     friend class FencesSettingsWindow;
 public:
     explicit DesktopCanvas(QWidget *parent = nullptr);
@@ -150,7 +149,7 @@ public slots:
     Q_SCRIPTABLE void excludeSmartSpaceFolder(const QString &path);
     Q_SCRIPTABLE bool smartSpaceOverlapsDesktopIcons() const;
     Q_SCRIPTABLE bool systemMonitorVisible() const { return m_monitor != nullptr; }
-    Q_SCRIPTABLE bool smartSpaceVisible() const { return m_smartSpace != nullptr; }
+    Q_SCRIPTABLE bool smartSpaceVisible() const;
     Q_SCRIPTABLE void setEditModeDBus(bool edit);
     Q_SCRIPTABLE void setClockWidgetVisible(bool visible);
     Q_SCRIPTABLE void setActivityWidgetVisible(bool visible);
@@ -291,7 +290,6 @@ private:
     void showSmartSpace();
     void setSmartSpaceVisible(bool visible);
     void setSystemMonitorVisible(bool visible);
-    void applySmartSpaceWindowMode(bool alwaysOnTop);
     void applyDesktopGrid(int columns, int rows, qreal iconScale);
     void beginWallpaperFenceCapture();
     void finishWallpaperFenceCapture(const QRect &selection);
@@ -379,7 +377,7 @@ private:
     QTimer             *m_debounce  = nullptr;
     QTimer             *m_desktopSyncTimer = nullptr;
     QTimer             *m_cutRefreshTimer = nullptr;
-    QTimer             *m_smartSpaceRelayoutTimer = nullptr;
+    QTimer             *m_widgetRelayoutTimer = nullptr;
     QTimer             *m_screenGeometryTimer = nullptr;
     QList<QWidget*>     m_hotCornerGuards;
     QSet<QString>       m_cutWatchPaths;
@@ -417,7 +415,7 @@ private:
     QPoint              m_rubberOrigin;
     QRect               m_rubberRect;
     SystemMonitor      *m_monitor = nullptr;
-    SmartSpaceWidget   *m_smartSpace = nullptr;
+    AiSpaceClient      *m_aiSpaceClient = nullptr;
     MusicDesklet       *m_musicWidget = nullptr;
     CalendarDesklet    *m_calendarWidget = nullptr;
     ClockDesklet       *m_clockWidget = nullptr;
