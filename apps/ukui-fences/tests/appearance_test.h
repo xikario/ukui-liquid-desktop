@@ -71,7 +71,7 @@ static int runAppearanceTest(const QString &root)
         auto *widgets = menu->findChild<QMenu *>("desktopWidgetsMenu");
         check(widgets && widgets->actions().size()==5, "five embedded widget visibility toggles available");
         auto *ai=menu->findChild<QAction *>("smartSpaceWidgetAction");
-        check(ai && menu->actions().contains(ai) && !ai->isCheckable(),"AI Space is a separate application entry");
+        check(!ai,"Fences desktop menu has no AI Space entry");
         if (widgets) {
             for (auto *action : widgets->actions())
                 check(action->isCheckable() && action->icon().isNull(), "embedded widgets reserve the check column");

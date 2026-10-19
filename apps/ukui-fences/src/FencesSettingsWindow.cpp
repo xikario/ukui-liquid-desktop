@@ -57,7 +57,7 @@ namespace {
 struct Page { const char *id; const char *name; };
 const Page pages[] = {{"appearance","液态外观"},{"wallpaper","壁纸与配色"},
     {"icons","图标与文字"},{"layout","分区与布局"},{"widgets","桌面小组件"},
-    {"smart","    AI空间"},{"monitor","    系统监视"},{"clock","    时钟与倒计时"},
+    {"monitor","    系统监视"},{"clock","    时钟与倒计时"},
     {"activity","    活动统计"},{"music","    音乐播放器"},{"calendar","    日历与待办"},
     {"sync","文件同步"},{"help","帮助与维护"}};
 QPushButton *button(QVBoxLayout *layout, const QString &text, const std::function<void()> &fn,
@@ -308,7 +308,7 @@ void FencesSettingsWindow::refreshStates() {
         const QString startup=check->property("startupKey").toString();
         QSignalBlocker block(check);
         if(!id.isEmpty()) {
-            bool on=id=="smart"?m_canvas->smartSpaceVisible():id=="monitor"?m_canvas->systemMonitorVisible():
+            bool on=id=="monitor"?m_canvas->systemMonitorVisible():
                 id=="clock"?m_canvas->clockWidgetVisible():id=="activity"?m_canvas->activityWidgetVisible():
                 id=="music"?m_canvas->musicWidgetVisible():m_canvas->calendarWidgetVisible();check->setChecked(on);
         } else if(!startup.isEmpty()) {
@@ -446,12 +446,6 @@ QWidget *FencesSettingsWindow::buildPage(const QString &id) {
             });
             button(c,"专项设置",[this,key]{openPage(key);});
         }
-    } else if(id=="smart") {
-        auto *c=card(layout,"AI空间 · 独立应用");
-        hint(c,"文件索引、OCR、知识库和液态搜索界面已移至独立的 AI空间进程。它的配置、索引与开机启动由 AI空间管理。");
-        button(c,"打开AI空间",[this]{m_canvas->showSmartSpaceWidget();});
-        button(c,"打开AI空间设置",[this]{m_canvas->showSmartSpaceSettings();});
-        hint(c,"项目与安装说明：https://github.com/xikario/ai-space");
     } else if(id=="monitor") {
         auto *c=card(layout,"专项配置");QWidget *editor=nullptr;
         if(id=="monitor" && m_canvas->m_monitor)editor=m_canvas->m_monitor->createSettingsPage(page);
@@ -463,7 +457,7 @@ QWidget *FencesSettingsWindow::buildPage(const QString &id) {
             connect(editor,&QObject::destroyed,scroll,[scroll]{scroll->deleteLater();});
         } else {
             hint(c,"组件当前未启用。启用后可在此配置；仅查看此页不会启动采样或索引。");
-            button(c,"启用组件并配置",[this,id,scroll]{if(id=="smart")m_canvas->setSmartSpaceVisible(true);else m_canvas->setSystemMonitorVisible(true);m_pages.remove(id);scroll->deleteLater();openPage(id);});
+            button(c,"启用组件并配置",[this,id,scroll]{m_canvas->setSystemMonitorVisible(true);m_pages.remove(id);scroll->deleteLater();openPage(id);});
         }
     } else if(id=="calendar") {
         auto *c=card(layout,"待办与节假日");

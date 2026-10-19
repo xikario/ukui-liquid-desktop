@@ -376,8 +376,8 @@ int main(int argc, char **argv)
                     return result;
                 };
                 check(labels(menu) == QStringList({"新建", "粘贴", "撤销上一步", "刷新桌面", "打开终端", "打开文件管理器", "编辑分区布局",
-                    "排列与布局", "桌面小组件", "打开AI空间…", "Fences 设置…"}),
-                    "desktop menu includes the independent AI Space entry in order");
+                    "排列与布局", "桌面小组件", "Fences 设置…"}),
+                    "desktop menu contains only Fences actions in order");
                 auto *edit=menu->findChild<QAction *>("layoutEditAction");
                 check(edit && !edit->isChecked(),"layout action starts unlocked for activation");
                 if(edit){

@@ -98,11 +98,6 @@ void setupTrayIcon(DesktopCanvas &canvas, const QIcon &icon)
     QObject::connect(actMonitor, &QAction::triggered,
                      &canvas, &DesktopCanvas::showSystemMonitorWidget);
 
-    auto *actSmartSpace = menu->addAction(
-        QIcon::fromTheme("folder-saved-search"), "打开AI空间");
-    QObject::connect(actSmartSpace, &QAction::triggered,
-                     &canvas, &DesktopCanvas::showSmartSpaceWidget);
-
     menu->addSeparator();
 
     auto *actQuit = menu->addAction(QIcon::fromTheme("application-exit"), "退出 ukui-fences");

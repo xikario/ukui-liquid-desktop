@@ -63,4 +63,4 @@
 
 开发构建路径为 `apps/ukui-fences/build/liquid-popup/liquid-popup-preview`，是否构建由 `UKUI_FENCES_BUILD_POPUP_PREVIEW` 控制。路径请以实际构建目录为准；单独构建方式见 [公共菜单模块](../../../shared/liquid-popup/README.md)。
 
-原智能空间已拆分为 [AI空间](https://github.com/xikario/ai-space)，桌面右键的「打开AI空间…」与设置页入口启动独立应用，不表示启用 Fences 小组件。
+原智能空间已拆分为 [AI空间](https://github.com/xikario/ai-space)，Fences 桌面右键、托盘和设置导航均无 AI空间条目，使用系统应用菜单中的独立程序入口。

@@ -1983,9 +1983,9 @@ QString DesktopCanvas::settingsHelpHtml() const
             "<h3>布局编辑</h3>"
             "<p>右键 → 编辑分区布局，开启后移动、缩放分区和桌面小组件，支持边缘吸附和图标避让。"
             "完成后选择“退出布局编辑”。分区右键可重命名、锁定；“分区设置…”统一调整颜色、透明度、标题图标和字体。</p>"
-            "<h3>五类桌面小组件与独立AI空间</h3>"
+            "<h3>五类桌面小组件</h3>"
             "<p>右键 → 桌面小组件，可切换系统监视、时钟与倒计时、活动统计、"
-            "音乐播放器、日历与系统待办。小组件对号表示已启用；AI空间由独立应用管理。</p>"
+            "音乐播放器、日历与系统待办。对号表示已启用。</p>"
             "<p>活动统计记录前台应用停留时间；音乐组件通过 MPRIS 自动接入已配置、最近启动的播放器。"
             "日历支持农历、节假日、年月滚轮和待办折叠；内置中国调休数据为 2026 年，日历右键可同步最新农历和已发布的节假日；系统待办只读。</p>"
             "<h3>自启动与外观</h3>"
@@ -4948,11 +4948,6 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     connect(actDesklet, &QAction::triggered,
             [this](bool visible) { setSystemMonitorVisible(visible); });
 
-    auto *actSmartSpace = new QAction("打开AI空间…",&menu);
-    actSmartSpace->setObjectName("smartSpaceWidgetAction");
-    connect(actSmartSpace, &QAction::triggered,
-            this, &DesktopCanvas::showSmartSpaceWidget);
-
     auto addDesktopWidget = [this, widgetsMenu](const QString &key, const QString &title,
                                                    bool visible, auto show) {
         auto *action = widgetsMenu->addAction("显示" + title);
@@ -5087,7 +5082,6 @@ void DesktopCanvas::contextMenuEvent(QContextMenuEvent *e)
     menu.addMenu(sortModeMenu);
     menu.addSeparator();
     menu.addMenu(widgetsMenu);
-    menu.addAction(actSmartSpace);
     menu.addSeparator();
     menu.addAction(settingsAction);
 

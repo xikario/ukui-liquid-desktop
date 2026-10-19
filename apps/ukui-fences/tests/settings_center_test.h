@@ -75,8 +75,13 @@ static int runSettingsCenterTest(const QString &root) {
         check(settingsIndex>desktopIndex && desktopIndex>=0,"desktop restacking stays below the settings window");
         if(children)XFree(children);XCloseDisplay(display);
     }
-    for(const QString id:{"wallpaper","icons","layout","widgets","smart","monitor","clock","activity","music","calendar","sync","help"}){window->openPage(id);settle(30);}
+    for(const QString id:{"wallpaper","icons","layout","widgets","monitor","clock","activity","music","calendar","sync","help"}){window->openPage(id);settle(30);}
     check(!canvas.smartSpaceVisible() && !canvas.systemMonitorVisible(),"browsing all pages does not start hidden models");
+    for(auto *list:window->findChildren<QListWidget *>())
+        for(int row=0;row<list->count();++row)
+            check(list->item(row)->data(Qt::UserRole).toString()!="smart", "settings navigation has no AI Space page");
+    window->openPage("smart");
+    check(QSettings().value("settingsWindow/page").toString()!="smart", "retired Smart Space page restores to a valid Fences page");
     window->openPage("wallpaper");
     auto *wallpage=window->findChild<QStackedWidget *>("settingsPages")->currentWidget();
     auto *combo=wallpage->findChildren<QComboBox *>().last();const int oldIndex=combo->currentIndex();
