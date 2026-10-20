@@ -87,6 +87,7 @@ QString PanelController::configFile() const {
     return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)+"/ukui/liquid-panel.ini";
 }
 PanelController::PanelController(QObject *parent):QObject(parent) {
+    WindowEffectsSettings::recoverPendingTrial();
     QSettings s(configFile(),QSettings::IniFormat);
     m_refraction=qBound(0.,s.value("appearance/refraction",3.5).toDouble(),8.);
     m_clarity=qBound(0.,s.value("appearance/clarity",0.).toDouble(),1.);

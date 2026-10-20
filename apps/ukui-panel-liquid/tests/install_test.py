@@ -19,7 +19,7 @@ class InstallTest(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.root, self.home = self.base / 'repo', self.base / 'home with space'
         self.inputs = ['build/plugins/styles/libukuiliquidpanel.so', 'scripts/ukui-panel-liquid',
-                       'scripts/session-start.py', 'scripts/restore.py']
+                       'scripts/session-start.py', 'scripts/restore.py', 'build/ukui-liquid-effects-trial']
         for name in self.inputs:
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -83,7 +83,7 @@ class InstallTest(unittest.TestCase):
         self.seed()
         before = self.snapshot()
         real = os.replace
-        for fail_at in range(1, 7):
+        for fail_at in range(1, len(self.targets)+1):
             with self.subTest(fail_at=fail_at):
                 count = 0
                 def fail(source, destination):
@@ -111,11 +111,11 @@ class InstallTest(unittest.TestCase):
         with patch.object(installer.os, 'replace', side_effect=fail):
             with self.assertRaisesRegex(RuntimeError, 'original files restored'):
                 self.run_install()
-        self.assertEqual(self.snapshot(), [None] * 6)
+        self.assertEqual(self.snapshot(), [None] * len(self.targets))
         self.assertFalse(self.home.exists())
         self.assert_clean()
 
-    def test_manifest_failure_rolls_back_all_six_targets(self):
+    def test_manifest_failure_rolls_back_all_targets(self):
         self.seed()
         before = self.snapshot()
         real = Path.write_text

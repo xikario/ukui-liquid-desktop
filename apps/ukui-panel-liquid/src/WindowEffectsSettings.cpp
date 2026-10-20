@@ -14,12 +14,47 @@
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
 #include <QDBusError>
+#include <QDBusVariant>
+#include <QDBusArgument>
+#include <QProcess>
+#include <QDir>
+#include <QFileInfo>
+#include <QFile>
+#include <QLockFile>
+#include <QFileSystemWatcher>
+#include <QTimer>
+#include <dlfcn.h>
 #include <functional>
 
 namespace {
 const QString magic=QStringLiteral("magiclamp"),maximize=QStringLiteral("kwin4_effect_maximize");
 const QStringList alternatives={QStringLiteral("kwin4_effect_squash"),QStringLiteral("kwin4_effect_squashtablet")};
 QString configPath() { return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)+"/ukui-kwinrc"; }
+QString trialJournal() {return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)+"/ukui/liquid-effects-trial.ini";}
+QByteArray journalContents() {
+    QFile file(trialJournal());return file.open(QIODevice::ReadOnly)?file.read(65536):QByteArray();
+}
+QString trialProgram() {
+    const QString installed=QDir::homePath()+"/.local/bin/ukui-liquid-effects-trial";
+    if(QFileInfo(installed).isExecutable())return installed;
+    const QString beside=QCoreApplication::applicationDirPath()+"/ukui-liquid-effects-trial";
+    if(QFileInfo(beside).isExecutable())return beside;
+    Dl_info info{};
+    if(dladdr(reinterpret_cast<void *>(&trialProgram),&info) && info.dli_fname) {
+        const QString built=QFileInfo(QString::fromLocal8Bit(info.dli_fname)).dir().absoluteFilePath("../../ukui-liquid-effects-trial");
+        if(QFileInfo(built).isExecutable())return built;
+    }
+    return QStandardPaths::findExecutable("ukui-liquid-effects-trial");
+}
+void configureTrialProcess(QProcess *process) {
+    process->setStandardInputFile(QProcess::nullDevice());
+    process->setStandardOutputFile(QProcess::nullDevice());
+    const QString directory=QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation)+"/ukui-panel-liquid";
+    // A regular file survives the panel's exit. Never leave the helper writing
+    // to the panel's QProcess pipes; a late log write could otherwise get EPIPE.
+    process->setStandardErrorFile(QDir().mkpath(directory)
+        ? directory+"/effects-trial.log":QProcess::nullDevice());
+}
 using Reply=std::function<void(const QDBusMessage &)>;
 void call(QObject *context,const QString &method,const QVariantList &args,Reply done) {
     auto message=QDBusMessage::createMethodCall("org.ukui.KWin","/Effects","org.ukui.kwin.Effects",method);
@@ -39,8 +74,9 @@ QString failure(const QDBusMessage &r) {
 // flight must not leave a runtime-only change that disappears on next login.
 class Change final : public QObject {
 public:
-    Change(std::function<void(QString)> done):QObject(qApp),finished(std::move(done)) {}
+    Change(std::function<void(QString)> done):QObject(qApp),operationLock(trialJournal()+".operation-lock"),finished(std::move(done)) {}
     void toggle(const QString &effect,bool enabled) {
+        if(!acquire())return;
         QSettings settings(configPath(),QSettings::IniFormat);
         if(!settings.isWritable()){finish("无法保存系统窗口动画，请检查配置文件权限。");return;}
         target=effect;desired=enabled;
@@ -48,6 +84,7 @@ public:
         readNext(0);
     }
     void duration(int value) {
+        if(!acquire())return;
         QSettings s(configPath(),QSettings::IniFormat);
         const QString key="Effect-MagicLamp/AnimationDuration";
         const QVariant before=s.value(key);const bool existed=s.contains(key);
@@ -61,7 +98,15 @@ public:
         });
     }
 private:
-    void finish(const QString &error) {finished(error);deleteLater();}
+    bool acquire() {
+        QDir().mkpath(QFileInfo(trialJournal()).absolutePath());
+        QSettings j(trialJournal(),QSettings::IniFormat);
+        if(!operationLock.tryLock(0) || j.value("pending").toBool()) {
+            finish("窗口后端正在试用或等待恢复，请先完成试用或恢复原后端。");return false;
+        }
+        return true;
+    }
+    void finish(const QString &error) {operationLock.unlock();finished(error);deleteLater();}
     void readNext(int i) {
         if(i==ids.size()) {changeNext(0);return;}
         call(this,"isEffectLoaded",{ids[i]},[this,i](const QDBusMessage &r){
@@ -101,6 +146,7 @@ private:
     }
     QString target;bool desired=false;
     QStringList ids;QList<bool> previous;QList<int> changed;
+    QLockFile operationLock;
     std::function<void(QString)> finished;
 };
 }
@@ -109,6 +155,14 @@ WindowEffectsSettings::WindowEffectsSettings(QWidget *parent):QWidget(parent) {
     auto *form=new QFormLayout(this);
     auto *intro=new QLabel("以下设置作用于整个桌面的应用窗口，由系统 UKUI KWin 执行动画。",this);
     intro->setWordWrap(true);form->addRow(intro);
+    m_backend=new QLabel("正在读取合成后端…",this);m_backend->setWordWrap(true);
+    m_backend->setObjectName("liquidWindowBackendInfo");form->addRow(m_backend);
+    auto *backendRow=new QWidget(this);auto *backendLayout=new QHBoxLayout(backendRow);backendLayout->setContentsMargins(0,0,0,0);
+    m_trial=new QPushButton("试用 OpenGL 动画…",backendRow);m_trial->setObjectName("liquidWindowBackendTrial");m_trial->setEnabled(false);
+    m_restoreBackend=new QPushButton("恢复切换前的后端",backendRow);m_restoreBackend->setObjectName("liquidWindowBackendRestore");m_restoreBackend->setEnabled(false);
+    backendLayout->addWidget(m_trial);backendLayout->addWidget(m_restoreBackend);form->addRow(backendRow);
+    connect(m_trial,&QPushButton::clicked,this,[this]{runBackendTrial(false);});
+    connect(m_restoreBackend,&QPushButton::clicked,this,[this]{runBackendTrial(true);});
     m_magic=new QCheckBox("魔壶效果（最小化与恢复）",this);m_magic->setObjectName("liquidWindowMagicLamp");form->addRow(m_magic);
     auto *row=new QWidget(this);auto *layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
     m_duration=new QSpinBox(row);m_duration->setObjectName("liquidWindowMagicDuration");
@@ -124,31 +178,120 @@ WindowEffectsSettings::WindowEffectsSettings(QWidget *parent):QWidget(parent) {
     connect(m_maximize,&QCheckBox::toggled,this,[this](bool on){toggleEffect(maximize,on);});
     connect(m_duration,qOverload<int>(&QSpinBox::valueChanged),this,&WindowEffectsSettings::saveDuration);
     connect(m_reset,&QPushButton::clicked,this,[this]{if(m_duration->value()!=0)m_duration->setValue(0);});
+    auto *watch=new QFileSystemWatcher(this);
+    auto *refresh=new QTimer(this);refresh->setSingleShot(true);refresh->setInterval(100);
+    auto watchJournal=[watch]{
+        for(const auto &path:{trialJournal(),QFileInfo(trialJournal()).absolutePath(),
+                QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)})
+            if(QFileInfo::exists(path) && !watch->files().contains(path) && !watch->directories().contains(path))watch->addPath(path);
+    };
+    watchJournal();
+    connect(watch,&QFileSystemWatcher::fileChanged,refresh,qOverload<>(&QTimer::start));
+    connect(watch,&QFileSystemWatcher::directoryChanged,refresh,qOverload<>(&QTimer::start));
+    connect(refresh,&QTimer::timeout,this,[this,watchJournal]{
+        watchJournal();if(!m_helperRunning && journalContents()!=m_journalContents)reload();
+    });
     reload();
 }
 void WindowEffectsSettings::setBusy(bool busy) {
-    m_magic->setEnabled(!busy && m_magicSupported);m_maximize->setEnabled(!busy && m_maximizeSupported);
-    m_duration->setEnabled(!busy && m_magicSupported);m_reset->setEnabled(!busy && m_magicSupported);
+    m_busy=busy;
+    m_trial->setEnabled(!busy && m_trialAvailable);m_restoreBackend->setEnabled(!busy && m_restoreAvailable);
+    m_magic->setEnabled(!busy && !m_trialPending && m_magicSupported);m_maximize->setEnabled(!busy && !m_trialPending && m_maximizeSupported);
+    m_duration->setEnabled(!busy && !m_trialPending && m_magicSupported);m_reset->setEnabled(!busy && !m_trialPending && m_magicSupported);
 }
 void WindowEffectsSettings::reload() {
+    const int serial=++m_reloadGeneration;m_journalContents=journalContents();reloadBackend(serial);
     setBusy(true);m_status->setText("正在读取系统窗口动画…");
     {QSignalBlocker block(m_duration);QSettings s(configPath(),QSettings::IniFormat);m_duration->setValue(s.value("Effect-MagicLamp/AnimationDuration",0).toInt());}
-    call(this,"isEffectSupported",{magic},[this](const QDBusMessage &r){
-        if(!ok(r)){m_status->setText(failure(r));return;}m_magicSupported=boolean(r);
-        call(this,"isEffectSupported",{maximize},[this](const QDBusMessage &r){
-            if(!ok(r)){m_status->setText(failure(r));return;}m_maximizeSupported=boolean(r);
-            call(this,"isEffectLoaded",{magic},[this](const QDBusMessage &r){
-                if(!ok(r)){m_status->setText(failure(r));return;}
+    call(this,"isEffectSupported",{magic},[this,serial](const QDBusMessage &r){
+        if(serial!=m_reloadGeneration)return;
+        if(!ok(r)){readFailure(r);return;}m_magicSupported=boolean(r);
+        call(this,"isEffectSupported",{maximize},[this,serial](const QDBusMessage &r){
+            if(serial!=m_reloadGeneration)return;
+            if(!ok(r)){readFailure(r);return;}m_maximizeSupported=boolean(r);
+            call(this,"isEffectLoaded",{magic},[this,serial](const QDBusMessage &r){
+                if(serial!=m_reloadGeneration)return;
+                if(!ok(r)){readFailure(r);return;}
                 {QSignalBlocker block(m_magic);m_magic->setChecked(boolean(r));}
-                call(this,"isEffectLoaded",{maximize},[this](const QDBusMessage &r){
-                    if(!ok(r)){m_status->setText(failure(r));return;}
+                call(this,"isEffectLoaded",{maximize},[this,serial](const QDBusMessage &r){
+                    if(serial!=m_reloadGeneration)return;
+                    if(!ok(r)){readFailure(r);return;}
                     {QSignalBlocker block(m_maximize);m_maximize->setChecked(boolean(r));}
-                    setBusy(false);m_status->setText(m_magicSupported && m_maximizeSupported?
-                        "更改后立即生效并保存。":"当前系统不支持的动画已禁用。");
+                    setBusy(false);m_status->setText(!m_operationError.isEmpty()?m_operationError:(m_magicSupported && m_maximizeSupported?
+                        "更改后立即生效并保存。":"当前合成环境不支持的动画已禁用；可查看上方后端说明。"));
                 });
             });
         });
     });
+}
+void WindowEffectsSettings::readFailure(const QDBusMessage &reply) {
+    m_magicSupported=false;m_maximizeSupported=false;setBusy(false);m_status->setText(failure(reply));
+}
+void WindowEffectsSettings::recoverPendingTrial() {
+    QSettings saved(trialJournal(),QSettings::IniFormat);
+    if(!saved.value("pending").toBool())return;
+    const QString program=trialProgram();
+    if(!program.isEmpty()) {
+        QProcess process;configureTrialProcess(&process);
+        process.setProgram(program);process.setArguments({"--recover"});process.startDetached();
+    }
+}
+void WindowEffectsSettings::reloadBackend(int serial) {
+    m_trialAvailable=false;m_restoreAvailable=false;
+    QSettings journal(trialJournal(),QSettings::IniFormat);m_trialPending=journal.value("pending").toBool();
+    m_restoreAvailable=!trialProgram().isEmpty() && (m_trialPending || journal.value("saved").toBool());
+    m_trial->setEnabled(false);m_restoreBackend->setEnabled(false);
+    auto msg=QDBusMessage::createMethodCall("org.ukui.KWin","/Compositor","org.freedesktop.DBus.Properties","Get");
+    msg.setArguments({"org.ukui.kwin.Compositing","compositingType"});
+    auto *watch=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(msg,1500),this);
+    connect(watch,&QDBusPendingCallWatcher::finished,this,[this,watch,serial]{
+        const QDBusMessage r=watch->reply();watch->deleteLater();
+        if(serial!=m_reloadGeneration)return;
+        if(!ok(r) || r.arguments().isEmpty()){m_backend->setText("无法读取当前合成后端；窗口特效仍按系统能力检测。");return;}
+        const QString type=qvariant_cast<QDBusVariant>(r.arguments().first()).variant().toString();
+        const bool openGL=type.startsWith("gl") || type.contains("opengl",Qt::CaseInsensitive);
+        m_backend->setText(QString("当前后端：%1。%2\n独显与集显均按当前桌面显卡的驱动及合成能力判断；此处不切换应用所用显卡。试用后需在 20 秒内确认，否则自动恢复。").arg(type,
+            openGL?"OpenGL 动画能力由系统特效接口确认。":"魔壶需要 OpenGL；XRender 不提供该动画。"));
+        QSettings saved(trialJournal(),QSettings::IniFormat);
+        const bool helper=!trialProgram().isEmpty();
+        if(!helper)m_backend->setText(m_backend->text()+"\n后端试用程序未安装，请重新部署液态面板。");
+        m_trialAvailable=helper && type=="xrender" && !saved.value("saved").toBool() && !saved.value("pending").toBool();
+        m_restoreAvailable=helper && (saved.value("saved").toBool() || saved.value("pending").toBool());
+        m_trial->setEnabled(!m_busy && m_trialAvailable);
+        m_restoreBackend->setEnabled(!m_busy && m_restoreAvailable);
+        auto query=QDBusMessage::createMethodCall("org.ukui.KWin","/Compositor","org.ukui.kwin.Compositing","getGPUStatus");
+        auto *gpu=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(query,1500),this);
+        connect(gpu,&QDBusPendingCallWatcher::finished,this,[this,gpu,serial]{
+            const QDBusMessage result=gpu->reply();gpu->deleteLater();
+            if(serial!=m_reloadGeneration)return;
+            if(!ok(result) || result.arguments().isEmpty())return;
+            const QVariantMap map=qdbus_cast<QVariantMap>(result.arguments().first());
+            if(map.value("hasRestrictedDevice").toBool())
+                m_backend->setText(m_backend->text()+QString("\n系统报告显卡兼容限制（%1:%2）。%3试用只设置用户后端，不修改系统显卡列表。").arg(map.value("vid").toString(),map.value("pid").toString(),
+                    map.value("shouldBeXRenderBackend").toBool()?"自动策略倾向 XRender；":""));
+        });
+    });
+}
+void WindowEffectsSettings::runBackendTrial(bool restore) {
+    const QString program=trialProgram();if(program.isEmpty()){m_status->setText("后端试用程序未安装，请重新部署液态面板。");return;}
+    m_operationError.clear();m_helperRunning=true;setBusy(true);m_trial->setEnabled(false);m_restoreBackend->setEnabled(false);
+    m_status->setText(restore?"正在恢复原后端…":"请在独立试用窗口中测试最小化与恢复，并确认保留或恢复。");
+    // No QObject parent: the independent confirmation helper must outlive a
+    // destroyed settings view or panel. Delete the process wrapper on exit.
+    auto *process=new QProcess;configureTrialProcess(process);const QPointer<WindowEffectsSettings> guard(this);
+    connect(process,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),process,[guard,process](int code,QProcess::ExitStatus status){
+        if(guard){guard->m_helperRunning=false;if(code==3 && status==QProcess::NormalExit)
+            guard->m_operationError="已有窗口后端操作正在运行，请先完成该操作。";
+            else if(status!=QProcess::NormalExit || (code!=0 && code!=2))
+            guard->m_operationError="后端试用或恢复未通过；已尝试恢复，请检查当前后端和恢复按钮。";
+            guard->reload();}
+        process->deleteLater();
+    });
+    connect(process,&QProcess::errorOccurred,process,[guard,process](QProcess::ProcessError error){
+        if(error!=QProcess::FailedToStart)return;
+        if(guard){guard->m_helperRunning=false;guard->m_operationError="无法启动后端试用程序。";guard->reload();}process->deleteLater();
+    });
+    process->start(program,restore?QStringList{"--restore"}:QStringList{});
 }
 void WindowEffectsSettings::toggleEffect(const QString &effect,bool on) {
     setBusy(true);m_status->setText("正在应用窗口动画…");

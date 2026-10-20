@@ -14,8 +14,24 @@
 #include <QDebug>
 #include <QTimer>
 #include <QProcess>
+#include <QProcessEnvironment>
+#include <QFile>
+#include <QFileInfo>
+#include <QDir>
+#include <QLockFile>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
+
+class Compositor : public QObject {
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface","org.ukui.kwin.Compositing")
+    Q_PROPERTY(QString compositingType READ type)
+public:
+    QString type()const{return "xrender";}
+public slots:
+    QVariantMap getGPUStatus(){return {{"hasRestrictedDevice",true},{"vid","1EC8"},{"pid","9810"}};}
+};
 
 class Effects : public QObject,protected QDBusContext {
     Q_OBJECT
@@ -46,7 +62,20 @@ static bool wait(const std::function<bool()> &predicate) {
 }
 int main(int argc,char **argv) {
     QTemporaryDir temp;qputenv("XDG_CONFIG_HOME",temp.path().toUtf8());
-    QApplication app(argc,argv);Effects service;
+    QApplication app(argc,argv);Effects service;Compositor compositor;
+    if(app.arguments().contains("--launch-host")) {
+        auto *view=new WindowEffectsSettings;
+        auto *trial=view->findChild<QPushButton *>("liquidWindowBackendTrial");
+        QTimer poll;poll.setInterval(10);
+        QObject::connect(&poll,&QTimer::timeout,[&]{
+            if(!trial->isEnabled())return;
+            poll.stop();trial->click();
+            // Abrupt host exit closes inherited descriptors; the helper must
+            // still be able to write diagnostics and finish independently.
+            QTimer::singleShot(500,[]{std::_Exit(0);});
+        });
+        poll.start();QTimer::singleShot(6000,[]{std::_Exit(2);});return app.exec();
+    }
     auto bus=QDBusConnection::sessionBus();
     if(app.arguments().contains("--stall")) {
         service.delaySupport=true;
@@ -55,6 +84,7 @@ int main(int argc,char **argv) {
     }
     check(bus.registerService("org.ukui.KWin"),"mock owns isolated compositor service");
     check(bus.registerObject("/Effects",&service,QDBusConnection::ExportAllSlots),"mock exports real effects protocol");
+    check(bus.registerObject("/Compositor",&compositor,QDBusConnection::ExportAllSlots|QDBusConnection::ExportAllProperties),"mock exports backend and GPU capabilities");
     const auto config=temp.path()+"/ukui-kwinrc";
     {QSettings s(config,QSettings::IniFormat);s.setValue("Plugins/blurEnabled",true);s.setValue("Compositing/AnimationSpeed",2);s.setValue("Plugins/magiclampEnabled",false);s.setValue("Plugins/kwin4_effect_squashEnabled",true);}
     auto read=[&](const QString &key){QSettings s(config,QSettings::IniFormat);return s.value(key);};
@@ -65,6 +95,9 @@ int main(int argc,char **argv) {
     auto *reset=view->findChild<QPushButton *>("liquidWindowMagicReset");
     check(wait([&]{return magic->isEnabled();}),"asynchronous initial state completes");
     check(!magic->isChecked() && maximize->isChecked() && duration->value()==0 && service.mutations==0,"opening reads runtime status and default duration without changing system");
+    auto *backend=view->findChild<QLabel *>("liquidWindowBackendInfo");
+    check(wait([&]{return backend->text().contains("1EC8:9810");}) && backend->text().contains("xrender")
+        && backend->text().contains("兼容限制") && service.mutations==0,"backend and restricted GPU are explained without changing compositor");
     magic->click();check(wait([&]{return magic->isEnabled();}),"magic enable finishes");
     check(service.loaded.contains("magiclamp") && !service.loaded.contains("kwin4_effect_squash")
         && read("Plugins/magiclampEnabled").toBool() && read("Plugins/kwin4_effect_magiclampEnabled").toBool()
@@ -98,7 +131,35 @@ int main(int argc,char **argv) {
     service.failRefresh=true;duration->setValue(900);
     check(wait([&]{return status->text().contains("无法连接或更新");}),"reconfiguration error reported");
     check(read("Effect-MagicLamp/AnimationDuration").toInt()==0,"failed reconfiguration restores old duration");
-    delete view;service.failRefresh=false;service.unsupported=true;
+    delete view;service.failRefresh=false;
+    {
+        const QString trialHome=temp.path()+"/helper-home",marker=temp.path()+"/helper-completed";
+        const QString helper=trialHome+"/.local/bin/ukui-liquid-effects-trial";
+        QDir().mkpath(QFileInfo(helper).absolutePath());
+        QFile script(helper);check(script.open(QIODevice::WriteOnly),"create isolated helper fixture");
+        script.write("#!/usr/bin/python3\nimport os, signal, sys, time\n"
+            "signal.signal(signal.SIGPIPE, signal.SIG_DFL)\ntime.sleep(1)\n"
+            "print('late stdout', flush=True)\nprint('late diagnostic', file=sys.stderr, flush=True)\n"
+            "open(os.environ['TRIAL_TEST_MARKER'], 'w').write('completed')\n");script.close();
+        script.setPermissions(QFile::ReadOwner|QFile::WriteOwner|QFile::ExeOwner);
+        auto env=QProcessEnvironment::systemEnvironment();env.insert("HOME",trialHome);
+        env.insert("XDG_CACHE_HOME",trialHome+"/cache");env.insert("TRIAL_TEST_MARKER",marker);
+        QProcess host;host.setProcessEnvironment(env);host.setProcessChannelMode(QProcess::MergedChannels);
+        host.start(QCoreApplication::applicationFilePath(),{"--launch-host"});
+        check(wait([&]{return host.state()==QProcess::NotRunning;}) && host.exitCode()==0,"settings host exits before independent helper logs");
+        check(wait([&]{return QFileInfo::exists(marker);}),"helper survives host exit and late writes do not receive SIGPIPE");
+        QFile log(trialHome+"/cache/ukui-panel-liquid/effects-trial.log");
+        check(log.open(QIODevice::ReadOnly) && log.readAll().contains("late diagnostic"),"independent diagnostic goes to a regular log file");
+    }
+    {
+        const QString path=temp.path()+"/ukui/liquid-effects-trial.ini";
+        QSettings j(path,QSettings::IniFormat);j.setValue("pending",true);j.sync();
+        view=new WindowEffectsSettings;magic=view->findChild<QCheckBox *>("liquidWindowMagicLamp");
+        check(wait([&]{return view->findChild<QLabel *>("liquidWindowBackendInfo")->text().contains("xrender");})
+            && !magic->isEnabled(),"reopened view cannot mutate animation during pending backend trial");
+        delete view;j.clear();j.sync();
+    }
+    service.unsupported=true;
     view=new WindowEffectsSettings;magic=view->findChild<QCheckBox *>("liquidWindowMagicLamp");maximize=view->findChild<QCheckBox *>("liquidWindowMaximize");
     check(wait([&]{return maximize->isEnabled();}) && !magic->isEnabled(),"unsupported magic disables only its controls");delete view;
     bus.unregisterService("org.ukui.KWin");

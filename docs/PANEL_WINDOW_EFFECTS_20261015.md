@@ -35,3 +35,34 @@
 真实本机 UKUI KWin 也验证了魔壶与最大化的关闭/开启、650 ms 时长及默认恢复；测试结束恢复目标配置项与四种动画原有加载状态。没有重启合成器。证据在忽略目录 `apps/ukui-panel-liquid/build/artifacts/window-effects-20261015/`。
 
 已部署用户插件并正常重启任务栏，构建与安装哈希及新进程映射一致，原任务栏位置与尺寸保持不变。部署备份：`apps/ukui-panel-liquid/releases/20261015-091805-before-window-effects/`。
+
+## 2026-10-19：显卡兼容策略与 OpenGL 试用
+
+以下机型、驱动和实机验收是 X86 交付方随补丁提供的记录；本次 ARM 合入验证不将其计作本机实测。10 月 20 日的补充修复及验证见 [OpenGL 试用合入审查](OPENGL_TRIAL_REVIEW_20261020.md)。
+
+本机 Fantasy II-M（1EC8:9810，fant-drv）可创建硬件 OpenGL 4.3 上下文，但系统显卡规则将它列为受限设备，默认使用 XRender。XRender 下 magiclamp 的支持查询返回 false；最大化动画仍可用。历史日志已有 XRender，不能说是最近一次重启才造成。具体证据见 [显卡诊断](WINDOW_EFFECTS_GPU_DIAGNOSIS_20261019.md)。
+
+窗口动画页新增当前后端、GPU 兼容限制说明、“试用 OpenGL 动画…”和“恢复切换前的后端”。按当前桌面显卡和 KWin 实际接口判断，不按 x86/ARM 或独显/集显硬编码。该设置切换桌面合成后端，不负责混合显卡中的应用显卡选择。只在可读取 XRender 后端且试用程序已安装时提供试用。
+
+试用由独立的 `ukui-liquid-effects-trial` 进程执行，设置页关闭或面板退出不取消它的倒计时。切换前保存目标配置项及魔壶/竞争动画的实际加载状态；切换后等待初始化，再验证 OpenGL、魔壶支持和实际加载。20 秒期限从开始切换前计算；确认按钮只有验证通过后才可用。未确认、主动恢复或验证失败都会发起恢复。保留时写用户 `Backend=OpenGL` 并启用魔壶、关闭两个竞争的挤压动画，保留 OEM 的 AutoBackend 和系统显卡规则。`loadEffect` 对已加载特效可能返回 false，因此验证先读取状态，不对已加载特效重复加载。
+
+恢复记录为 `~/.config/ukui/liquid-effects-trial.ini`，单独操作锁防止两个试用互相覆盖。保留后仍记录切换前状态，供页面的恢复按钮使用。中断留下 pending 记录时，下次液态面板启动调用 `--recover`；恢复不成功保留记录，不宣告成功。仅恢复本模块触及的 Backend 和四个动画开关，不覆盖无关窗口特效或动画时长。辅助程序与插件一起由事务安装器备份、部署。
+
+本机实测：独立试用并自动恢复成功；保留 OpenGL 后，测试窗口最小化及恢复阶段的 `activeEffects` 均出现 magiclamp，窗口恢复正常；KWin 配置重载后保持启用；用系统支持的 `ukui-kwin_x11 --replace` 重启 KWin，新进程仍为 gl2、magiclamp 已加载。任务栏保持 x=307、y=1152、1305×48。此次重启的是 KWin 和面板进程，没有重启整台电脑；不能将该结果写成整机重启或驱动长期稳定性验收。
+
+最终部署后还直接点击正式设置页验证：恢复按钮回到 XRender；再次试用时出现独立倒计时窗口；不确认时自动恢复，确认“保留 OpenGL 与魔壶”后回到 gl2、magiclamp 已加载，设置页魔壶及动画时长可操作。最后保留的是 OpenGL 与魔壶，最大化动画仍尊重原来的独立关闭设置。
+
+最终面板/公共模块 CTest 55/55 通过。新增 `panel-backend-trial` 在独立 D-Bus 和临时配置中验证真实独立辅助进程：20 秒未确认恢复、确认保留、显式恢复、后端拒绝、特效加载失败、pending 恢复和无 pending 的空操作；再补充恢复被拒时保留 journal 的回归。窗口动画测试还覆盖读取后端与 GPU 限制不修改系统，安装事务测试覆盖第七个部署文件。
+
+复现：
+
+```sh
+cmake -S apps/ukui-panel-liquid -B apps/ukui-panel-liquid/build
+cmake --build apps/ukui-panel-liquid/build -j4
+(cd apps/ukui-panel-liquid/build && ctest --output-on-failure -j2)
+python3 apps/ukui-panel-liquid/scripts/install.py
+```
+
+本机辅助诊断命令（会改变桌面状态，应按实际需要运行）：`~/.local/bin/ukui-liquid-effects-trial --restore` 恢复切换前配置，`--recover` 只恢复中断的试用。默认无参数是带确认和倒计时的试用；`--verify-only` 验证后自动恢复；`--enable` 用于已授权的实机验收，验证通过后直接保留。
+
+本轮测量证据位于忽略目录 `apps/ukui-panel-liquid/build/artifacts/effects-20261019/`，不随源码提交；本机安装备份见 `releases/` 中 20261019 对应 manifest。

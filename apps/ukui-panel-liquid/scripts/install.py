@@ -18,6 +18,7 @@ def destinations(home):
         home / '.config/autostart/ukui-panel-liquid-session.desktop',
         home / '.local/bin/ukui-panel-liquid-session',
         home / '.local/bin/ukui-panel-liquid-restore',
+        home / '.local/bin/ukui-liquid-effects-trial',
     ]
 
 
@@ -37,6 +38,7 @@ def prepare(root, home, system_desktop, system_binary):
     wrapper = (root / 'scripts/ukui-panel-liquid').read_bytes()
     session = (root / 'scripts/session-start.py').read_bytes()
     restore = (root / 'scripts/restore.py').read_bytes()
+    effects_trial = (root / 'build/ukui-liquid-effects-trial').read_bytes()
     template = system_desktop.read_text()
     binary_hash = hashlib.sha256(system_binary.read_bytes()).hexdigest()
     lines = template.splitlines()
@@ -60,8 +62,8 @@ def prepare(root, home, system_desktop, system_binary):
         'Exec=' + desktop_exec(paths[4]) + '\nTerminal=false\nOnlyShowIn=UKUI;\nNoDisplay=true\n'
         'X-UKUI-Autostart-Phase=Application\nX-UKUI-AutoRestart=false\nX-LiquidPanel-Managed=true\n'
     ).encode()
-    return list(zip(paths, [panel_entry, wrapper, plugin, session_entry, session, restore],
-                    [0o644, 0o755, 0o755, 0o644, 0o755, 0o755])), binary_hash
+    return list(zip(paths, [panel_entry, wrapper, plugin, session_entry, session, restore, effects_trial],
+                    [0o644, 0o755, 0o755, 0o644, 0o755, 0o755, 0o755])), binary_hash
 
 
 def mkdir_tracked(directory, created):
