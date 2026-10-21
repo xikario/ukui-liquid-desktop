@@ -364,6 +364,14 @@ if(TARGET fence-glass-test)
             ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --monitor-placement-only)
     set_tests_properties(desktop_monitor_placement PROPERTIES TIMEOUT 30
         ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1" LABELS "integration;ui;screen")
+    foreach(MONITOR_SCALE 1 1.5 2)
+        add_test(NAME desktop_monitor_icon_avoidance_${MONITOR_SCALE}
+            COMMAND ${CMAKE_COMMAND} -E env QT_SCALE_FACTOR=${MONITOR_SCALE}
+                ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24 -dpi 96"
+                ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --monitor-icon-avoidance-only)
+        set_tests_properties(desktop_monitor_icon_avoidance_${MONITOR_SCALE} PROPERTIES TIMEOUT 30
+            ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1" LABELS "integration;ui;screen")
+    endforeach()
     add_test(NAME desktop_review_async
         COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 1440x900x24"
             ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --review-async-only)

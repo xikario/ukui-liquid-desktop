@@ -152,6 +152,8 @@ int main(int argc, char **argv)
         return runVideoTrialTest(isolated.path());
     if (app.arguments().contains("--monitor-placement-only"))
         return runMonitorPlacementTest();
+    if (app.arguments().contains("--monitor-icon-avoidance-only"))
+        return runMonitorIconAvoidanceTest(isolated.path());
     if (app.arguments().contains("--monitor-diagnosis-only"))
         return SystemMonitorTestAccess::run();
     if (app.arguments().contains("--review-async-only"))

@@ -2855,8 +2855,11 @@ QString DesktopCanvas::smartSpaceAnimationStatus() const
 void DesktopCanvas::showDesklet()
 {
     if (m_monitor) {
+        m_monitor->removeEventFilter(this);
+        m_monitor->hide();
         m_monitor->deleteLater();
         m_monitor = nullptr;
+        m_widgetRelayoutTimer->start();
         update();
         return;
     }
@@ -2864,6 +2867,7 @@ void DesktopCanvas::showDesklet()
     // 小组件必须属于桌面画布，而不是独立的置顶窗口。作为子控件后，
     // 它天然跟随桌面显示/隐藏，也绝不会覆盖普通应用。
     m_monitor = new SystemMonitor(this);
+    m_monitor->installEventFilter(this);
     m_monitor->setEditMode(m_editMode);
     // 确保小组件在画布右上方可见区域展示，避免初始定位到屏幕外
     if (m_monitor->x() < 0 || m_monitor->y() < 0 ||
@@ -3484,13 +3488,26 @@ QRect DesktopCanvas::desktopIconArea() const
 
 QRect DesktopCanvas::smartSpaceReservedGeometry() const { return {}; }
 
+QList<QWidget *> DesktopCanvas::desktopWidgets() const
+{
+    // SystemMonitor is a QWidget, not a LiquidDesklet. Keep one list for
+    // occupied space, stacking and geometry notifications so it cannot be
+    // omitted just because it has a different base class.
+    return {m_clockWidget, m_activityWidget, m_musicWidget, m_calendarWidget, m_monitor};
+}
+
+void DesktopCanvas::raiseDesktopWidgets()
+{
+    for (QWidget *widget : desktopWidgets())
+        if (widget && widget->isVisible()) widget->raise();
+}
+
 QList<QRect> DesktopCanvas::desktopWidgetReservedGeometries() const
 {
     QList<QRect> reserved;
     const QRect smart = smartSpaceReservedGeometry();
     if (smart.isValid()) reserved.append(smart);
-    for (auto *widget : {static_cast<LiquidDesklet *>(m_clockWidget),
-                         static_cast<LiquidDesklet *>(m_activityWidget), static_cast<LiquidDesklet *>(m_musicWidget), static_cast<LiquidDesklet *>(m_calendarWidget)}) {
+    for (QWidget *widget : desktopWidgets()) {
         if (widget && widget->isVisible())
             reserved.append(widget->geometry().adjusted(-8,-8,8,8).intersected(rect()));
     }
@@ -3628,6 +3645,7 @@ void DesktopCanvas::revealLooseIcons()
         icon->raise();
         icon->update();
     }
+    raiseDesktopWidgets();
     update();
 }
 
@@ -3726,9 +3744,7 @@ void DesktopCanvas::layoutLooseIcons()
             damage += icon->geometry();stackingChanged=true;
         }
     }
-    if (stackingChanged) for (auto *widget : {static_cast<LiquidDesklet *>(m_clockWidget),
-                         static_cast<LiquidDesklet *>(m_activityWidget), static_cast<LiquidDesklet *>(m_musicWidget), static_cast<LiquidDesklet *>(m_calendarWidget)})
-        if (widget && widget->isVisible()) widget->raise();
+    if (stackingChanged) raiseDesktopWidgets();
     // Unchanged periodic reconciliation must not repaint the entire desktop.
     // Moving translucent children invalidates both footprints, not their union rectangle.
     if(!damage.isEmpty()) update(damage);
@@ -4828,7 +4844,8 @@ void DesktopCanvas::resizeEvent(QResizeEvent *e)
 
 bool DesktopCanvas::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched == m_clockWidget || watched == m_activityWidget || watched == m_musicWidget || watched == m_calendarWidget) {
+    QWidget *widget = qobject_cast<QWidget *>(watched);
+    if (widget && desktopWidgets().contains(widget)) {
         switch (event->type()) {
         case QEvent::Move:
         case QEvent::Resize:

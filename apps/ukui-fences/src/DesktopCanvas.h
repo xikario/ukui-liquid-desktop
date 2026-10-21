@@ -265,6 +265,8 @@ private:
     void layoutLooseIcons();
     QRect desktopIconArea() const;
     QRect smartSpaceReservedGeometry() const;
+    QList<QWidget *> desktopWidgets() const;
+    void raiseDesktopWidgets();
     QList<QRect> desktopWidgetReservedGeometries() const;
     void assignLooseIconsToFirstCells();
     void revealLooseIcons();
