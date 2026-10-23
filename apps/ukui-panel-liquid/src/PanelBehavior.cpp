@@ -190,6 +190,8 @@ public:
             }
         }
         for(auto *w:shown) {
+            const QVariant original=w->property("liquidTrayOriginalSizePolicy");
+            if(original.isValid()){w->setSizePolicy(original.value<QSizePolicy>());w->setProperty("liquidTrayOriginalSizePolicy",QVariant());}
             for(int i=m_buttons.size()-1;i>=0;--i)if(m_buttons[i]==w){m_buttons.removeAt(i);changed=true;}
         }
         for(auto *w:hidden) {
@@ -216,7 +218,15 @@ public:
         QList<QWidget *> active;
         for(const auto &w:m_buttons) {
             if(w->parentWidget()!=m_content)w->setParent(m_content);
-            if(passive(w))w->hide();else active.append(w);
+            const bool inactive=passive(w);
+            if(!w->property("liquidTrayOriginalSizePolicy").isValid())
+                w->setProperty("liquidTrayOriginalSizePolicy",QVariant::fromValue(w->sizePolicy()));
+            auto policy=w->sizePolicy();
+            // OEM notification blinking uses QWidget::hide/show even while SNI
+            // remains Active. Keep its cell during that interval so the entire
+            // grid doesn't collapse and jump. Real Passive items still leave it.
+            if(policy.retainSizeWhenHidden()!=!inactive){policy.setRetainSizeWhenHidden(!inactive);w->setSizePolicy(policy);}
+            if(inactive)w->hide();else active.append(w);
         }
         // Keep four/five items in a compact upward grid as well as larger sets.
         const int columns=qMin(3,qMax(1,active.size()));

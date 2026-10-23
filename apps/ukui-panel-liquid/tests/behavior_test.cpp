@@ -138,6 +138,18 @@ static int nativeFeedbackTest() {
     before=plugin->resets;panel.setProperty("position",1);
     QEvent positionRequest(QEvent::LayoutRequest);QApplication::sendEvent(&panel,&positionRequest);wait(150);
     check(plugin->resets==before+1 && first->isVisible() && second->isVisible(),"native docking-position changes still update the tray once");
+    // OEM notification blinking hides an Active widget instead of publishing
+    // Passive. Force the grid to lay out during the hidden interval, before
+    // the adapter's queued visibility reconciliation can run.
+    const QRect firstCell=first->geometry();
+    auto *grid=qobject_cast<QGridLayout *>(first->parentWidget()->layout());
+    check(grid,"real overflow uses a grid");
+    for(int i=0;i<12;++i) {
+        second->hide();grid->invalidate();grid->activate();
+        check(first->geometry()==firstCell,"an Active icon's hidden blink interval keeps neighbouring cell geometry");
+        second->show();grid->invalidate();grid->activate();wait(8);
+        check(first->geometry()==firstCell,"returning from a blink does not shift other icons");
+    }
     before=plugin->resets;plugin->realign();wait(200);
     check(plugin->resets==before+1 && first->isVisible() && second->isVisible(),"explicit OEM tray resets still run once and return icons to the popup");
     panel.hide();wait(100);
