@@ -302,6 +302,12 @@ int main(int argc,char **argv) {
                   && centeredLength && centeredLength->value()==68,
               "layout controls read existing native centered configuration without changing it");
         check(panel.layoutCalls==0,"opening appearance settings does not write native layout");
+        auto *trayColumns=appearanceDialog->findChild<QSpinBox *>("liquidTrayMaxColumns");
+        check(trayColumns && trayColumns->minimum()==3 && trayColumns->maximum()==8 && trayColumns->value()==3,
+              "hidden tray column control defaults to three with a three-to-eight range");
+        trayColumns->setValue(8);app.processEvents();saved.sync();
+        check(saved.value("tray/maxColumns").toInt()==8 && app.property("liquidTrayMaxColumns").toInt()==8,
+              "hidden tray column setting saves immediately and notifies the live adapter");
         const QRect beforeLayout=panel.geometry();
         centered->click();
         QSettings native(dir.path()+"/ukui/panel.conf",QSettings::IniFormat);native.sync();
@@ -423,6 +429,8 @@ int main(int argc,char **argv) {
         check(qAbs(saved.value("appearance/clarity").toDouble()-.61)<.001,
               "shared titlebar closing flushes the final pending settings value");
         settings->trigger();app.processEvents();
+        auto *reopenedTrayColumns=panel.findChild<QSpinBox *>("liquidTrayMaxColumns");
+        check(reopenedTrayColumns && reopenedTrayColumns->value()==8,"reopened settings remember the hidden tray column count");
         auto *reopenedCenter=panel.findChild<QCheckBox *>("liquidPanelCentered");
         auto *reopenedLength=panel.findChild<QSlider *>("liquidPanelCenteredLength");
         check(reopenedCenter && reopenedCenter->isChecked() && reopenedLength && reopenedLength->value()==72,

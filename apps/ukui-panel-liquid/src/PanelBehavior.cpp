@@ -13,6 +13,7 @@
 #include <QKeyEvent>
 #include <QLibrary>
 #include <QDebug>
+#include <QDynamicPropertyChangeEvent>
 #include <QElapsedTimer>
 #include <QMenu>
 #include <QSettings>
@@ -164,9 +165,15 @@ public:
         connect(&m_openPending,&QTimer::timeout,this,[this]{open();});
         QSettings settings(configFile(),QSettings::IniFormat);
         m_savedOrder=settings.value("tray/hiddenOrder").toStringList();
+        m_maxColumns=qBound(3,settings.value("tray/maxColumns",3).toInt(),8);
         qApp->installEventFilter(this);
     }
     ~TrayOverflow() override{if(qApp)qApp->removeEventFilter(this);}
+    void setMaxColumns(int value) {
+        value=qBound(3,value,8);
+        if(value==m_maxColumns)return;
+        m_maxColumns=value;resync();
+    }
     void sync() {
         if(m_syncing || !m_home || !m_home->layout())return;
         m_syncing=true;
@@ -228,11 +235,11 @@ public:
             if(policy.retainSizeWhenHidden()!=!inactive){policy.setRetainSizeWhenHidden(!inactive);w->setSizePolicy(policy);}
             if(inactive)w->hide();else active.append(w);
         }
-        // Keep four/five items in a compact upward grid as well as larger sets.
-        const int columns=qMin(3,qMax(1,active.size()));
+        // Preserve the compact default; the user can choose a wider upward grid.
+        const int columns=qMin(m_maxColumns,qMax(1,active.size()));
         const int cell=qMax(32,qMax(m_arrow->width(),m_arrow->height()));
-        if(changed || cell!=m_cell || active!=m_laidOut) {
-            m_cell=cell;m_laidOut=active;
+        if(changed || cell!=m_cell || columns!=m_columns || active!=m_laidOut) {
+            m_cell=cell;m_columns=columns;m_laidOut=active;
             while(auto *item=m_grid->takeAt(0))delete item;
             for(int i=0;i<active.size();++i)m_grid->addWidget(active[i],i/columns,i%columns);
             const int rows=qMax(1,(active.size()+columns-1)/columns);
@@ -487,7 +494,7 @@ private:
     QGridLayout *m_grid;
     QList<QPointer<QWidget>> m_buttons;
     bool m_syncing=false;
-    int m_cell=-1;
+    int m_cell=-1,m_columns=-1,m_maxColumns=3;
     QList<QWidget *> m_laidOut;
     QElapsedTimer m_lastHide;
     QTimer m_resync;
@@ -536,6 +543,11 @@ void PanelBehavior::reconcile() {
     m_syncing=false;
 }
 bool PanelBehavior::eventFilter(QObject *object,QEvent *event) {
+    if(object==qApp && event->type()==QEvent::DynamicPropertyChange
+        && static_cast<QDynamicPropertyChangeEvent *>(event)->propertyName()=="liquidTrayMaxColumns") {
+        for(auto *tray:m_trays)tray->setMaxColumns(qApp->property("liquidTrayMaxColumns").toInt());
+        return false;
+    }
     auto *w=qobject_cast<QWidget *>(object);if(!w)return false;
     switch(event->type()) {
     case QEvent::Show:

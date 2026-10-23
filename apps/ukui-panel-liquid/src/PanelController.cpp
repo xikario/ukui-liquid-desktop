@@ -17,6 +17,7 @@
 #include <QDebug>
 #include <QFormLayout>
 #include <QSlider>
+#include <QSpinBox>
 #include <QLabel>
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -258,6 +259,18 @@ void PanelController::settingsDialog(QWidget *owner) {
         }
     });
     addPanelLayoutSettings(form,dialog,owner,configFile());
+    auto *trayColumns=new QSpinBox(dialog);
+    trayColumns->setObjectName("liquidTrayMaxColumns");trayColumns->setRange(3,8);
+    trayColumns->setKeyboardTracking(false);
+    QSettings traySettings(configFile(),QSettings::IniFormat);
+    trayColumns->setValue(qBound(3,traySettings.value("tray/maxColumns",3).toInt(),8));
+    trayColumns->setToolTip("每行最多显示 3–8 个隐藏图标；修改后立即生效并保存。");
+    form->addRow("隐藏图标每行数量",trayColumns);
+    connect(trayColumns,QOverload<int>::of(&QSpinBox::valueChanged),this,[this](int value){
+        QSettings settings(configFile(),QSettings::IniFormat);
+        settings.setValue("tray/maxColumns",value);settings.sync();
+        qApp->setProperty("liquidTrayMaxColumns",value);
+    });
     auto *follow=new QCheckBox("自适应壁纸（更换壁纸后自动更新材质）",dialog);
     follow->setObjectName("liquidPanelFollowWallpaper");follow->setChecked(m_followWallpaper);form->addRow(follow);
     connect(follow,&QCheckBox::toggled,this,[this](bool on){

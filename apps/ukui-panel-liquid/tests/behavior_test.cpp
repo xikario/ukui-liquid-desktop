@@ -272,6 +272,26 @@ int main(int argc,char **argv) {
     const QRect grown=popup->geometry();
     check(grown.height()>before.height() && grown.width()>before.width(),"six hidden icons use three columns and a second row");
     check(qAbs(grown.bottom()-before.bottom())<=1,"a new row grows upward while the bubble stays on the arrow");
+    while(extra.size()+2<10) {
+        auto *b=new StatusNotifierButton(&home);b->setFixedSize(34,34);b->setText("D");
+        b->setProperty("liquidTraySortId",QString("fixture-extra-%1").arg(extra.size()));
+        tray.insertWidget(0,b);b->hide();extra.append(b);
+    }
+    wait(120);
+    for(int limit:{3,4,5,6,7,8,3}) {
+        app.setProperty("liquidTrayMaxColumns",limit);wait(120);
+        QSet<int> columns,rows;QList<StatusNotifierButton *> buttons{&first,&second};buttons.append(extra);
+        for(auto *b:buttons){const QPoint p=b->mapToGlobal(QPoint());columns.insert(p.x());rows.insert(p.y());}
+        check(columns.size()==limit && rows.size()==(10+limit-1)/limit,
+              "changing the column limit live rearranges the open popup to the requested grid");
+        check(popup->isVisible() && qAbs(popup->geometry().bottom()-grown.bottom())<=1
+              && panel.geometry()==panelRect && shown.mapToGlobal(QPoint())==visiblePos,
+              "column changes keep the popup on its arrow and leave the native taskbar untouched");
+        const QRect cell=first.geometry();second.hide();
+        first.parentWidget()->layout()->invalidate();first.parentWidget()->layout()->activate();
+        check(first.geometry()==cell,"notification blink keeps neighbouring geometry at every column setting");
+        second.show();wait(20);
+    }
     for(auto *b:extra)delete b;home.layout()->invalidate();wait(120);
     check(popup->geometry()==before,"removing a row shrinks back onto the arrow instead of floating");
     LayoutRequests requests;home.installEventFilter(&requests);
@@ -389,6 +409,25 @@ int main(int argc,char **argv) {
     check(popup->isVisible() && popup->geometry()==settled && home.property("liquidTrayHiddenCount").toInt()==2,
           "unregistering an icon while open settles to stable popup geometry");
     panel.hide();wait(80);check(!popup->isVisible(),"hiding the panel closes the owned popup");
+    // A newly attached tray reads the on-disk value without a live property
+    // notification; malformed/out-of-range stored values remain bounded.
+    for(int stored:{8,99,-99}) {
+        persisted.setValue("tray/maxColumns",stored);persisted.sync();
+        QWidget freshHome;freshHome.setObjectName("StatusNotifier_statusNotifierWidget");
+        auto *freshLayout=new QHBoxLayout(&freshHome);
+        QList<StatusNotifierButton *> freshButtons;
+        for(int i=0;i<9;++i) {
+            auto *b=new StatusNotifierButton(&freshHome);b->setFixedSize(34,34);
+            b->setActionArea(StatusNotifierButton::Storage);freshLayout->addWidget(b);freshButtons.append(b);
+        }
+        auto *freshArrow=new StatusNotifierStorageArrow(&freshHome);freshArrow->setFixedSize(34,34);freshLayout->addWidget(freshArrow);
+        freshHome.show();wait(120);
+        QKeyEvent showFresh(QEvent::KeyPress,Qt::Key_Space,Qt::NoModifier);
+        QApplication::sendEvent(freshArrow,&showFresh);wait(220);
+        QSet<int> columns;
+        for(auto *b:freshButtons)columns.insert(b->geometry().x());
+        check(columns.size()==qBound(3,stored,8),"new tray restores saved columns and clamps out-of-range settings");
+    }
     // Stack-allocated fixtures must outlive their reparented QObject ownership.
     first.setParent(nullptr);second.setParent(nullptr);shown.setParent(nullptr);arrow.setParent(nullptr);
     task.setParent(nullptr);divider.setParent(nullptr);start.setParent(nullptr);home.setParent(nullptr);
