@@ -1,4 +1,5 @@
 #include "PanelBehavior.h"
+#include "TaskbarPinCompat.h"
 #include "LiquidPopup.h"
 #include <QApplication>
 #include <QAbstractButton>
@@ -440,6 +441,7 @@ private:
 };
 
 PanelBehavior::PanelBehavior(QObject *parent):QObject(parent) {
+    new TaskbarPinCompat(this);
     m_pending.setSingleShot(true);m_pending.setInterval(0);
     connect(&m_pending,&QTimer::timeout,this,&PanelBehavior::reconcile);
     m_settings=std::make_unique<PanelSettings>([this]{schedule();});
