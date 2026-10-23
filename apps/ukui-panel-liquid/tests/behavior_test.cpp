@@ -18,6 +18,8 @@
 #include <QMimeData>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFrame>
+#include <functional>
 #include <cstdlib>
 class TaskViewButton : public QToolButton {
     Q_OBJECT
@@ -52,11 +54,101 @@ protected:bool eventFilter(QObject *,QEvent *event) override {
     if(event->type()==QEvent::LayoutRequest)++count;
     return false;
 }};
+// The OEM panel emits realigned for a plain LayoutRequest, and its tray
+// plugin re-adds/hides STORAGE buttons even after they have been reparented.
+class UKUIPanel : public QWidget {
+    Q_OBJECT
+public:using QWidget::QWidget;
+signals:void realigned();
+protected:bool event(QEvent *event) override {
+    if(event->type()==QEvent::LayoutRequest)emit realigned();
+    return QWidget::event(event);
+}};
+class StatusNotiferScrollArea : public QFrame {
+    Q_OBJECT
+public:using QFrame::QFrame;
+};
+class Plugin : public QWidget {
+    Q_OBJECT
+public:
+    using QWidget::QWidget;
+    std::function<void()> reset;
+    int resets=0;
+    __attribute__((noinline)) void realign();
+};
+void Plugin::realign(){++resets;if(reset)reset();}
 static void check(bool ok,const char *message){if(!ok){qCritical()<<message;std::exit(1);}qInfo()<<"PASS:"<<message;}
 static void wait(int ms=80){QEventLoop loop;QTimer::singleShot(ms,&loop,&QEventLoop::quit);loop.exec();}
+class TrayHideCounter : public QObject {
+public:int hides=0;
+protected:bool eventFilter(QObject *,QEvent *event) override {
+    if(event->type()==QEvent::Hide)++hides;
+    return false;
+}};
+static int nativeFeedbackTest() {
+    UKUIPanel panel;panel.resize(600,48);panel.move(300,700);
+    auto *row=new QHBoxLayout(&panel);
+    auto *plugin=new Plugin(&panel);row->addWidget(plugin);
+    auto *pluginLayout=new QHBoxLayout(plugin);
+    auto *area=new StatusNotiferScrollArea(plugin);pluginLayout->addWidget(area);
+    auto *areaLayout=new QHBoxLayout(area);
+    auto *home=new QWidget(area);home->setObjectName("StatusNotifier_statusNotifierWidget");areaLayout->addWidget(home);
+    auto *tray=new QHBoxLayout(home);
+    auto *first=new StatusNotifierButton(home);auto *second=new StatusNotifierButton(home);
+    first->setText("A");second->setText("B");first->setFixedSize(34,34);second->setFixedSize(34,34);
+    first->setActionArea(StatusNotifierButton::Storage);second->setActionArea(StatusNotifierButton::Storage);
+    auto *arrow=new StatusNotifierStorageArrow(home);arrow->setFixedSize(34,34);
+    plugin->reset=[=]{
+        tray->addWidget(first);tray->addWidget(second);tray->addWidget(arrow);
+        first->hide();second->hide();
+    };
+    QObject::connect(&panel,&UKUIPanel::realigned,plugin,&Plugin::realign);
+    int otherRealigns=0;
+    QObject::connect(&panel,&UKUIPanel::realigned,&panel,[&]{++otherRealigns;});
+    plugin->realign();panel.show();wait(400);
+    int before=plugin->resets;wait(200);
+    check(plugin->resets==before,"closed tray settles with the OEM realigned/reset/reparent feedback fixture");
+    QWidget *popup=nullptr;
+    for(auto *w:QApplication::topLevelWidgets())if(w->objectName()=="liquidTrayOverflow")popup=w;
+    check(popup,"native feedback fixture creates the real overflow adapter");
+    const QPointF local=arrow->rect().center(),global=arrow->mapToGlobal(local.toPoint());
+    QMouseEvent press(QEvent::MouseButtonPress,local,global,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(arrow,&press);wait(300);
+    check(popup->isVisible() && first->isVisible() && second->isVisible(),"native feedback fixture opens real icons");
+    TrayHideCounter hideCounter;
+    first->installEventFilter(&hideCounter);second->installEventFilter(&hideCounter);
+    const QRect popupGeometry=popup->geometry();
+    before=plugin->resets;const int otherBefore=otherRealigns;
+    for(int i=0;i<30;++i) {
+        QEvent request(QEvent::LayoutRequest);QApplication::sendEvent(&panel,&request);wait(8);
+        check(first->isVisible() && second->isVisible(),"settled icons remain visible through unchanged native layout requests");
+    }
+    check(plugin->resets==before,"unchanged layout requests do not repeatedly rebuild the OEM tray");
+    check(otherRealigns>=otherBefore+30,"the native realigned signal still reaches other panel consumers");
+    for(int i=0;i<30;++i) {
+        QPixmap icon(24,24);icon.fill(i%2?Qt::green:Qt::transparent);
+        second->setIcon(QIcon(icon));second->update();
+        QEvent request(QEvent::LayoutRequest);QApplication::sendEvent(&panel,&request);wait(8);
+    }
+    check(hideCounter.hides==0 && first->isVisible() && second->isVisible(),"blinking one tray icon never hides the whole overflow group");
+    check(plugin->resets==before && popup->geometry()==popupGeometry,"icon feedback does not reset the native tray or change popup geometry");
+    panel.resize(700,panel.height());
+    QEvent resizedRequest(QEvent::LayoutRequest);QApplication::sendEvent(&panel,&resizedRequest);wait(200);
+    check(plugin->resets>before && first->isVisible() && second->isVisible(),"actual panel size changes still realign the OEM tray and settle");
+    before=plugin->resets;panel.setProperty("position",1);
+    QEvent positionRequest(QEvent::LayoutRequest);QApplication::sendEvent(&panel,&positionRequest);wait(150);
+    check(plugin->resets==before+1 && first->isVisible() && second->isVisible(),"native docking-position changes still update the tray once");
+    before=plugin->resets;plugin->realign();wait(200);
+    check(plugin->resets==before+1 && first->isVisible() && second->isVisible(),"explicit OEM tray resets still run once and return icons to the popup");
+    panel.hide();wait(100);
+    before=plugin->resets;wait(200);
+    check(plugin->resets==before && !popup->isVisible(),"hiding the panel also settles without a background reset loop");
+    return 0;
+}
 int main(int argc,char **argv) {
     QTemporaryDir temp;qputenv("XDG_CONFIG_HOME",temp.path().toUtf8());qputenv("GSETTINGS_BACKEND","memory");
     QApplication app(argc,argv);
+    if(app.arguments().contains("--native-feedback-only"))return nativeFeedbackTest();
     QLibrary gio("libgio-2.0.so.0");
     auto create=reinterpret_cast<void *(*)(const char *)>(gio.resolve("g_settings_new"));
     auto set=reinterpret_cast<int (*)(void *,const char *,int)>(gio.resolve("g_settings_set_boolean"));

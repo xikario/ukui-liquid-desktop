@@ -111,6 +111,11 @@ if(BUILD_TESTING AND XVFB_RUN_EXECUTABLE AND DBUS_RUN_SESSION_EXECUTABLE)
                 ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:liquid-panel-behavior-test> -style ukuiliquidpanel)
         set_tests_properties(panel-behavior-${SCALE} PROPERTIES TIMEOUT 20
             ENVIRONMENT "QT_PLUGIN_PATH=${CMAKE_BINARY_DIR}/plugins;QT_SCALE_FACTOR=${SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1;GSETTINGS_SCHEMA_DIR=${CMAKE_BINARY_DIR}/test-schemas")
+        add_test(NAME panel-tray-feedback-${SCALE}
+            COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2560x1440x24"
+                ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:liquid-panel-behavior-test> -style ukuiliquidpanel --native-feedback-only)
+        set_tests_properties(panel-tray-feedback-${SCALE} PROPERTIES TIMEOUT 15
+            ENVIRONMENT "QT_PLUGIN_PATH=${CMAKE_BINARY_DIR}/plugins;QT_SCALE_FACTOR=${SCALE};QT_SCREEN_SCALE_FACTORS=1;UKUI_LIQUID_GLASS_NO_GL=1;GSETTINGS_SCHEMA_DIR=${CMAKE_BINARY_DIR}/test-schemas")
         endif()
         add_test(NAME panel-corners-${SCALE}
             COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2560x1440x24"

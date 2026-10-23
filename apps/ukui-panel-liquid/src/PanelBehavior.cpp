@@ -93,6 +93,59 @@ static int actionArea(QWidget *button) {
     return area?area(button):0;
 }
 
+// On this OEM, every panel LayoutRequest emits realigned, and the status
+// plugin unconditionally re-adds STORAGE buttons to its inline layout. Moving
+// them back to our popup posts the next request. Route only that plugin's
+// realigned connection through a geometry check; its direct item/settings
+// updates and every other panel plugin keep their native paths.
+class NativeTrayLayoutRouter final : public QObject {
+    Q_OBJECT
+public:
+    using Realign=void (*)(QWidget *);
+    static NativeTrayLayoutRouter *attach(QWidget *home,QObject *context) {
+        QWidget *area=home;
+        while(area && !area->inherits("StatusNotiferScrollArea"))area=area->parentWidget();
+        QWidget *panel=home->window();
+        QWidget *owner=area?area->parentWidget():nullptr;
+        if(!owner || !owner->inherits("Plugin") || !panel->inherits("UKUIPanel")
+            || panel->metaObject()->indexOfSignal("realigned()")<0)return nullptr;
+        const auto realign=reinterpret_cast<Realign>(nativeSymbol(owner,"_ZN6Plugin7realignEv"));
+        if(!realign)return nullptr;
+        auto *router=new NativeTrayLayoutRouter(panel,owner,realign,context);
+        const auto connection=connect(panel,SIGNAL(realigned()),router,SLOT(realign()));
+        if(!connection || !disconnect(panel,SIGNAL(realigned()),owner,nullptr)) {
+            delete router;return nullptr;
+        }
+        return router;
+    }
+private:
+    NativeTrayLayoutRouter(QWidget *panel,QWidget *owner,Realign realign,QObject *context)
+        :QObject(context),m_panel(panel),m_owner(owner),m_realign(realign),
+         m_size(panel->size()),m_direction(panel->layoutDirection()),
+         m_position(panel->property("position")),m_dpr(panel->devicePixelRatioF()) {}
+private slots:
+    void realign() {
+        if(!m_panel || !m_owner || m_forwarding)return;
+        const QSize size=m_panel->size();
+        const auto direction=m_panel->layoutDirection();
+        const QVariant position=m_panel->property("position");
+        const qreal dpr=m_panel->devicePixelRatioF();
+        if(size==m_size && direction==m_direction && position==m_position && qFuzzyCompare(dpr,m_dpr))return;
+        // Record before forwarding: native layout can synchronously notify.
+        m_size=size;m_direction=direction;m_position=position;m_dpr=dpr;
+        QPointer<NativeTrayLayoutRouter> guard(this);
+        m_forwarding=true;m_realign(m_owner);if(guard)m_forwarding=false;
+    }
+private:
+    QPointer<QWidget> m_panel,m_owner;
+    Realign m_realign;
+    QSize m_size;
+    Qt::LayoutDirection m_direction;
+    QVariant m_position;
+    qreal m_dpr;
+    bool m_forwarding=false;
+};
+
 class TrayOverflow final : public QObject {
 public:
     explicit TrayOverflow(QWidget *home):QObject(home),m_home(home) {
@@ -124,6 +177,7 @@ public:
             if(w && w->inherits("StatusNotifierStorageArrow")){m_arrow=qobject_cast<QToolButton *>(w);arrowIndex=i;break;}
         }
         if(!m_arrow){m_syncing=false;return;}
+        if(!m_nativeLayout)m_nativeLayout=NativeTrayLayoutRouter::attach(m_home,this);
         // Native resetLayout and its animated moves can temporarily leave
         // STORAGE items after the already-existing arrow. Their action area
         // is authoritative; index order alone can bounce items between hosts.
@@ -415,6 +469,7 @@ private:
     void resync(){if(!m_resync.isActive())m_resync.start();}
 private:
     QPointer<QWidget> m_home;
+    NativeTrayLayoutRouter *m_nativeLayout=nullptr;
     QPointer<QToolButton> m_arrow;
     LiquidPopup::Shell *m_popup;
     QScrollArea *m_scroll;
@@ -485,3 +540,5 @@ bool PanelBehavior::eventFilter(QObject *object,QEvent *event) {
     }
     return false;
 }
+
+#include "PanelBehavior.moc"
