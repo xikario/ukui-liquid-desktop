@@ -51,6 +51,7 @@ static QImage wallpaper(QSize logical, qreal dpr)
 }
 
 #include "selection_drag_test.h"
+#include "file_interaction_test.h"
 #include "fence_features_test.h"
 #include "desklet_test.h"
 #include "music_test.h"
@@ -85,7 +86,8 @@ int main(int argc, char **argv)
     if (!QDir().mkpath(fixtureHome)) return 2;
     qputenv("HOME",fixtureHome.toUtf8());
     for (int i = 1; i < argc; ++i) {
-        if (QString::fromLocal8Bit(argv[i]) == "--trash-undo-only"
+        if (QString::fromLocal8Bit(argv[i]) == "--permanent-delete-only"
+            || QString::fromLocal8Bit(argv[i]) == "--trash-undo-only"
             || QString::fromLocal8Bit(argv[i]) == "--trash-benchmark-only"
             || QString::fromLocal8Bit(argv[i]) == "--desklets-only") {
             // GIO chooses home vs volume trash using the home filesystem.
@@ -194,6 +196,10 @@ int main(int argc, char **argv)
         return runMusicTest(isolated.path());
     if (app.arguments().contains("--desklets-only"))
         return runDeskletTest(isolated.path());
+    if (app.arguments().contains("--permanent-delete-only"))
+        return runPermanentDeleteTest(isolated.path());
+    if (app.arguments().contains("--external-drag-only"))
+        return runExternalDragTest(isolated.path());
     if (app.arguments().contains("--selection-only"))
         return runSelectionDragTest(isolated.path());
     if (app.arguments().contains("--features-only"))

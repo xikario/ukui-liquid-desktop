@@ -85,6 +85,17 @@ static int runFenceReorderTest(const QString &root)
             QProcess::execute(xdotool,{"mousemove",QString::number(qRound(point.x()*dpr)),QString::number(qRound(point.y()*dpr))});
         };
         for(int mode:{0,1,2}) {
+            // QDrag runs a nested event loop. At high DPR/under build load the
+            // outer settle timer can expire before the cancellation animation
+            // starts; wait for real layout completion before sampling a target.
+            QElapsedTimer layoutWait; layoutWait.start();
+            bool animating;
+            do {
+                settle(20); animating=false;
+                for(auto *animation:fence.findChildren<QPropertyAnimation *>())
+                    animating |= animation->state()==QAbstractAnimation::Running;
+            } while(animating && layoutWait.elapsed()<2000);
+            check(!animating,"native reorder waits for previous layout animation");
             const bool cancel=mode!=1;
             const auto before=order();auto *source=fence.icons().last();auto *target=fence.icons().first();
             const QPoint start=source->mapToGlobal(QPoint(source->width()/2,20));

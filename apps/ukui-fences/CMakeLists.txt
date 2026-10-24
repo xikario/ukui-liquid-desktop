@@ -207,6 +207,22 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:fence-glass-test> --trash-undo-only)
         set_tests_properties(desktop_trash_undo PROPERTIES TIMEOUT 45 LABELS "integration;files"
             ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1")
+        add_test(NAME desktop_permanent_delete
+            COMMAND ${XVFB_RUN_EXECUTABLE} -a ${DBUS_RUN_SESSION_EXECUTABLE} --
+                $<TARGET_FILE:fence-glass-test> --permanent-delete-only)
+        set_tests_properties(desktop_permanent_delete PROPERTIES TIMEOUT 45 LABELS "integration;files"
+            ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1")
+        find_program(PEONY_EXECUTABLE peony)
+        find_program(XDOTOOL_EXECUTABLE xdotool)
+        if(PEONY_EXECUTABLE AND XDOTOOL_EXECUTABLE)
+            foreach(DRAG_SCALE 1 2)
+                add_test(NAME desktop_external_drag_${DRAG_SCALE}
+                    COMMAND ${XVFB_RUN_EXECUTABLE} -a -s "-screen 0 2880x1800x24"
+                        ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:fence-glass-test> --external-drag-only)
+                set_tests_properties(desktop_external_drag_${DRAG_SCALE} PROPERTIES TIMEOUT 90 LABELS "integration;files;native"
+                    ENVIRONMENT "UKUI_FENCES_GLASS_NO_GL=1;QT_SCREEN_SCALE_FACTORS=1;QT_SCALE_FACTOR=${DRAG_SCALE}")
+            endforeach()
+        endif()
         add_test(NAME desktop_clipboard_async
             COMMAND ${XVFB_RUN_EXECUTABLE} -a ${DBUS_RUN_SESSION_EXECUTABLE} --
                 $<TARGET_FILE:fence-glass-test> --clipboard-only)

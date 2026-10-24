@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QPoint>
+#include <QList>
+#include <QUrl>
+class QMimeData;
 #include <functional>
 class QWidget;
 #include <QString>
@@ -52,6 +55,9 @@ struct PasteResult
     bool hasPlacedFiles() const { return !placedPaths.isEmpty(); }
 };
 
+// Standard file URLs plus valid Qt model records for OEM Peony drag validation.
+// The caller transfers ownership of the result to QDrag.
+QMimeData *createFileDragMimeData(const QList<QUrl> &urls);
 ClipboardFiles readFiles();
 void writeFiles(const QStringList &paths, bool move);
 bool hasFiles();
@@ -68,6 +74,9 @@ bool transferFilesAsync(const QStringList &paths, const QString &targetDir,
     bool move, bool keepExisting, QWidget *owner,
     std::function<void(const PasteResult &)> completed);
 bool trashFilesAsync(const QStringList &paths, QWidget *owner,
+    std::function<void(const PasteResult &)> completed);
+// Caller must obtain explicit permanent-deletion confirmation first.
+bool deleteFilesPermanentlyAsync(const QStringList &paths, QWidget *owner,
     std::function<void(const PasteResult &)> completed);
 bool busy();
 bool runOperationAsync(QWidget *owner, std::function<PasteResult()> work,

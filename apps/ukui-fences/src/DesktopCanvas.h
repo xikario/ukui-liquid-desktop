@@ -309,6 +309,7 @@ private:
     void placeFilesOnDesktop(const QStringList &paths,
                              const QPoint &preferredPos = QPoint(-1, -1));
     void trashSelectedIcons();
+    void deleteSelectedIconsPermanently();
     void renameFirstSelectedIcon();
     void openSelectedIcons();
     void copySelectedIcons(bool move);

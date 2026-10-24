@@ -867,27 +867,32 @@ void DesktopIcon::mouseMoveEvent(QMouseEvent *e)
         drag->setPixmap(preview);
         drag->setHotSpot(QPoint(qRound(preview.width()/preview.devicePixelRatioF()/2),
                                qRound(preview.height()/preview.devicePixelRatioF()/2)));
+        const QPointer<DesktopIcon> guard(this);
         drag->exec(Qt::MoveAction);
+        if (!guard) return;
         emit dragFinished();
         e->accept();
         return;
     }
 
     auto *drag = new QDrag(this);
-    auto *mime = new QMimeData;
     QList<QUrl> urls;
     urls << QUrl::fromLocalFile(m_item.filePath);
     // 父组件可通过 dragStarted 信号添加更多选中的 URL
     emit dragStarted(this, &urls);
-    mime->setUrls(urls);
+    auto *mime = FileClipboard::createFileDragMimeData(urls);
     mime->setData(kInternalFileDragMime, QByteArrayLiteral("1"));
     drag->setMimeData(mime);
     const QPixmap preview=dragPixmap();
     drag->setPixmap(preview);
     drag->setHotSpot(QPoint(qRound(preview.width()/preview.devicePixelRatioF()/2),
                                qRound(preview.height()/preview.devicePixelRatioF()/2)));
+    // An external move can remove this icon via the filesystem watcher while
+    // QDrag runs its nested event loop. Do not access a deleted source afterwards.
+    const QPointer<DesktopIcon> guard(this);
     const Qt::DropAction action =
         drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction);
+    if (!guard) return;
     emit dragFinished();
     if (action == Qt::MoveAction) {
         QStringList draggedPaths;
@@ -1076,13 +1081,7 @@ void DesktopIcon::contextMenuEvent(QContextMenuEvent *e)
             return;
 
         const QString oldPath = m_item.filePath;
-        FileClipboard::runOperationAsync(this, [oldPath] {
-            FileClipboard::PasteResult result;
-            const QFileInfo info(oldPath);
-            const bool ok=info.isDir() && !info.isSymLink() ? QDir(oldPath).removeRecursively() : QFile::remove(oldPath);
-            if (ok) result.placedPaths << oldPath; else result.failedPaths << oldPath;
-            return result;
-        }, [this, oldPath](const FileClipboard::PasteResult &result) {
+        FileClipboard::deleteFilesPermanentlyAsync({oldPath}, this, [this, oldPath](const FileClipboard::PasteResult &result) {
             if (!result.failedPaths.isEmpty()) LiquidDialog::warning(this,"删除失败","项目未能删除。");
             else emit fileRemoved(oldPath);
         });

@@ -94,6 +94,7 @@ signals:
     void deleteRequested(FenceWidget *self);
     void interactionStarted(FenceWidget *self);
     void undoRequested();
+    void filesPermanentlyDeleted(const QStringList &paths);
     void filesTrashed(const FileClipboard::PasteResult &result);
     void fileRenamedForUndo(const QString &oldPath, const QString &newPath);
     void filesPasted(const QStringList &sourcePaths,
@@ -178,6 +179,7 @@ private:
     void createNewDirectory();
     void finishNewItem(const QString &path);
     void trashSelectedIcons();
+    void deleteSelectedIconsPermanently();
     void renameFirstSelectedIcon();
     void openSelectedIcons();
     void syncCutVisualState(const QSet<QString> &cutPaths);

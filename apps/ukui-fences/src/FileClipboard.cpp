@@ -1,5 +1,6 @@
 #include "LiquidDialog.h"
 #include "FileClipboard.h"
+#include <QDataStream>
 
 #include <QApplication>
 #include <QClipboard>
@@ -496,6 +497,27 @@ bool submit(QWidget *owner, Work work, Completion completed, bool cancellable = 
 }
 }
 
+QMimeData *createFileDragMimeData(const QList<QUrl> &urls)
+{
+    auto *mime = new QMimeData;
+    mime->setUrls(urls);
+    // Some OEM Peony builds delegate dragMoveEvent to QListView, whose model
+    // still advertises Qt's default MIME type. A URI-only drag passes their
+    // dragEnterEvent but fails canDropMimeData. Supply genuine display records
+    // as well; Peony's drop handler continues to transfer the standard URLs.
+    QByteArray records;
+    QDataStream stream(&records, QIODevice::WriteOnly);
+    int row = 0;
+    for (const QUrl &url : urls) {
+        QMap<int, QVariant> roles;
+        roles.insert(Qt::DisplayRole, QFileInfo(url.toLocalFile()).fileName());
+        roles.insert(Qt::ToolTipRole, url.toDisplayString(QUrl::PreferLocalFile));
+        stream << row++ << 0 << roles;
+    }
+    mime->setData("application/x-qabstractitemmodeldatalist", records);
+    return mime;
+}
+
 bool busy() { return jobActive; }
 bool runOperationAsync(QWidget *owner, std::function<PasteResult()> work, Completion completed)
 {
@@ -513,6 +535,29 @@ bool transferFilesAsync(const QStringList &paths, const QString &targetDir,
     const ClipboardFiles files{paths, move};
     return submit(owner, [=](const auto &cancel) {
         return pasteFiles(targetDir, files, keepExisting, cancel);
+    }, [guard, completed](const PasteResult &result) {
+        if (guard) completed(result);
+    });
+}
+
+bool deleteFilesPermanentlyAsync(const QStringList &paths, QWidget *owner, Completion completed)
+{
+    if (paths.isEmpty()) return false;
+    const QPointer<QWidget> guard(owner);
+    return submit(owner, [paths](const auto &cancel) {
+        PasteResult result; result.sourcePaths = paths;
+        for (const QString &path : paths) {
+            if (cancel->load() || QThread::currentThread()->isInterruptionRequested()) {
+                result.cancelled = true; result.failedPaths << path; continue;
+            }
+            const QFileInfo info(path);
+            // Delete the link itself, including dangling links, never its target.
+            const bool ok = info.isDir() && !info.isSymLink()
+                ? QDir(path).removeRecursively() : QFile::remove(path);
+            if (ok) result.placedPaths << path;
+            else result.failedPaths << path;
+        }
+        return result;
     }, [guard, completed](const PasteResult &result) {
         if (guard) completed(result);
     });

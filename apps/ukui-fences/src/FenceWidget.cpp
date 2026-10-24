@@ -613,6 +613,24 @@ void FenceWidget::trashSelectedIcons()
     });
 }
 
+void FenceWidget::deleteSelectedIconsPermanently()
+{
+    const QStringList paths = selectedFilePaths();
+    if (paths.isEmpty()) return;
+    if (LiquidDialog::warning(this, "永久删除",
+            QString("确定永久删除选中的 %1 个项目？\n此操作无法撤销。").arg(paths.size()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        return;
+    FileClipboard::deleteFilesPermanentlyAsync(paths, this, [this](const FileClipboard::PasteResult &result) {
+        for (const auto &path : result.placedPaths) removeItem(path);
+        if (!result.placedPaths.isEmpty()) emit filesPermanentlyDeleted(result.placedPaths);
+        emit geometryChanged();
+        if (!result.failedPaths.isEmpty())
+            LiquidDialog::warning(this, "永久删除未完成",
+                QString("有 %1 个项目失败或已取消，请检查剩余文件。").arg(result.failedPaths.size()));
+    });
+}
+
 void FenceWidget::renameFirstSelectedIcon()
 {
     if (m_selectedIcons.isEmpty()) return;
@@ -1988,6 +2006,13 @@ void FenceWidget::sortItems(SortMode mode)
 
 void FenceWidget::keyPressEvent(QKeyEvent *e)
 {
+    // Shift+Delete is also a Qt standard Cut binding; handle it first.
+    if (e->key() == Qt::Key_Delete && e->modifiers() == Qt::ShiftModifier) {
+        if (!e->isAutoRepeat()) deleteSelectedIconsPermanently();
+        e->accept();
+        return;
+    }
+
     if (e->matches(QKeySequence::SelectAll)) {
         emit interactionStarted(this);
         selectAllIcons();

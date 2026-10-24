@@ -3289,11 +3289,10 @@ void DesktopCanvas::startMultiDrag()
     if (paths.isEmpty()) return;
 
     auto *drag = new QDrag(this);
-    auto *mime = new QMimeData;
     QList<QUrl> urls;
     for (const QString &path : paths)
         urls << QUrl::fromLocalFile(path);
-    mime->setUrls(urls);
+    auto *mime = FileClipboard::createFileDragMimeData(urls);
     drag->setMimeData(mime);
 
     // 第一个图标作为拖动缩略图
@@ -4297,6 +4296,10 @@ FenceWidget *DesktopCanvas::createFence(const QString &title, const QRect &geo)
             op.fenceIds << (fence ? fence->fenceId() : QString());
         pushUndo(op);
     });
+    connect(fence, &FenceWidget::filesPermanentlyDeleted,
+            this, [this](const QStringList &paths) {
+        removePathsFromAllViews(paths); saveLayout(); scheduleRefresh(300);
+    });
     connect(fence, &FenceWidget::filesTrashed,
             this, [this, fence](const FileClipboard::PasteResult &result) {
         recordTrashUndo(result, fence);
@@ -4515,6 +4518,23 @@ void DesktopCanvas::trashSelectedIcons()
     });
 }
 
+void DesktopCanvas::deleteSelectedIconsPermanently()
+{
+    const QStringList paths = selectedFilePaths();
+    if (paths.isEmpty()) return;
+    if (LiquidDialog::warning(this, "永久删除",
+            QString("确定永久删除选中的 %1 个项目？\n此操作无法撤销。").arg(paths.size()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        return;
+    FileClipboard::deleteFilesPermanentlyAsync(paths, this, [this](const FileClipboard::PasteResult &result) {
+        removePathsFromAllViews(result.placedPaths);
+        saveLayout(); scheduleRefresh(300);
+        if (!result.failedPaths.isEmpty())
+            LiquidDialog::warning(this, "永久删除未完成",
+                QString("有 %1 个项目失败或已取消，请检查剩余文件。").arg(result.failedPaths.size()));
+    });
+}
+
 void DesktopCanvas::renameFirstSelectedIcon()
 {
     if (m_selectedIcons.isEmpty()) return;
@@ -4650,6 +4670,13 @@ void DesktopCanvas::dropEvent(QDropEvent *e)
 
 void DesktopCanvas::keyPressEvent(QKeyEvent *e)
 {
+    // Shift+Delete is also a Qt standard Cut binding; handle it first.
+    if (e->key() == Qt::Key_Delete && e->modifiers() == Qt::ShiftModifier) {
+        if (!e->isAutoRepeat()) deleteSelectedIconsPermanently();
+        e->accept();
+        return;
+    }
+
     if (e->matches(QKeySequence::SelectAll)) {
         selectAllLooseIcons();
         e->accept();
